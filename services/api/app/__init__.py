@@ -1,0 +1,1 @@
+"""GolfRank API package."""
