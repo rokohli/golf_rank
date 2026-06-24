@@ -1,0 +1,9 @@
+.worktrees/
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+.expo/
+dist/
+*.pyc
