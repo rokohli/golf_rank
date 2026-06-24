@@ -1,9 +1,0 @@
-pyproject.toml
-app/__init__.py
-app/main.py
-golf_rank_api.egg-info/PKG-INFO
-golf_rank_api.egg-info/SOURCES.txt
-golf_rank_api.egg-info/dependency_links.txt
-golf_rank_api.egg-info/requires.txt
-golf_rank_api.egg-info/top_level.txt
-tests/test_health.py

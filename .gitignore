@@ -7,3 +7,4 @@ node_modules/
 .expo/
 dist/
 *.pyc
+*.egg-info/
