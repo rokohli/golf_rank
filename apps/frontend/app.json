@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name": "GolfRank",
+    "slug": "golf-rank",
+    "scheme": "golfrank",
+    "plugins": ["expo-router"]
+  }
+}
