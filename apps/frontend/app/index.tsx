@@ -1,11 +1,13 @@
 import { Stack, useRouter } from 'expo-router'
 import { ScrollView } from 'react-native'
 
-import { OnboardingForm } from '../src/components/OnboardingForm'
 import { savePreferences } from '../src/api/client'
+import { useAuthHeaders } from '../src/auth/useAuthToken'
+import { OnboardingForm } from '../src/components/OnboardingForm'
 
 export default function Index() {
   const router = useRouter()
+  const { getAuthHeaders } = useAuthHeaders()
 
   return (
     <>
@@ -16,7 +18,10 @@ export default function Index() {
         style={{ flex: 1 }}
         contentContainerStyle={{ flexGrow: 1, padding: 24, paddingTop: 20 }}
       >
-        <OnboardingForm submit={savePreferences} onComplete={() => router.replace('/discover')} />
+        <OnboardingForm
+          submit={async (input) => savePreferences(input, await getAuthHeaders())}
+          onComplete={() => router.replace('/discover')}
+        />
       </ScrollView>
     </>
   )

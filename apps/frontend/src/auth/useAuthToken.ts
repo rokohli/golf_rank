@@ -1,3 +1,5 @@
+import { useCallback } from 'react'
+
 type ClerkUseAuth = typeof import('@clerk/clerk-expo')['useAuth']
 
 declare const require: (moduleName: string) => { useAuth: ClerkUseAuth }
@@ -30,6 +32,6 @@ export function useAuthHeaders() {
   const { getToken } = useAuth()
 
   return {
-    getAuthHeaders: () => buildAuthHeaders(() => getToken()),
+    getAuthHeaders: useCallback(() => buildAuthHeaders(() => getToken()), [getToken]),
   }
 }
