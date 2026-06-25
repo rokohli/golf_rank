@@ -36,10 +36,24 @@ APP_ENV=development
 ALLOW_DEVELOPMENT_IDENTITY=true
 ```
 
-In this mode, the frontend sends:
+In this mode, the frontend enters the app immediately and sends:
 
 ```http
 X-Development-Subject: dev:local-user
+```
+
+To preview the get started screen without a real Clerk account, use:
+
+```bash
+EXPO_PUBLIC_AUTH_MODE=admin-development
+APP_ENV=development
+ALLOW_DEVELOPMENT_IDENTITY=true
+```
+
+In this mode, tapping Get Started enters the app and sends:
+
+```http
+X-Development-Subject: dev:admin
 ```
 
 The API rejects this bypass outside development.

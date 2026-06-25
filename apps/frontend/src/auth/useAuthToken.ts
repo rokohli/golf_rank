@@ -18,6 +18,13 @@ export async function buildAuthHeaders(getToken: () => Promise<string | null>): 
     }
   }
 
+  if (process.env.EXPO_PUBLIC_AUTH_MODE === 'admin-development') {
+    return {
+      'Content-Type': 'application/json',
+      'X-Development-Subject': 'dev:admin',
+    }
+  }
+
   const token = await getToken()
   if (!token) throw new Error('Sign in required')
 
@@ -28,6 +35,15 @@ export async function buildAuthHeaders(getToken: () => Promise<string | null>): 
 }
 
 export function useAuthHeaders() {
+  if (
+    process.env.EXPO_PUBLIC_AUTH_MODE === 'development' ||
+    process.env.EXPO_PUBLIC_AUTH_MODE === 'admin-development'
+  ) {
+    return {
+      getAuthHeaders: () => buildAuthHeaders(async () => null),
+    }
+  }
+
   const { useAuth } = require('@clerk/clerk-expo')
   const { getToken } = useAuth()
 
