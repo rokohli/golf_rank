@@ -9,13 +9,20 @@ cd services/api
 /opt/anaconda3/bin/python -m pytest -v
 \`\`\`
 
-The current API runs its deterministic seed with SQLite for local test isolation. Docker Compose includes PostgreSQL/PostGIS and Redis as the next persistence/runtime target. Copy \`.env.example\` to \`.env\` before starting containers.
+The API defaults to SQLite for isolated local tests. Docker Compose runs the production-shaped path with PostgreSQL/PostGIS, Redis, Alembic migrations, and deterministic course seed data.
+
+\`\`\`bash
+cp .env.example .env
+docker compose up --build
+curl http://localhost:8000/health
+\`\`\`
 
 ## Mobile client
 
 \`\`\`bash
 cd apps/frontend
 npm install
+npm test -- --runInBand
 npm start
 \`\`\`
 
