@@ -89,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         q: str | None = None,
         region: str | None = None,
         max_green_fee: int | None = None,
+        difficulty: str = "any",
         access: str = "any",
         session: Session = Depends(get_session),
     ) -> list[Course]:
@@ -99,6 +100,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             statement = statement.where(Course.region == region)
         if max_green_fee is not None:
             statement = statement.where(Course.green_fee <= max_green_fee)
+        if difficulty != "any":
+            statement = statement.where(Course.difficulty == difficulty)
         if access != "any":
             statement = statement.where(Course.is_public == (access == "public"))
         return list(session.scalars(statement.order_by(Course.name)).all())

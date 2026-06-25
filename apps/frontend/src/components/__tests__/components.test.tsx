@@ -4,7 +4,7 @@ import { CourseList } from '../CourseList'
 import { OnboardingForm } from '../OnboardingForm'
 
 describe('OnboardingForm', () => {
-  it('submits preferences after the user enters a home region', async () => {
+  it('submits the user-selected onboarding preferences', async () => {
     const submit = jest.fn().mockResolvedValue(undefined)
     const onComplete = jest.fn()
 
@@ -14,14 +14,17 @@ describe('OnboardingForm', () => {
     expect(saveButton).toBeDisabled()
 
     fireEvent.changeText(screen.getByLabelText('Home region'), 'Monterey, CA')
+    fireEvent.changeText(screen.getByLabelText('Maximum green fee'), '450')
+    fireEvent.press(screen.getByRole('button', { name: 'Challenging' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Public' }))
     fireEvent.press(saveButton)
 
     await waitFor(() => {
       expect(submit).toHaveBeenCalledWith({
         home_region: 'Monterey, CA',
-        max_green_fee: 250,
-        difficulty: 'any',
-        access: 'any',
+        max_green_fee: 450,
+        difficulty: 'challenging',
+        access: 'public',
       })
       expect(onComplete).toHaveBeenCalledTimes(1)
     })

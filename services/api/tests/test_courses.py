@@ -12,3 +12,14 @@ def test_course_search_filters_by_region_fee_and_access() -> None:
 
     assert response.status_code == 200
     assert [course["name"] for course in response.json()] == ["Pebble Beach Golf Links"]
+
+
+def test_course_search_filters_by_difficulty() -> None:
+    client = TestClient(create_app())
+    response = client.get(
+        "/api/v1/courses",
+        params={"region": "Monterey, CA", "difficulty": "beginner"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []

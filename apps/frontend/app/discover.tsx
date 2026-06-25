@@ -2,7 +2,7 @@ import { Stack } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { ScrollView, Text, View } from 'react-native'
 
-import { searchCourses } from '../src/api/client'
+import { getProfile, searchCourses } from '../src/api/client'
 import { CourseList } from '../src/components/CourseList'
 import { Course } from '../src/types'
 
@@ -11,7 +11,8 @@ export default function Discover() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    searchCourses()
+    getProfile()
+      .then(searchCourses)
       .then(setCourses)
       .catch((reason: Error) => setError(reason.message))
   }, [])
