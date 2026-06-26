@@ -34,12 +34,12 @@ describe('api client', () => {
       }),
     } as Response)
 
-    await expect(getProfile()).resolves.toMatchObject({ max_green_fee: 450 })
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/profile', {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Development-Subject': 'dev:local-user',
-      },
-    })
+    const headers = {
+      'Content-Type': 'application/json' as const,
+      'X-Development-Subject': 'dev:local-user',
+    }
+
+    await expect(getProfile(headers)).resolves.toMatchObject({ max_green_fee: 450 })
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/profile', { headers })
   })
 })

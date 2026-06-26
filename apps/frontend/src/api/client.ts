@@ -1,23 +1,20 @@
+import { ApiHeaders } from '../auth/useAuthToken'
 import { Course, OnboardingPreferences } from '../types'
 
 const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
-const developmentHeaders = {
-  'Content-Type': 'application/json',
-  'X-Development-Subject': 'dev:local-user',
-}
 
-export async function savePreferences(input: OnboardingPreferences): Promise<void> {
+export async function savePreferences(input: OnboardingPreferences, headers: ApiHeaders): Promise<void> {
   const response = await fetch(`${baseUrl}/api/v1/me/onboarding-preferences`, {
     method: 'PUT',
-    headers: developmentHeaders,
+    headers,
     body: JSON.stringify(input),
   })
   if (!response.ok) throw new Error('Unable to save preferences. Please try again.')
 }
 
-export async function getProfile(): Promise<OnboardingPreferences> {
+export async function getProfile(headers: ApiHeaders): Promise<OnboardingPreferences> {
   const response = await fetch(`${baseUrl}/api/v1/me/profile`, {
-    headers: developmentHeaders,
+    headers,
   })
   if (!response.ok) throw new Error('Unable to load profile. Please complete onboarding first.')
   return response.json()
