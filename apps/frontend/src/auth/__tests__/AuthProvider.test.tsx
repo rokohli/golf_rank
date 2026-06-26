@@ -3,6 +3,15 @@ import { Text } from 'react-native'
 
 import { AuthProvider } from '../AuthProvider'
 
+jest.mock('@expo/vector-icons', () => {
+  const { Text } = require('react-native')
+  return {
+    Feather: ({ name }: { name: string }) => <Text>{name}</Text>,
+    Ionicons: ({ name }: { name: string }) => <Text>{name}</Text>,
+    MaterialCommunityIcons: ({ name }: { name: string }) => <Text>{name}</Text>,
+  }
+})
+
 describe('AuthProvider', () => {
   const originalAuthMode = process.env.EXPO_PUBLIC_AUTH_MODE
 
@@ -19,7 +28,7 @@ describe('AuthProvider', () => {
       </AuthProvider>,
     )
 
-    expect(screen.getByText('GolfRank')).toBeOnTheScreen()
+    expect(screen.getByText(/Your Game/)).toBeOnTheScreen()
     expect(screen.getByText('Get Started')).toBeOnTheScreen()
     expect(screen.queryByText('Onboarding form')).toBeNull()
 

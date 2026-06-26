@@ -1,9 +1,3 @@
-import { useCallback } from 'react'
-
-type ClerkUseAuth = typeof import('@clerk/clerk-expo')['useAuth']
-
-declare const require: (moduleName: string) => { useAuth: ClerkUseAuth }
-
 export type ApiHeaders = {
   'Content-Type': 'application/json'
   Authorization?: string
@@ -44,10 +38,7 @@ export function useAuthHeaders() {
     }
   }
 
-  const { useAuth } = require('@clerk/clerk-expo')
-  const { getToken } = useAuth()
-
   return {
-    getAuthHeaders: useCallback(() => buildAuthHeaders(() => getToken()), [getToken]),
+    getAuthHeaders: () => buildAuthHeaders(async () => null),
   }
 }
