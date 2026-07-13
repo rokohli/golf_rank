@@ -137,6 +137,23 @@ describe('AuthProvider', () => {
     expect(screen.queryByText('Fairway.')).toBeNull()
   })
 
+  it('reveals and focuses the email form from the Continue with Email CTA', () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    expect(screen.queryByLabelText('Email or Username')).toBeNull()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+
+    expect(screen.getByLabelText('Email or Username')).toHaveProp('autoFocus', true)
+  })
+
   it('returns from the Clerk auth screen to the premium get started screen', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
@@ -275,6 +292,7 @@ describe('AuthProvider', () => {
     )
 
     fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
     fireEvent.changeText(screen.getByLabelText('Email or Username'), 'rohan@example.com')
     fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
     expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(true)
@@ -311,6 +329,7 @@ describe('AuthProvider', () => {
     expect(screen.getAllByText('Create Account').length).toBeGreaterThan(0)
     expect(screen.queryByLabelText('Full Name')).not.toBeOnTheScreen()
     expect(screen.queryByLabelText('Username')).not.toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
     fireEvent.changeText(screen.getByLabelText('Email'), 'new@example.com')
     fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
     fireEvent.press(screen.getByRole('button', { name: 'Create Account' }))

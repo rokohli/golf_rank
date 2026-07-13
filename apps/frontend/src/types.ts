@@ -32,3 +32,38 @@ export type Course = {
   difficulty: string
   is_public: boolean
 }
+
+export type RankingTier = 'loved_it' | 'liked_it' | 'fine' | 'no'
+
+export type TierPlacement = {
+  course_id: number
+  tier: RankingTier | 'not_sure'
+  position?: number
+}
+
+export type ComparisonResult = 'course_a' | 'course_b' | 'too_close' | 'not_sure'
+
+export type RankingComparison = {
+  course_a_id: number
+  course_b_id: number
+  result: ComparisonResult
+}
+
+export type RankedCourse = {
+  rank: number
+  course: Course
+  tier: RankingTier
+  tier_position: number
+  personal_rating: number
+  confidence: number
+  confidence_label: 'low' | 'medium' | 'high'
+}
+
+export type RankingSnapshot = {
+  version: number
+  algorithm_version: string
+  overall_confidence: number
+  entries: RankedCourse[]
+  unranked_courses: Course[]
+  created_at?: string | null
+}

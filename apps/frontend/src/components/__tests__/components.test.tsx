@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import * as SecureStore from 'expo-secure-store'
 
 import { CourseList } from '../CourseList'
 import { OnboardingForm } from '../OnboardingForm'
@@ -22,6 +23,10 @@ describe('OnboardingForm', () => {
     fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
     fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => {
+      expect(SecureStore.setItemAsync).toHaveBeenCalledWith('golfrank_onboarding_draft', expect.any(String))
+    })
 
     expect(await screen.findByText("What's your home course?")).toBeOnTheScreen()
     fireEvent.changeText(screen.getByLabelText('Home course'), 'Pasatiempo')
@@ -47,7 +52,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Explore Home' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Go to My Profile' }))
 
     await waitFor(() => {
       expect(submit).toHaveBeenCalledWith({
@@ -69,7 +74,7 @@ describe('OnboardingForm', () => {
           notifications: false,
         }),
       })
-      expect(onComplete).toHaveBeenCalledTimes(1)
+      expect(onComplete).toHaveBeenCalledWith('profile')
     })
   })
 })

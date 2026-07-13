@@ -46,6 +46,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
   const [verificationPending, setVerificationPending] = useState(false)
+  const [emailFormVisible, setEmailFormVisible] = useState(false)
   const { startSSOFlow } = useSSO()
   const signInState = useSignIn()
   const signUpState = useSignUp()
@@ -171,6 +172,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
 
   function switchMode(nextMode: 'sign-in' | 'sign-up') {
     setMode(nextMode)
+    setEmailFormVisible(false)
     setVerificationPending(false)
     setErrorMessage(null)
   }
@@ -204,94 +206,99 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
           tone="light"
         />
         <SocialButton
-          disabled={false}
+          disabled={loadingAction !== null}
           icon={<Feather name="mail" size={21} color="#1C2420" />}
           label="Continue with Email"
-          onPress={() => undefined}
+          onPress={() => setEmailFormVisible(true)}
           tone="light"
         />
       </View>
 
-      <Divider />
+      {emailFormVisible ? (
+        <>
+          <Divider />
 
-      <AuthField
-        autoCapitalize="none"
-        autoComplete="email"
-        icon={mode === 'sign-in' ? <Feather name="user" size={21} color="#6C746F" /> : <Feather name="mail" size={21} color="#6C746F" />}
-        inputMode="email"
-        keyboardType="email-address"
-        label={mode === 'sign-in' ? 'Email or Username' : 'Email'}
-        onChangeText={setEmailAddress}
-        placeholder={mode === 'sign-in' ? 'Enter your email or username' : 'Enter your email'}
-        textContentType="emailAddress"
-        value={emailAddress}
-      />
-      <AuthField
-        autoCapitalize="none"
-        autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
-        icon={<Feather name="lock" size={20} color="#6C746F" />}
-        label="Password"
-        onChangeText={setPassword}
-        placeholder={mode === 'sign-in' ? 'Enter your password' : 'Create a password'}
-        rightIcon={(
-          <Pressable
-            accessibilityLabel={passwordVisible ? 'Hide password' : 'Show password'}
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={() => setPasswordVisible((visible) => !visible)}
-          >
-            <Feather name={passwordVisible ? 'eye' : 'eye-off'} size={20} color="#6C746F" />
-          </Pressable>
-        )}
-        secureTextEntry={!passwordVisible}
-        textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
-        value={password}
-      />
-
-      {mode === 'sign-in' ? (
-        <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setErrorMessage('Password reset will be added once Clerk reset flow is configured.')}>
-          <Text style={authStyles.forgotText}>Forgot password?</Text>
-        </Pressable>
-      ) : (
-        <PasswordChecklist password={password} />
-      )}
-
-      {verificationPending ? (
-        <View style={authStyles.verifyStack}>
-          <Text style={authStyles.verifyText}>
-            Enter the verification code Clerk sent to {emailAddress.trim()}.
-          </Text>
           <AuthField
             autoCapitalize="none"
-            icon={<Feather name="hash" size={20} color="#6C746F" />}
-            inputMode="numeric"
-            keyboardType="number-pad"
-            label="Verification code"
-            onChangeText={setVerificationCode}
-            placeholder="123456"
-            value={verificationCode}
+            autoComplete="email"
+            autoFocus
+            icon={mode === 'sign-in' ? <Feather name="user" size={21} color="#6C746F" /> : <Feather name="mail" size={21} color="#6C746F" />}
+            inputMode="email"
+            keyboardType="email-address"
+            label={mode === 'sign-in' ? 'Email or Username' : 'Email'}
+            onChangeText={setEmailAddress}
+            placeholder={mode === 'sign-in' ? 'Enter your email or username' : 'Enter your email'}
+            textContentType="emailAddress"
+            value={emailAddress}
           />
-          <PrimaryAuthButton
-            disabled={loadingAction !== null || verificationCode.trim().length < 1}
-            label={loadingAction === 'verify-email' ? 'Verifying...' : 'Verify Email'}
-            onPress={verifyEmail}
+          <AuthField
+            autoCapitalize="none"
+            autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
+            icon={<Feather name="lock" size={20} color="#6C746F" />}
+            label="Password"
+            onChangeText={setPassword}
+            placeholder={mode === 'sign-in' ? 'Enter your password' : 'Create a password'}
+            rightIcon={(
+              <Pressable
+                accessibilityLabel={passwordVisible ? 'Hide password' : 'Show password'}
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => setPasswordVisible((visible) => !visible)}
+              >
+                <Feather name={passwordVisible ? 'eye' : 'eye-off'} size={20} color="#6C746F" />
+              </Pressable>
+            )}
+            secureTextEntry={!passwordVisible}
+            textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
+            value={password}
           />
-        </View>
-      ) : (
-        <PrimaryAuthButton
-          disabled={mode === 'sign-in' ? formDisabled : signUpDisabled}
-          label={
-            mode === 'sign-in'
-              ? loadingAction === 'email-sign-in'
-                ? 'Signing In'
-                : 'Sign In'
-              : loadingAction === 'email-sign-up'
-                ? 'Creating Account'
-                : 'Create Account'
-          }
-          onPress={mode === 'sign-in' ? signInWithEmail : signUpWithEmail}
-        />
-      )}
+
+          {mode === 'sign-in' ? (
+            <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setErrorMessage('Password reset will be added once Clerk reset flow is configured.')}>
+              <Text style={authStyles.forgotText}>Forgot password?</Text>
+            </Pressable>
+          ) : (
+            <PasswordChecklist password={password} />
+          )}
+
+          {verificationPending ? (
+            <View style={authStyles.verifyStack}>
+              <Text style={authStyles.verifyText}>
+                Enter the verification code Clerk sent to {emailAddress.trim()}.
+              </Text>
+              <AuthField
+                autoCapitalize="none"
+                icon={<Feather name="hash" size={20} color="#6C746F" />}
+                inputMode="numeric"
+                keyboardType="number-pad"
+                label="Verification code"
+                onChangeText={setVerificationCode}
+                placeholder="123456"
+                value={verificationCode}
+              />
+              <PrimaryAuthButton
+                disabled={loadingAction !== null || verificationCode.trim().length < 1}
+                label={loadingAction === 'verify-email' ? 'Verifying...' : 'Verify Email'}
+                onPress={verifyEmail}
+              />
+            </View>
+          ) : (
+            <PrimaryAuthButton
+              disabled={mode === 'sign-in' ? formDisabled : signUpDisabled}
+              label={
+                mode === 'sign-in'
+                  ? loadingAction === 'email-sign-in'
+                    ? 'Signing In'
+                    : 'Sign In'
+                  : loadingAction === 'email-sign-up'
+                    ? 'Creating Account'
+                    : 'Create Account'
+              }
+              onPress={mode === 'sign-in' ? signInWithEmail : signUpWithEmail}
+            />
+          )}
+        </>
+      ) : null}
 
       <View style={authStyles.modeFooter}>
         <Text style={authStyles.modeFooterMuted}>
@@ -360,6 +367,7 @@ function SocialButton({
 function AuthField({
   autoCapitalize,
   autoComplete,
+  autoFocus,
   icon,
   inputMode,
   keyboardType,
@@ -373,6 +381,7 @@ function AuthField({
 }: {
   autoCapitalize: 'none' | 'sentences' | 'words' | 'characters'
   autoComplete?: 'email' | 'current-password' | 'new-password'
+  autoFocus?: boolean
   icon: ReactNode
   inputMode?: 'email' | 'numeric' | 'text'
   keyboardType?: 'default' | 'email-address' | 'number-pad'
@@ -394,6 +403,7 @@ function AuthField({
           autoCapitalize={autoCapitalize}
           autoComplete={autoComplete}
           autoCorrect={false}
+          autoFocus={autoFocus}
           inputMode={inputMode}
           keyboardType={keyboardType}
           onChangeText={onChangeText}

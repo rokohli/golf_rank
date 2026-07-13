@@ -29,7 +29,7 @@ export default function Index() {
           <OnboardingForm
             submit={async (input) => savePreferences(input, await getAuthHeaders())}
             saveProfile={updateUserProfile}
-            onComplete={() => router.replace('/discover')}
+            onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}
           />
         </ScrollView>

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,3 +51,43 @@ class CourseOut(BaseModel):
     green_fee: int
     difficulty: str
     is_public: bool
+
+
+RankingTier = Literal["loved_it", "liked_it", "fine", "no"]
+PlacementTier = Literal["loved_it", "liked_it", "fine", "no", "not_sure"]
+ComparisonResult = Literal["course_a", "course_b", "too_close", "not_sure"]
+
+
+class TierPlacementIn(BaseModel):
+    course_id: int = Field(gt=0)
+    tier: PlacementTier
+    position: int | None = Field(default=None, ge=1)
+
+
+class TierPlacementsIn(BaseModel):
+    assignments: list[TierPlacementIn] = Field(min_length=1, max_length=250)
+
+
+class ComparisonIn(BaseModel):
+    course_a_id: int = Field(gt=0)
+    course_b_id: int = Field(gt=0)
+    result: ComparisonResult
+
+
+class RankedCourseOut(BaseModel):
+    rank: int
+    course: CourseOut
+    tier: RankingTier
+    tier_position: int
+    personal_rating: float = Field(ge=1, le=10)
+    confidence: float = Field(ge=0, le=1)
+    confidence_label: Literal["low", "medium", "high"]
+
+
+class RankingSnapshotOut(BaseModel):
+    version: int
+    algorithm_version: str
+    overall_confidence: float = Field(ge=0, le=1)
+    entries: list[RankedCourseOut]
+    unranked_courses: list[CourseOut] = Field(default_factory=list)
+    created_at: datetime | None = None

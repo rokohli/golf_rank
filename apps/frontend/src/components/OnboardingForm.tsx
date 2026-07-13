@@ -52,12 +52,12 @@ type StepKey =
 
 type OnboardingFormProps = {
   submit: (input: OnboardingPreferences) => Promise<void>
-  onComplete: () => void
+  onComplete: (destination: 'home' | 'profile') => void
   onExit?: () => void
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
 }
 
-const DRAFT_KEY = 'golfrank:onboarding:draft'
+const DRAFT_KEY = 'golfrank_onboarding_draft'
 
 const steps: StepKey[] = [
   'profile',
@@ -357,13 +357,13 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
     setRankIndex((current) => current + 1)
   }
 
-  async function finish() {
+  async function finish(destination: 'home' | 'profile') {
     setSaving(true)
     setError(null)
     try {
       await submit(toPreferences(draft))
       await SecureStore.deleteItemAsync(DRAFT_KEY)
-      onComplete()
+      onComplete(destination)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to save preferences. Please try again.')
     } finally {
@@ -443,7 +443,8 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
             recommendation={selectedCourse([...draft.dreamCourseIds, ...draft.playedCourseIds])}
             playedCount={playedCourses.length}
             saving={saving}
-            onFinish={finish}
+            onExploreHome={() => finish('home')}
+            onViewProfile={() => finish('profile')}
           />
         )}
       </Animated.View>
@@ -729,13 +730,15 @@ function SuccessStep({
   recommendation,
   playedCount,
   saving,
-  onFinish,
+  onExploreHome,
+  onViewProfile,
 }: {
   draft: OnboardingDraft
   recommendation: CourseSeed
   playedCount: number
   saving: boolean
-  onFinish: () => void
+  onExploreHome: () => void
+  onViewProfile: () => void
 }) {
   return (
     <View style={styles.step}>
@@ -748,8 +751,8 @@ function SuccessStep({
         <SummaryLine text={draft.friendSearch ? 'Friends search queued' : 'Friends waiting'} />
       </View>
       <CourseCard course={recommendation} selected={false} onPress={() => undefined} />
-      <PrimaryButton disabled={saving} label={saving ? 'Saving profile' : 'Explore Home'} onPress={onFinish} />
-      <InlineButton label="Go to My Profile" onPress={onFinish} />
+      <PrimaryButton disabled={saving} label={saving ? 'Saving profile' : 'Explore Home'} onPress={onExploreHome} />
+      <InlineButton disabled={saving} label="Go to My Profile" onPress={onViewProfile} />
     </View>
   )
 }
@@ -820,9 +823,16 @@ function SecondaryButton({ label, onPress }: { label: string; onPress: () => voi
   )
 }
 
-function InlineButton({ label, onPress }: { label: string; onPress: () => void }) {
+function InlineButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
   return (
-    <Pressable accessibilityRole="button" hitSlop={8} onPress={onPress} style={styles.inlineButton}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      hitSlop={8}
+      onPress={onPress}
+      style={[styles.inlineButton, disabled && styles.disabledButton]}
+    >
       <Text style={styles.inlineText}>{label}</Text>
     </Pressable>
   )

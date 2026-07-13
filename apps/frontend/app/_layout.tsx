@@ -7,7 +7,8 @@ export default function Layout() {
     <AuthProvider>
       <Stack
         screenOptions={{
-          contentStyle: { backgroundColor: '#F8FAF7' },
+          animation: 'fade',
+          contentStyle: { backgroundColor: '#F8F7F3' },
           headerShadowVisible: false,
           headerStyle: { backgroundColor: '#F8FAF7' },
         }}
