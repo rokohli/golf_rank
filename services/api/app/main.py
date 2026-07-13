@@ -128,6 +128,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             statement = statement.where(Course.is_public == (access == "public"))
         return list(session.scalars(statement.order_by(Course.name)).all())
 
+    @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)
+    def course(course_id: int, session: Session = Depends(get_session)) -> Course:
+        stored_course = session.get(Course, course_id)
+        if stored_course is None:
+            raise HTTPException(404, "Course not found")
+        return stored_course
+
     return app
 
 

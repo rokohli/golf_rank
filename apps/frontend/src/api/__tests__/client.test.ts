@@ -1,4 +1,4 @@
-import { getProfile, getRanking, saveComparison, savePreferences, saveTierPlacements, searchCourses } from '../client'
+import { getCourse, getProfile, getRanking, saveComparison, savePreferences, saveTierPlacements, searchCourses } from '../client'
 
 describe('api client', () => {
   beforeEach(() => {
@@ -41,6 +41,16 @@ describe('api client', () => {
 
     await expect(getProfile(headers)).resolves.toMatchObject({ max_green_fee: 450 })
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/profile', { headers })
+  })
+
+  it('loads an API course by its numeric id', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 2, name: 'Spyglass Hill Golf Course' }),
+    } as Response)
+
+    await expect(getCourse(2)).resolves.toMatchObject({ id: 2, name: 'Spyglass Hill Golf Course' })
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/courses/2')
   })
 
   it('surfaces API authentication errors during onboarding', async () => {

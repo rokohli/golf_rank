@@ -1,4 +1,6 @@
-import { buildAuthHeaders } from '../useAuthToken'
+import { renderHook } from '@testing-library/react-native'
+
+import { buildAuthHeaders, useAuthHeaders } from '../useAuthToken'
 
 describe('buildAuthHeaders', () => {
   const originalAuthMode = process.env.EXPO_PUBLIC_AUTH_MODE
@@ -14,6 +16,16 @@ describe('buildAuthHeaders', () => {
       'Content-Type': 'application/json',
       'X-Development-Subject': 'dev:local-user',
     })
+  })
+
+  it('keeps the development auth header callback stable across renders', () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+
+    const { result, rerender } = renderHook(() => useAuthHeaders())
+    const firstCallback = result.current.getAuthHeaders
+    rerender(undefined)
+
+    expect(result.current.getAuthHeaders).toBe(firstCallback)
   })
 
   it('does not treat admin-development as a development bypass', async () => {

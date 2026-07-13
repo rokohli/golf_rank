@@ -43,6 +43,12 @@ export async function searchCourses(filters?: OnboardingPreferences): Promise<Co
   return response.json()
 }
 
+export async function getCourse(courseId: number): Promise<Course> {
+  const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}`)
+  if (!response.ok) throw await responseError(response, 'Unable to load this course. Please try again.')
+  return response.json()
+}
+
 export async function getRanking(headers: ApiHeaders): Promise<RankingSnapshot> {
   const response = await fetch(`${baseUrl}/api/v1/me/rankings`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load your rankings. Please try again.')

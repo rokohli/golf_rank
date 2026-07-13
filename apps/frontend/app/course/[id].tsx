@@ -1,15 +1,60 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
+import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 
+import { getCourse } from '../../src/api/client'
 import { Avatar, CourseVisual, IconButton, Pill, PrimaryButton, ProductScreen, SectionTitle } from '../../src/components/ProductUI'
-import { demoCourses, friends } from '../../src/data/demo'
+import { DemoCourse, demoCourses, friends } from '../../src/data/demo'
+import { Course } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
 export default function CourseDetail() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
-  const course = demoCourses.find((item) => item.id === id) ?? demoCourses[0]
+  const [course, setCourse] = useState<DemoCourse | null>(() => demoCourses.find((item) => item.id === id) ?? null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const demoCourse = demoCourses.find((item) => item.id === id)
+    if (demoCourse) {
+      setCourse(demoCourse)
+      setLoadError(null)
+      return
+    }
+    if (!id || !/^\d+$/.test(id)) {
+      setCourse(null)
+      setLoadError('Course not found.')
+      return
+    }
+
+    let cancelled = false
+    setCourse(null)
+    setLoadError(null)
+    getCourse(Number(id))
+      .then((apiCourse) => {
+        if (!cancelled) setCourse(toDemoCourse(apiCourse))
+      })
+      .catch((reason) => {
+        if (!cancelled) setLoadError(reason instanceof Error ? reason.message : 'Unable to load this course.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+
+  if (!course) {
+    return <>
+      <Stack.Screen options={{ headerShown: false }} />
+      <ProductScreen>
+        <IconButton icon="arrow-left" label="Go back" onPress={() => router.back()} />
+        <Text accessibilityRole={loadError ? 'alert' : undefined} style={styles.loadingText}>
+          {loadError ?? 'Loading course...'}
+        </Text>
+      </ProductScreen>
+    </>
+  }
+
   return <>
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen>
@@ -38,4 +83,17 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', justifyContent: 'space-between' }, action: { alignItems: 'center', gap: 5 }, actionIcon: { alignItems: 'center', borderColor: colors.line, borderRadius: 23, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 }, actionLabel: { color: colors.muted, fontSize: 9 },
   facts: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, flexDirection: 'row', justifyContent: 'space-around', padding: 14 }, factValue: { color: colors.ink, fontSize: 16, fontWeight: '800', textAlign: 'center' }, factLabel: { color: colors.muted, fontSize: 9, marginTop: 3, textAlign: 'center' },
   body: { color: colors.muted, fontSize: 13, lineHeight: 20 }, friendRow: { flexDirection: 'row', gap: 8 }, more: { alignItems: 'center', backgroundColor: '#E7E9E4', borderRadius: 22, height: 42, justifyContent: 'center', width: 42 }, moreText: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 32, textAlign: 'center' },
 })
+
+function toDemoCourse(course: Course): DemoCourse {
+  const knownCourse = demoCourses.find((item) => item.name === course.name)
+  const visualFallback = knownCourse ?? demoCourses[(course.id - 1) % demoCourses.length]
+  return {
+    ...visualFallback,
+    id: String(course.id),
+    location: course.region,
+    name: course.name,
+    price: course.green_fee > 500 ? '$$$$' : '$$$',
+  }
+}

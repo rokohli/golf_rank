@@ -7,6 +7,10 @@ export type ApiHeaders = {
   'X-Development-Subject'?: string
 }
 
+const developmentAuthHeaders = {
+  getAuthHeaders: () => buildAuthHeaders(async () => null),
+}
+
 export async function buildAuthHeaders(getToken: () => Promise<string | null>): Promise<ApiHeaders> {
   if (process.env.EXPO_PUBLIC_AUTH_MODE === 'development') {
     return {
@@ -26,9 +30,7 @@ export async function buildAuthHeaders(getToken: () => Promise<string | null>): 
 
 export function useAuthHeaders() {
   if (process.env.EXPO_PUBLIC_AUTH_MODE === 'development') {
-    return {
-      getAuthHeaders: () => buildAuthHeaders(async () => null),
-    }
+    return developmentAuthHeaders
   }
 
   return useClerkAuthHeaders()
