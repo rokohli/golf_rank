@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -24,6 +24,7 @@ class OnboardingPreference(Base):
     max_green_fee: Mapped[int] = mapped_column(Integer)
     difficulty: Mapped[str] = mapped_column(String(20))
     access: Mapped[str] = mapped_column(String(20))
+    onboarding_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class Course(Base):

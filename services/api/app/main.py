@@ -61,9 +61,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preferences.max_green_fee = payload.max_green_fee
         preferences.difficulty = payload.difficulty
         preferences.access = payload.access
+        if "onboarding_data" in payload.model_fields_set:
+            preferences.onboarding_data = (
+                payload.onboarding_data.model_dump() if payload.onboarding_data else None
+            )
         session.add_all([profile, preferences])
         session.commit()
-        return ProfileOut(**payload.model_dump())
+        return ProfileOut(
+            home_region=profile.home_region,
+            max_green_fee=preferences.max_green_fee,
+            difficulty=preferences.difficulty,
+            access=preferences.access,
+            onboarding_data=preferences.onboarding_data,
+        )
 
     @app.get("/api/v1/me/profile", response_model=ProfileOut)
     def profile(
@@ -82,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_green_fee=preferences.max_green_fee,
             difficulty=preferences.difficulty,
             access=preferences.access,
+            onboarding_data=preferences.onboarding_data,
         )
 
     @app.get("/api/v1/courses", response_model=list[CourseOut])

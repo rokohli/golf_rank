@@ -16,12 +16,12 @@ describe('buildAuthHeaders', () => {
     })
   })
 
-  it('uses the admin development identity header in admin development auth mode', async () => {
+  it('does not treat admin-development as a development bypass', async () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 
-    await expect(buildAuthHeaders(async () => null)).resolves.toEqual({
+    await expect(buildAuthHeaders(async () => 'jwt-token')).resolves.toEqual({
       'Content-Type': 'application/json',
-      'X-Development-Subject': 'dev:admin',
+      Authorization: 'Bearer jwt-token',
     })
   })
 
