@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -135,11 +136,50 @@ class Round(Base):
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
     played_on: Mapped[date] = mapped_column(Date, index=True)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    favorite_hole: Mapped[int | None] = mapped_column(Integer, nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), default="friends", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class UserCourseRating(Base):
+    __tablename__ = "user_course_ratings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "course_id", name="uq_user_course_rating_user_course"),
+        UniqueConstraint("round_id", name="uq_user_course_rating_round"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("rounds.id", ondelete="CASCADE"), index=True)
+    tier: Mapped[str] = mapped_column(String(20), index=True)
+    rating: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RoundCompanion(Base):
+    __tablename__ = "round_companions"
+    __table_args__ = (
+        CheckConstraint(
+            "(friend_user_id IS NOT NULL AND guest_name IS NULL) OR "
+            "(friend_user_id IS NULL AND guest_name IS NOT NULL)",
+            name="ck_round_companion_exactly_one_identity",
+        ),
+        UniqueConstraint("round_id", "friend_user_id", name="uq_round_companion_round_friend"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("rounds.id", ondelete="CASCADE"), index=True)
+    friend_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    guest_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class RoundNote(Base):
