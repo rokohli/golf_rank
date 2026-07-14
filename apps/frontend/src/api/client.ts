@@ -3,14 +3,21 @@ import { Course, OnboardingPreferences, RankingComparison, RankingSnapshot, Tier
 
 const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
 
+export class ApiResponseError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ApiResponseError'
+  }
+}
+
 async function responseError(response: Response, fallback: string): Promise<Error> {
   try {
     const body = await response.json() as { detail?: string }
-    if (body.detail) return new Error(body.detail)
+    if (body.detail) return new ApiResponseError(body.detail, response.status)
   } catch {
     // The API may return an empty or non-JSON error response.
   }
-  return new Error(fallback)
+  return new ApiResponseError(fallback, response.status)
 }
 
 export async function savePreferences(input: OnboardingPreferences, headers: ApiHeaders): Promise<void> {

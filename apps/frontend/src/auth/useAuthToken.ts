@@ -1,5 +1,5 @@
 import { useAuth } from '@clerk/expo'
-import { useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 
 export type ApiHeaders = {
   'Content-Type': 'application/json'
@@ -38,11 +38,16 @@ export function useAuthHeaders() {
 
 function useClerkAuthHeaders() {
   const { getToken } = useAuth()
+  const getTokenRef = useRef(getToken)
+  getTokenRef.current = getToken
+
+  const getAuthHeaders = useCallback(
+    () => buildAuthHeaders(() => getTokenRef.current()),
+    [],
+  )
 
   return useMemo(
-    () => ({
-      getAuthHeaders: () => buildAuthHeaders(() => getToken()),
-    }),
-    [getToken],
+    () => ({ getAuthHeaders }),
+    [getAuthHeaders],
   )
 }
