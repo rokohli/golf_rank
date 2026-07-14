@@ -196,9 +196,6 @@ describe('api client', () => {
       id: 22,
       display_name: 'Morgan Golfer',
       username: 'morgan',
-      home_region: 'Monterey, CA',
-      follower_count: 4,
-      following_count: 6,
     }])
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/follows', { headers })
   })

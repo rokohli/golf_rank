@@ -47,21 +47,13 @@ export type TierPlacement = {
 
 export type ComparisonResult = 'course_a' | 'course_b' | 'too_close' | 'not_sure'
 
-type CourseRatingComparison =
-  | {
-      comparison_course_id?: never
-      comparison_result?: never
-    }
-  | {
-      comparison_course_id: number
-      comparison_result: ComparisonResult
-    }
-
 export type CourseRatingInput = {
   tier: RatingTier
   played_on: string
   score: number | null
-} & CourseRatingComparison
+  comparison_course_id?: number
+  comparison_result?: ComparisonResult
+}
 
 export type RatingDetailsInput = {
   note: string | null
@@ -98,9 +90,6 @@ export type FriendSummary = {
   id: number
   display_name: string
   username: string | null
-  home_region: string | null
-  follower_count: number
-  following_count: number
 }
 
 export type RankingComparison = {

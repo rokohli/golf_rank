@@ -170,5 +170,9 @@ export async function getFriends(headers: ApiHeaders): Promise<FriendSummary[]> 
     throw await responseError(response, 'Unable to load your friends. Please try again.')
   }
   const follows = await response.json() as FollowResponse[]
-  return follows.map(({ user }) => user)
+  return follows.map(({ user }) => ({
+    id: user.id,
+    display_name: user.display_name,
+    username: user.username,
+  }))
 }
