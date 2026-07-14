@@ -1,4 +1,12 @@
-import { buildAuthHeaders } from '../useAuthToken'
+import { renderHook } from '@testing-library/react-native'
+
+import { buildAuthHeaders, useAuthHeaders } from '../useAuthToken'
+
+let mockGetToken = jest.fn<Promise<string | null>, []>()
+
+jest.mock('@clerk/expo', () => ({
+  useAuth: () => ({ getToken: mockGetToken }),
+}))
 
 describe('buildAuthHeaders', () => {
   const originalAuthMode = process.env.EXPO_PUBLIC_AUTH_MODE
@@ -16,12 +24,39 @@ describe('buildAuthHeaders', () => {
     })
   })
 
-  it('uses the admin development identity header in admin development auth mode', async () => {
+  it('keeps the development auth header callback stable across renders', () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+
+    const { result, rerender } = renderHook(() => useAuthHeaders())
+    const firstCallback = result.current.getAuthHeaders
+    rerender(undefined)
+
+    expect(result.current.getAuthHeaders).toBe(firstCallback)
+  })
+
+  it('does not treat admin-development as a development bypass', async () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 
-    await expect(buildAuthHeaders(async () => null)).resolves.toEqual({
+    await expect(buildAuthHeaders(async () => 'jwt-token')).resolves.toEqual({
       'Content-Type': 'application/json',
-      'X-Development-Subject': 'dev:admin',
+      Authorization: 'Bearer jwt-token',
+    })
+  })
+
+  it('keeps the Clerk auth header callback stable while using the latest token getter', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    mockGetToken = jest.fn().mockResolvedValue('first-token')
+
+    const { result, rerender } = renderHook(() => useAuthHeaders())
+    const firstCallback = result.current.getAuthHeaders
+
+    mockGetToken = jest.fn().mockResolvedValue('refreshed-token')
+    rerender(undefined)
+
+    expect(result.current.getAuthHeaders).toBe(firstCallback)
+    await expect(result.current.getAuthHeaders()).resolves.toEqual({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer refreshed-token',
     })
   })
 

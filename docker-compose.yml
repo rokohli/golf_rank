@@ -6,6 +6,8 @@ services:
       POSTGRES_USER: golf_rank
       POSTGRES_PASSWORD: golf_rank
     ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U golf_rank -d golf_rank"]
       interval: 5s
@@ -23,3 +25,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+
+volumes:
+  postgres-data:

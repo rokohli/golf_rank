@@ -1,7 +1,14 @@
+import { useAuth } from '@clerk/expo'
+import { useCallback, useMemo, useRef } from 'react'
+
 export type ApiHeaders = {
   'Content-Type': 'application/json'
   Authorization?: string
   'X-Development-Subject'?: string
+}
+
+const developmentAuthHeaders = {
+  getAuthHeaders: () => buildAuthHeaders(async () => null),
 }
 
 export async function buildAuthHeaders(getToken: () => Promise<string | null>): Promise<ApiHeaders> {
@@ -9,13 +16,6 @@ export async function buildAuthHeaders(getToken: () => Promise<string | null>): 
     return {
       'Content-Type': 'application/json',
       'X-Development-Subject': 'dev:local-user',
-    }
-  }
-
-  if (process.env.EXPO_PUBLIC_AUTH_MODE === 'admin-development') {
-    return {
-      'Content-Type': 'application/json',
-      'X-Development-Subject': 'dev:admin',
     }
   }
 
@@ -29,16 +29,25 @@ export async function buildAuthHeaders(getToken: () => Promise<string | null>): 
 }
 
 export function useAuthHeaders() {
-  if (
-    process.env.EXPO_PUBLIC_AUTH_MODE === 'development' ||
-    process.env.EXPO_PUBLIC_AUTH_MODE === 'admin-development'
-  ) {
-    return {
-      getAuthHeaders: () => buildAuthHeaders(async () => null),
-    }
+  if (process.env.EXPO_PUBLIC_AUTH_MODE === 'development') {
+    return developmentAuthHeaders
   }
 
-  return {
-    getAuthHeaders: () => buildAuthHeaders(async () => null),
-  }
+  return useClerkAuthHeaders()
+}
+
+function useClerkAuthHeaders() {
+  const { getToken } = useAuth()
+  const getTokenRef = useRef(getToken)
+  getTokenRef.current = getToken
+
+  const getAuthHeaders = useCallback(
+    () => buildAuthHeaders(() => getTokenRef.current()),
+    [],
+  )
+
+  return useMemo(
+    () => ({ getAuthHeaders }),
+    [getAuthHeaders],
+  )
 }

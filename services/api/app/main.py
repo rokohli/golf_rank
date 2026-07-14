@@ -8,8 +8,13 @@ from .core.auth import CurrentUser, current_user
 from .core.config import Settings
 from .db import get_session, make_engine, make_session_factory
 from .models import Base, Course, OnboardingPreference, Profile, User
+from .plans import router as plans_router
+from .ranking import router as ranking_router
+from .rounds import course_state_router, router as rounds_router
+from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
 from .seed import seed_courses
+from .social import router as social_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -20,6 +25,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = make_engine(settings.database_url)
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
+    app.include_router(ranking_router)
+    app.include_router(rounds_router)
+    app.include_router(course_state_router)
+    app.include_router(social_router)
+    app.include_router(saves_router)
+    app.include_router(plans_router)
 
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
@@ -61,9 +72,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preferences.max_green_fee = payload.max_green_fee
         preferences.difficulty = payload.difficulty
         preferences.access = payload.access
+        if "onboarding_data" in payload.model_fields_set:
+            preferences.onboarding_data = (
+                payload.onboarding_data.model_dump() if payload.onboarding_data else None
+            )
         session.add_all([profile, preferences])
         session.commit()
-        return ProfileOut(**payload.model_dump())
+        return ProfileOut(
+            home_region=profile.home_region,
+            max_green_fee=preferences.max_green_fee,
+            difficulty=preferences.difficulty,
+            access=preferences.access,
+            onboarding_data=preferences.onboarding_data,
+        )
 
     @app.get("/api/v1/me/profile", response_model=ProfileOut)
     def profile(
@@ -82,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_green_fee=preferences.max_green_fee,
             difficulty=preferences.difficulty,
             access=preferences.access,
+            onboarding_data=preferences.onboarding_data,
         )
 
     @app.get("/api/v1/courses", response_model=list[CourseOut])
@@ -105,6 +127,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if access != "any":
             statement = statement.where(Course.is_public == (access == "public"))
         return list(session.scalars(statement.order_by(Course.name)).all())
+
+    @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)
+    def course(course_id: int, session: Session = Depends(get_session)) -> Course:
+        stored_course = session.get(Course, course_id)
+        if stored_course is None:
+            raise HTTPException(404, "Course not found")
+        return stored_course
 
     return app
 
