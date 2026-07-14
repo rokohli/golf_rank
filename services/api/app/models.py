@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Index,
     String,
@@ -130,6 +131,9 @@ class RankingSnapshot(Base):
 
 class Round(Base):
     __tablename__ = "rounds"
+    __table_args__ = (
+        UniqueConstraint("id", "user_id", "course_id", name="uq_round_id_user_course"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -147,6 +151,12 @@ class Round(Base):
 class UserCourseRating(Base):
     __tablename__ = "user_course_ratings"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_id", "user_id", "course_id"],
+            ["rounds.id", "rounds.user_id", "rounds.course_id"],
+            name="fk_user_course_rating_round_owner",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint("user_id", "course_id", name="uq_user_course_rating_user_course"),
         UniqueConstraint("round_id", name="uq_user_course_rating_round"),
     )
@@ -154,7 +164,7 @@ class UserCourseRating(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
-    round_id: Mapped[int] = mapped_column(ForeignKey("rounds.id", ondelete="CASCADE"), index=True)
+    round_id: Mapped[int] = mapped_column(Integer)
     tier: Mapped[str] = mapped_column(String(20), index=True)
     rating: Mapped[float] = mapped_column(Float)
     confidence: Mapped[float] = mapped_column(Float)

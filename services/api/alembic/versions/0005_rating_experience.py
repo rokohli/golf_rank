@@ -16,7 +16,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("rounds", sa.Column("favorite_hole", sa.Integer(), nullable=True))
+    with op.batch_alter_table("rounds") as batch_op:
+        batch_op.add_column(sa.Column("favorite_hole", sa.Integer(), nullable=True))
+        batch_op.create_unique_constraint(
+            "uq_round_id_user_course", ["id", "user_id", "course_id"]
+        )
 
     op.execute(
         """
@@ -44,7 +48,12 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.ForeignKeyConstraint(["course_id"], ["courses.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["round_id"], ["rounds.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["round_id", "user_id", "course_id"],
+            ["rounds.id", "rounds.user_id", "rounds.course_id"],
+            name="fk_user_course_rating_round_owner",
+            ondelete="CASCADE",
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("round_id", name="uq_user_course_rating_round"),
@@ -52,7 +61,6 @@ def upgrade() -> None:
     )
     op.create_index("ix_user_course_ratings_user_id", "user_course_ratings", ["user_id"])
     op.create_index("ix_user_course_ratings_course_id", "user_course_ratings", ["course_id"])
-    op.create_index("ix_user_course_ratings_round_id", "user_course_ratings", ["round_id"])
     op.create_index("ix_user_course_ratings_tier", "user_course_ratings", ["tier"])
 
     op.create_table(
@@ -83,7 +91,6 @@ def downgrade() -> None:
     op.drop_table("round_companions")
 
     op.drop_index("ix_user_course_ratings_tier", table_name="user_course_ratings")
-    op.drop_index("ix_user_course_ratings_round_id", table_name="user_course_ratings")
     op.drop_index("ix_user_course_ratings_course_id", table_name="user_course_ratings")
     op.drop_index("ix_user_course_ratings_user_id", table_name="user_course_ratings")
     op.drop_table("user_course_ratings")
@@ -101,4 +108,6 @@ def downgrade() -> None:
         """
     )
 
-    op.drop_column("rounds", "favorite_hole")
+    with op.batch_alter_table("rounds") as batch_op:
+        batch_op.drop_constraint("uq_round_id_user_course", type_="unique")
+        batch_op.drop_column("favorite_hole")
