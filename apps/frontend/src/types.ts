@@ -47,13 +47,22 @@ export type TierPlacement = {
 
 export type ComparisonResult = 'course_a' | 'course_b' | 'too_close' | 'not_sure'
 
-export type CourseRatingInput = {
+type CourseRatingCore = {
   tier: RatingTier
   played_on: string
   score: number | null
-  comparison_course_id?: number
-  comparison_result?: ComparisonResult
 }
+
+export type CourseRatingInput = CourseRatingCore & (
+  | {
+      comparison_course_id: number
+      comparison_result: ComparisonResult
+    }
+  | {
+      comparison_course_id?: never
+      comparison_result?: never
+    }
+)
 
 export type RatingDetailsInput = {
   note: string | null

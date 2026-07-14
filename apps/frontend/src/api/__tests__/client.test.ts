@@ -12,7 +12,6 @@ import {
   saveTierPlacements,
   searchCourses,
 } from '../client'
-import { RatingTier } from '../../types'
 
 describe('api client', () => {
   beforeEach(() => {
@@ -127,7 +126,7 @@ describe('api client', () => {
     const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
 
     await expect(getCourseRating(7, headers)).resolves.toMatchObject({ course: { id: 7 } })
-    await expect(getRatingCandidate(7, 'green & fairway' as RatingTier, headers))
+    await expect(getRatingCandidate(7, 'green', headers))
       .resolves.toMatchObject({ id: 9 })
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -137,7 +136,7 @@ describe('api client', () => {
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      'http://localhost:8000/api/v1/me/course-ratings/7/comparison-candidate?tier=green%20%26%20fairway',
+      'http://localhost:8000/api/v1/me/course-ratings/7/comparison-candidate?tier=green',
       { headers },
     )
   })
