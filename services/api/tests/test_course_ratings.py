@@ -176,7 +176,7 @@ def test_failure_after_snapshot_staging_rolls_back_everything(monkeypatch) -> No
     def fail_after_staging(*args, **kwargs):
         raise RuntimeError("forced projection failure")
 
-    monkeypatch.setattr(course_ratings, "_upsert_rating_projections", fail_after_staging)
+    monkeypatch.setattr(course_ratings, "_ensure_target_rating_projection", fail_after_staging)
     try:
         client.put("/api/v1/me/course-ratings/1", headers=ALICE, json=_rating())
     except RuntimeError:
@@ -184,6 +184,7 @@ def test_failure_after_snapshot_staging_rolls_back_everything(monkeypatch) -> No
 
     with app.state.session_factory() as session:
         for model in (
+            User,
             TierAssignment,
             Comparison,
             RankingSnapshot,
@@ -194,6 +195,34 @@ def test_failure_after_snapshot_staging_rolls_back_everything(monkeypatch) -> No
             UserCourseState,
         ):
             assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+def test_revision_failure_restores_previous_rating_round_and_projection(monkeypatch) -> None:
+    from app import course_ratings
+
+    app = create_app()
+    client = TestClient(app)
+    created = client.put("/api/v1/me/course-ratings/1", headers=ALICE, json=_rating())
+    assert created.status_code == 200
+    before = created.json()
+
+    def fail_after_staging(*args, **kwargs):
+        raise RuntimeError("forced revision projection failure")
+
+    monkeypatch.setattr(course_ratings, "_ensure_target_rating_projection", fail_after_staging)
+    try:
+        client.put(
+            "/api/v1/me/course-ratings/1",
+            headers=ALICE,
+            json=_rating("bunker", played_on="2026-07-03", score=95),
+        )
+    except RuntimeError:
+        pass
+
+    assert client.get("/api/v1/me/course-ratings/1", headers=ALICE).json() == before
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count(Round.id))) == 1
+        assert session.scalar(select(func.count(UserCourseRating.id))) == 1
 
 
 def test_details_replace_private_data_validate_friends_and_never_accept_phone() -> None:
@@ -254,3 +283,80 @@ def test_rating_validates_future_date_score_and_comparison_pair() -> None:
         headers=ALICE,
         json=_rating(comparison_course_id=2),
     ).status_code == 422
+
+
+def test_ranking_routes_keep_rating_projections_and_aggregates_in_sync() -> None:
+    app = create_app()
+    client = TestClient(app)
+    for course_id in (1, 2, 3):
+        assert client.put(
+            f"/api/v1/me/course-ratings/{course_id}", headers=ALICE, json=_rating()
+        ).status_code == 200
+
+    moved = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=ALICE,
+        json={"assignments": [{"course_id": 1, "tier": "fairway"}]},
+    )
+    assert moved.status_code == 200
+    course_one = client.get("/api/v1/me/course-ratings/1", headers=ALICE).json()
+    assert (course_one["tier"], course_one["personal_rating"]) == ("fairway", 7.7)
+    assert client.get("/api/v1/courses/1").json()["community_rating"] == 7.7
+
+    compared = client.post(
+        "/api/v1/me/rankings/comparisons",
+        headers=ALICE,
+        json={"course_a_id": 2, "course_b_id": 3, "result": "course_b"},
+    )
+    assert compared.status_code == 200
+    assert [entry["course"]["id"] for entry in compared.json()["entries"]] == [3, 2, 1]
+    course_two = client.get("/api/v1/me/course-ratings/2", headers=ALICE).json()
+    assert course_two["personal_rating"] == 8.5
+    assert client.get("/api/v1/courses/2").json()["community_rating"] == 8.5
+
+    unranked = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=ALICE,
+        json={"assignments": [{"course_id": 2, "tier": "not_sure"}]},
+    )
+    assert unranked.status_code == 200
+    state = client.get("/api/v1/me/course-ratings/2", headers=ALICE).json()
+    assert state["personal_rating"] is None
+    assert state["community_rating"] is None
+    assert state["rating_count"] == 0
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count(Round.id)).where(Round.course_id == 2)) == 1
+
+
+def test_rating_revision_preserves_same_tier_order_until_decisive_comparison() -> None:
+    client = TestClient(create_app())
+    for course_id in (1, 2, 3):
+        client.put(f"/api/v1/me/course-ratings/{course_id}", headers=ALICE, json=_rating())
+
+    score_only = client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json=_rating(score=80, played_on="2026-07-02"),
+    )
+    assert score_only.status_code == 200
+    ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
+    assert [entry["course"]["id"] for entry in ranking["entries"]] == [1, 2, 3]
+
+    for result in ("too_close", "not_sure"):
+        response = client.put(
+            "/api/v1/me/course-ratings/1",
+            headers=ALICE,
+            json=_rating(comparison_course_id=2, comparison_result=result),
+        )
+        assert response.status_code == 200
+        ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
+        assert [entry["course"]["id"] for entry in ranking["entries"]] == [1, 2, 3]
+
+    decisive = client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json=_rating(comparison_course_id=2, comparison_result="course_b"),
+    )
+    assert decisive.status_code == 200
+    ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
+    assert [entry["course"]["id"] for entry in ranking["entries"]] == [2, 1, 3]

@@ -15,6 +15,7 @@ from .models import (
     RankingSnapshot,
     TierAssignment,
     User,
+    UserCourseRating,
 )
 from .schemas import ComparisonIn, RankingSnapshotOut, TierPlacementsIn
 
@@ -186,6 +187,19 @@ def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
         }
         for assignment in unranked_assignments
     ]
+    entries_by_course = {entry["course"]["id"]: entry for entry in entries}
+    for projection in session.scalars(
+        select(UserCourseRating).where(UserCourseRating.user_id == user_id)
+    ).all():
+        entry = entries_by_course.get(projection.course_id)
+        if entry is None:
+            # The rating-owned round remains as history; only its current
+            # personal/community rating projection is removed.
+            session.delete(projection)
+            continue
+        projection.tier = entry["tier"]
+        projection.rating = entry["personal_rating"]
+        projection.confidence = entry["confidence"]
     snapshot = RankingSnapshot(
         user_id=user_id,
         version=version,

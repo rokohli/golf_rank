@@ -115,6 +115,8 @@ def _place_assignment(
             TierAssignment.course_id == course_id,
         )
     )
+    if assignment is not None and assignment.tier == tier:
+        return assignment
     if assignment is None:
         assignment = TierAssignment(user_id=user_id, course_id=course_id)
     peers = list(
@@ -188,33 +190,35 @@ def _stage_comparison(
     )
 
 
-def _upsert_rating_projections(
+def _ensure_target_rating_projection(
     session: Session,
     user_id: int,
     target_course_id: int,
     target_round_id: int,
     snapshot: RankingSnapshotOut,
 ) -> None:
-    existing = {
-        item.course_id: item
-        for item in session.scalars(
-            select(UserCourseRating).where(UserCourseRating.user_id == user_id)
-        ).all()
-    }
-    for entry in snapshot.entries:
-        projection = existing.get(entry.course.id)
-        if entry.course.id != target_course_id and projection is None:
-            continue
-        if projection is None:
-            projection = UserCourseRating(
-                user_id=user_id,
-                course_id=entry.course.id,
-                round_id=target_round_id,
-            )
-        projection.tier = entry.tier
-        projection.rating = entry.personal_rating
-        projection.confidence = entry.confidence
-        session.add(projection)
+    entry = next(
+        (item for item in snapshot.entries if item.course.id == target_course_id),
+        None,
+    )
+    if entry is None:
+        raise RuntimeError("Rated course missing from staged ranking snapshot")
+    projection = session.scalar(
+        select(UserCourseRating).where(
+            UserCourseRating.user_id == user_id,
+            UserCourseRating.course_id == target_course_id,
+        )
+    )
+    if projection is None:
+        projection = UserCourseRating(
+            user_id=user_id,
+            course_id=target_course_id,
+            round_id=target_round_id,
+        )
+    projection.tier = entry.tier
+    projection.rating = entry.personal_rating
+    projection.confidence = entry.confidence
+    session.add(projection)
 
 
 def _upsert_round_event(session: Session, user_id: int, round_: Round) -> None:
@@ -343,7 +347,7 @@ def put_course_rating(
         session.flush()
 
         snapshot = _stage_snapshot(session, user.id)
-        _upsert_rating_projections(session, user.id, course_id, round_.id, snapshot)
+        _ensure_target_rating_projection(session, user.id, course_id, round_.id, snapshot)
         _refresh_course_state(session, user.id, course_id)
         _upsert_round_event(session, user.id, round_)
         session.flush()

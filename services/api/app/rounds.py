@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .db import get_session
 from .domain import course_data, require_course, require_user, stored_user
-from .models import ActivityEvent, Course, Round, RoundNote, UserCourseState
+from .models import (
+    ActivityEvent,
+    Course,
+    Round,
+    RoundNote,
+    UserCourseRating,
+    UserCourseState,
+)
 from .schemas import CourseOut
 
 
@@ -191,6 +198,10 @@ def update_round(
     )
     if round_ is None:
         raise HTTPException(404, "Round not found")
+    if payload.visibility == "public" and session.scalar(
+        select(UserCourseRating.id).where(UserCourseRating.round_id == round_.id)
+    ) is not None:
+        raise HTTPException(422, "Rating-owned rounds cannot be public")
     if "played_on" in payload.model_fields_set and payload.played_on is not None:
         round_.played_on = payload.played_on
     if "score" in payload.model_fields_set:

@@ -78,3 +78,37 @@ def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
 
     with app.state.session_factory() as session:
         assert session.get(RoundNote, round_id) is None
+
+
+def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() -> None:
+    client = TestClient(create_app())
+    rating = client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json={"tier": "green", "played_on": "2026-07-01", "score": None},
+    )
+    assert rating.status_code == 200
+    round_id = rating.json()["round"]["id"]
+
+    rejected = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"visibility": "public"},
+    )
+    assert rejected.status_code == 422
+    state = client.get("/api/v1/me/course-ratings/1", headers=ALICE)
+    assert state.status_code == 200
+    assert state.json()["round"]["visibility"] == "private"
+
+    ordinary = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 2, "played_on": "2026-07-01", "visibility": "friends"},
+    )
+    public = client.patch(
+        f"/api/v1/me/rounds/{ordinary.json()['id']}",
+        headers=ALICE,
+        json={"visibility": "public"},
+    )
+    assert public.status_code == 200
+    assert public.json()["visibility"] == "public"
