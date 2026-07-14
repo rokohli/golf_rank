@@ -69,7 +69,7 @@ export function CourseCard({ course, compact = false, onPress, badge }: { course
         <Text numberOfLines={1} style={styles.cardTitle}>{course.name}</Text>
         <Text numberOfLines={1} style={styles.meta}>{course.location}</Text>
         <View style={styles.inlineRow}>
-          <Text style={styles.rating}>★ {course.rating}</Text>
+          <Text accessibilityLabel={course.rating ? `Community rating ${course.rating} out of 10` : 'No community rating yet'} style={styles.rating}>{course.rating ? course.rating : '—'}/10</Text>
           <Text style={styles.meta}>({course.reviews})</Text>
           <Text numberOfLines={1} style={[styles.meta, { marginLeft: 'auto', maxWidth: compact ? 62 : 150 }]}>{course.distance}</Text>
         </View>
@@ -82,7 +82,7 @@ export function DemoCourseRow({ course, index, onPress, trailing }: { course: De
   return <Pressable onPress={onPress} style={({ pressed }) => [styles.courseRow, pressed && styles.pressed]}>
     {index ? <Text style={styles.courseRowIndex}>{index}</Text> : null}
     <View style={styles.courseRowImage}><CourseVisual course={course} height={52} /></View>
-    <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.courseRowTitle}>{course.name}</Text><Text numberOfLines={1} style={styles.meta}>{course.location}</Text><Text style={styles.rating}>★ {course.rating}  <Text style={styles.meta}>{course.reviews}</Text></Text></View>
+    <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.courseRowTitle}>{course.name}</Text><Text numberOfLines={1} style={styles.meta}>{course.location}</Text><Text accessibilityLabel={course.rating ? `Community rating ${course.rating} out of 10, ${course.reviews} ratings` : `No community rating yet, ${course.reviews} ratings`} style={styles.rating}>{course.rating ? course.rating : '—'}/10  <Text style={styles.meta}>{course.reviews}</Text></Text></View>
     {trailing ?? <Feather name="chevron-right" size={16} color={colors.muted} />}
   </Pressable>
 }

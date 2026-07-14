@@ -17,7 +17,7 @@ export default function Profile() {
         <View style={styles.avatarWrap}><Avatar initials="RK" size={86} color="#B1805D" /></View>
       </View>
       <View style={styles.identity}><Text style={styles.name}>Rohan Kohli</Text><Text style={styles.handle}>@rohank</Text></View>
-      <View style={styles.stats}><StatCard label="Rounds" value="24" /><StatCard label="Courses" value="18" /><StatCard label="Avg score" value="84.1" /><StatCard label="Top rating" value="9.4" /></View>
+      <View style={styles.stats}><StatCard label="Rounds" value="24" /><StatCard label="Courses" value="18" /><StatCard label="Avg score" value="84.1" /><StatCard label="Top rating" value="9.4/10" /></View>
       <View style={styles.actions}><Pressable onPress={() => router.push('/friends')} style={styles.action}><Feather name="users" size={18} color={colors.pine} /><Text style={styles.actionText}>Friends</Text></Pressable><Pressable onPress={() => router.push('/saved')} style={styles.action}><Feather name="bookmark" size={18} color={colors.pine} /><Text style={styles.actionText}>Saved</Text></Pressable><Pressable onPress={() => router.push('/stats')} style={styles.action}><Feather name="activity" size={18} color={colors.pine} /><Text style={styles.actionText}>Stats</Text></Pressable></View>
       <SectionTitle title="Achievements" />
       <View style={styles.achievements}>{[['award','First round'],['map','Course explorer'],['star','Top 10%']].map(([icon, label]) => <View key={label} style={styles.achievement}><View style={styles.medal}><Feather name={icon as never} size={21} color={colors.pine} /></View><Text style={styles.achievementTitle}>{label}</Text></View>)}</View>

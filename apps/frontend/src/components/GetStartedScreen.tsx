@@ -78,16 +78,6 @@ function AvatarCluster() {
   )
 }
 
-function Stars() {
-  return (
-    <View style={styles.starsRow}>
-      {Array.from({ length: 5 }).map((_, index) => (
-        <Ionicons key={index} name="star" size={8} color="#B38A2E" />
-      ))}
-    </View>
-  )
-}
-
 export function GetStartedScreen({ onGetStarted, onLogin }: GetStartedScreenProps) {
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -123,8 +113,7 @@ export function GetStartedScreen({ onGetStarted, onLogin }: GetStartedScreenProp
                 <MaterialCommunityIcons name="image-filter-hdr" size={20} color="#EAF3EC" />
               </View>
               <Text style={styles.ratingName}>Pine Valley</Text>
-              <Text style={styles.ratingScore}>4.8</Text>
-              <Stars />
+              <Text accessibilityLabel="Rating 9.5 out of 10" style={styles.ratingScore}>9.5/10</Text>
             </View>
           </FloatingItem>
 
@@ -351,10 +340,6 @@ const styles = StyleSheet.create({
     fontSize: 18 * itemScale,
     fontWeight: '800',
     lineHeight: 20 * itemScale,
-  },
-  starsRow: {
-    flexDirection: 'row',
-    gap: 1,
   },
   journalItem: {
     right: '3%',

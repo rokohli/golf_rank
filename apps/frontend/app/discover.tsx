@@ -23,8 +23,8 @@ export default function Discover() {
   const catalog = useMemo(() => {
     if (!apiCourses.length) return demoCourses
     const fromApi: DemoCourse[] = apiCourses.map((course, index) => ({
-      id: String(course.id), name: course.name, location: course.region, rating: 4.7,
-      reviews: 'New', distance: `$${course.green_fee}`, price: course.green_fee > 500 ? '$$$$' : '$$$',
+      id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0,
+      reviews: String(course.rating_count ?? 0), distance: `$${course.green_fee}`, price: course.green_fee > 500 ? '$$$$' : '$$$',
       accent: '#6E8B84', secondary: '#AEC3B7', image: demoCourses[index % 3].image,
     }))
     return [...fromApi, ...demoCourses.filter((demo) => !fromApi.some((course) => course.name === demo.name))]
@@ -46,11 +46,11 @@ export default function Discover() {
         </> : <>
           <Pressable onPress={() => openCourse(demoCourses[0])} style={styles.featured}>
             <CourseVisual course={demoCourses[0]} height={202}><View style={styles.featureTag}><Text style={styles.featureTagText}>FEATURED</Text></View></CourseVisual>
-            <View style={styles.featureBody}><Text style={styles.featureTitle}>Pebble Beach Golf Links</Text><Text style={styles.meta}>Pebble Beach, California</Text><View style={styles.featureMeta}><Text style={styles.rating}>★ 4.9</Text><Text style={styles.meta}>(2,341)</Text><View style={styles.divider} /><Text style={styles.meta}>Ranked #1 in California</Text></View></View>
+            <View style={styles.featureBody}><Text style={styles.featureTitle}>Pebble Beach Golf Links</Text><Text style={styles.meta}>Pebble Beach, California</Text><View style={styles.featureMeta}><Text style={styles.rating}>9.7/10</Text><Text style={styles.meta}>(2,341 ratings)</Text><View style={styles.divider} /><Text style={styles.meta}>Ranked #1 in California</Text></View></View>
           </Pressable>
 
           <SectionTitle title="EXPLORE NEARBY" action="See all" />
-          <View style={styles.nearby}>{[demoCourses[1], demoCourses[3]].map((course) => <Pressable key={course.id} onPress={() => openCourse(course)} style={styles.nearbyItem}><CourseVisual course={course} height={112} /><Text numberOfLines={1} style={styles.tileTitle}>{course.name}</Text><Text style={styles.meta}>{course.location}</Text><Text style={styles.rating}>★ {course.rating}  <Text style={styles.meta}>({course.reviews})</Text></Text></Pressable>)}</View>
+          <View style={styles.nearby}>{[demoCourses[1], demoCourses[3]].map((course) => <Pressable key={course.id} onPress={() => openCourse(course)} style={styles.nearbyItem}><CourseVisual course={course} height={112} /><Text numberOfLines={1} style={styles.tileTitle}>{course.name}</Text><Text style={styles.meta}>{course.location}</Text><Text style={styles.rating}>{course.rating}/10  <Text style={styles.meta}>({course.reviews} ratings)</Text></Text></Pressable>)}</View>
 
           <SectionTitle title="TRENDING THIS WEEK" action="See all" />
           <View>{[demoCourses[2], demoCourses[5]].map((course, index) => <DemoCourseRow key={course.id} course={course} index={index + 1} onPress={() => openCourse(course)} trailing={<Feather name="bookmark" size={17} color={colors.pine} />} />)}</View>
