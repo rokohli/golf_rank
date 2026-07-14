@@ -18,6 +18,14 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("rounds") as batch_op:
         batch_op.add_column(sa.Column("favorite_hole", sa.Integer(), nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "is_rating_round",
+                sa.Boolean(),
+                server_default=sa.false(),
+                nullable=False,
+            )
+        )
         batch_op.create_unique_constraint(
             "uq_round_id_user_course", ["id", "user_id", "course_id"]
         )
@@ -110,4 +118,5 @@ def downgrade() -> None:
 
     with op.batch_alter_table("rounds") as batch_op:
         batch_op.drop_constraint("uq_round_id_user_course", type_="unique")
+        batch_op.drop_column("is_rating_round")
         batch_op.drop_column("favorite_hole")

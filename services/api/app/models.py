@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -141,6 +142,9 @@ class Round(Base):
     played_on: Mapped[date] = mapped_column(Date, index=True)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     favorite_hole: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_rating_round: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
     visibility: Mapped[str] = mapped_column(String(20), default="friends", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

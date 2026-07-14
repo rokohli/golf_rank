@@ -343,6 +343,7 @@ def put_course_rating(
             )
         round_.played_on = payload.played_on
         round_.score = payload.score
+        round_.is_rating_round = True
         session.add(round_)
         session.flush()
 

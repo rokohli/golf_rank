@@ -14,7 +14,6 @@ from .models import (
     Course,
     Round,
     RoundNote,
-    UserCourseRating,
     UserCourseState,
 )
 from .schemas import CourseOut
@@ -198,9 +197,7 @@ def update_round(
     )
     if round_ is None:
         raise HTTPException(404, "Round not found")
-    if payload.visibility == "public" and session.scalar(
-        select(UserCourseRating.id).where(UserCourseRating.round_id == round_.id)
-    ) is not None:
+    if payload.visibility == "public" and round_.is_rating_round:
         raise HTTPException(422, "Rating-owned rounds cannot be public")
     if "played_on" in payload.model_fields_set and payload.played_on is not None:
         round_.played_on = payload.played_on

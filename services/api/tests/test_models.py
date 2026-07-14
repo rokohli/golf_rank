@@ -105,6 +105,7 @@ def test_current_rating_and_round_memories_persist_with_constraints() -> None:
         session.commit()
 
         assert session.get(Round, round_.id).favorite_hole == 7
+        assert session.get(Round, round_.id).is_rating_round is False
         stored_rating = session.get(UserCourseRating, rating.id)
         assert stored_rating.tier == "green"
         assert stored_rating.rating == pytest.approx(9.2)
@@ -218,7 +219,10 @@ def test_rating_experience_migration_round_trip(tmp_path: Path, monkeypatch: pyt
         assert connection.execute(
             text("SELECT tier FROM tier_assignments ORDER BY ordinal_position")
         ).scalars().all() == ["green", "fairway", "rough", "bunker"]
-    assert "favorite_hole" in {column["name"] for column in inspector.get_columns("rounds")}
+    round_columns = {column["name"]: column for column in inspector.get_columns("rounds")}
+    assert "favorite_hole" in round_columns
+    assert round_columns["is_rating_round"]["nullable"] is False
+    assert round_columns["is_rating_round"]["default"] is not None
     assert {"user_course_ratings", "round_companions"}.issubset(inspector.get_table_names())
     assert "uq_round_id_user_course" in {
         constraint["name"] for constraint in inspector.get_unique_constraints("rounds")
@@ -245,6 +249,8 @@ def test_rating_experience_migration_round_trip(tmp_path: Path, monkeypatch: pyt
         assert connection.execute(
             text("SELECT tier FROM tier_assignments ORDER BY ordinal_position")
         ).scalars().all() == ["loved_it", "liked_it", "fine", "no"]
-    assert "favorite_hole" not in {column["name"] for column in inspector.get_columns("rounds")}
+    round_column_names = {column["name"] for column in inspector.get_columns("rounds")}
+    assert "favorite_hole" not in round_column_names
+    assert "is_rating_round" not in round_column_names
     assert {"user_course_ratings", "round_companions"}.isdisjoint(inspector.get_table_names())
     engine.dispose()
