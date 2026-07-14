@@ -21,14 +21,27 @@ from .schemas import ComparisonIn, RankingSnapshotOut, TierPlacementsIn
 
 router = APIRouter(prefix="/api/v1/me/rankings", tags=["rankings"])
 
-TIER_ORDER = ("loved_it", "liked_it", "fine", "no", "not_sure")
+TIER_ORDER = ("green", "fairway", "rough", "bunker", "not_sure")
 TIER_BANDS = {
-    "loved_it": (8.5, 10.0),
-    "liked_it": (7.0, 8.4),
-    "fine": (5.0, 6.9),
-    "no": (1.0, 4.9),
+    "green": (8.5, 10.0),
+    "fairway": (7.0, 8.4),
+    "rough": (5.0, 6.9),
+    "bunker": (1.0, 4.9),
 }
-ALGORITHM_VERSION = "tier-linear-v1"
+ALGORITHM_VERSION = "golf-tier-linear-v2"
+LEGACY_TIERS = {
+    "loved_it": "green",
+    "liked_it": "fairway",
+    "fine": "rough",
+    "no": "bunker",
+}
+
+
+def _adapt_snapshot_entries(entries: list[dict]) -> list[dict]:
+    return [
+        {**entry, "tier": LEGACY_TIERS.get(entry["tier"], entry["tier"])}
+        for entry in entries
+    ]
 
 
 def _stored_user(session: Session, user: CurrentUser, *, create: bool) -> User | None:
@@ -92,7 +105,7 @@ def _confidence(decisive: int, uncertain: int) -> float:
     return round(max(0.15, min(0.95, 0.35 + decisive * 0.15 - uncertain * 0.1)), 2)
 
 
-def _build_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
+def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
     # Serialize snapshot versions per user so concurrent mobile writes cannot
     # produce the same (user_id, version) pair.
     session.execute(select(User.id).where(User.id == user_id).with_for_update())
@@ -192,7 +205,7 @@ def _build_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
             event_data={"version": version, "course_count": len(entries)},
         )
     )
-    session.commit()
+    session.flush()
     return RankingSnapshotOut(
         version=version,
         algorithm_version=ALGORITHM_VERSION,
@@ -231,11 +244,12 @@ def get_ranking(
             entries=[],
             unranked_courses=[],
         )
+    entries = _adapt_snapshot_entries(latest.ranking_data["entries"])
     return RankingSnapshotOut(
         version=latest.version,
         algorithm_version=latest.algorithm_version,
         overall_confidence=latest.overall_confidence,
-        entries=latest.ranking_data["entries"],
+        entries=entries,
         unranked_courses=latest.ranking_data.get("unranked_courses", []),
         created_at=latest.created_at,
     )
@@ -287,7 +301,9 @@ def place_in_tiers(
             session.add(peer)
         session.add(assignment)
     session.flush()
-    return _build_snapshot(session, stored.id)
+    snapshot = _stage_snapshot(session, stored.id)
+    session.commit()
+    return snapshot
 
 
 @router.post("/comparisons", response_model=RankingSnapshotOut)
@@ -351,4 +367,6 @@ def compare_courses(
         )
     )
     session.flush()
-    return _build_snapshot(session, stored.id)
+    snapshot = _stage_snapshot(session, stored.id)
+    session.commit()
+    return snapshot

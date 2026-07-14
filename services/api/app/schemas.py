@@ -53,8 +53,8 @@ class CourseOut(BaseModel):
     is_public: bool
 
 
-RankingTier = Literal["loved_it", "liked_it", "fine", "no"]
-PlacementTier = Literal["loved_it", "liked_it", "fine", "no", "not_sure"]
+RankingTier = Literal["green", "fairway", "rough", "bunker"]
+PlacementTier = Literal["green", "fairway", "rough", "bunker", "not_sure"]
 ComparisonResult = Literal["course_a", "course_b", "too_close", "not_sure"]
 
 
