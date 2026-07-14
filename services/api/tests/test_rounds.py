@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.models import RoundNote
 
 
 ALICE = {"X-Development-Subject": "dev:round-alice"}
@@ -55,3 +56,25 @@ def test_round_rejects_future_dates_and_unrealistic_scores() -> None:
         json={"course_id": 1, "played_on": "2099-01-01", "score": 12},
     )
     assert response.status_code == 422
+
+
+def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
+    app = create_app()
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "note": "Private swing thought",
+        },
+    )
+    assert created.status_code == 201
+    round_id = created.json()["id"]
+
+    deleted = client.delete(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    assert deleted.status_code == 204
+
+    with app.state.session_factory() as session:
+        assert session.get(RoundNote, round_id) is None

@@ -242,6 +242,7 @@ def delete_round(
             ActivityEvent.actor_user_id == user.id,
         )
     )
+    session.execute(delete(RoundNote).where(RoundNote.round_id == round_.id))
     session.delete(round_)
     session.flush()
     _refresh_course_state(session, user.id, course_id)
