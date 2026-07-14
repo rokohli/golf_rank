@@ -77,5 +77,5 @@ const styles = StyleSheet.create({
 })
 
 function tierLabel(tier?: RankingTier): string {
-  return ({ loved_it: 'Loved it', liked_it: 'Liked it', fine: 'It was fine', no: 'No' } as const)[tier ?? 'fine']
+  return ({ green: 'Green', fairway: 'Fairway', rough: 'Rough', bunker: 'Bunker' } as const)[tier ?? 'rough']
 }

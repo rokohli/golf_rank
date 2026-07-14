@@ -13,7 +13,7 @@ export type DemoCourse = {
   image: ImageSourcePropType
   personalRank?: number
   personalRating?: number
-  tier?: 'loved_it' | 'liked_it' | 'fine' | 'no'
+  tier?: 'green' | 'fairway' | 'rough' | 'bunker'
 }
 
 const coastalCourse = require('../../assets/course-images/coastal-course.png')
@@ -21,11 +21,11 @@ const dunesCourse = require('../../assets/course-images/dunes-course.png')
 const parklandCourse = require('../../assets/course-images/parkland-course.png')
 
 export const demoCourses: DemoCourse[] = [
-  { id: 'pebble', name: 'Pebble Beach Golf Links', location: 'Pebble Beach, California', rating: 4.9, reviews: '2,341', distance: 'Ranked #1 in California', price: '$$$$', accent: '#6E8B84', secondary: '#AEC3B7', image: coastalCourse, personalRank: 1, personalRating: 9.6, tier: 'loved_it' },
-  { id: 'pasatiempo', name: 'Pasatiempo Golf Club', location: 'Santa Cruz, CA', rating: 4.8, reviews: '392', distance: '18 mi', price: '$$$', accent: '#668067', secondary: '#AAB994', image: parklandCourse, personalRank: 3, personalRating: 8.6, tier: 'loved_it' },
-  { id: 'bandon', name: 'Bandon Dunes', location: 'Bandon, OR', rating: 4.9, reviews: '1.2k', distance: 'Trending this week', price: '$$$', accent: '#718B72', secondary: '#C1B388', image: dunesCourse, personalRank: 2, personalRating: 9.1, tier: 'loved_it' },
-  { id: 'torrey', name: 'Torrey Pines (South)', location: 'San Diego, CA', rating: 4.7, reviews: '818', distance: '12 mi', price: '$$$', accent: '#68869A', secondary: '#A9B9AF', image: coastalCourse, personalRank: 4, personalRating: 8.1, tier: 'liked_it' },
-  { id: 'pinehurst', name: 'Pinehurst No. 2', location: 'Pinehurst, NC', rating: 4.6, reviews: '904', distance: 'Saved by 12 friends', price: '$$$$', accent: '#778161', secondary: '#C2B88B', image: parklandCourse, personalRank: 5, personalRating: 7.5, tier: 'liked_it' },
+  { id: 'pebble', name: 'Pebble Beach Golf Links', location: 'Pebble Beach, California', rating: 4.9, reviews: '2,341', distance: 'Ranked #1 in California', price: '$$$$', accent: '#6E8B84', secondary: '#AEC3B7', image: coastalCourse, personalRank: 1, personalRating: 9.6, tier: 'green' },
+  { id: 'pasatiempo', name: 'Pasatiempo Golf Club', location: 'Santa Cruz, CA', rating: 4.8, reviews: '392', distance: '18 mi', price: '$$$', accent: '#668067', secondary: '#AAB994', image: parklandCourse, personalRank: 3, personalRating: 8.6, tier: 'green' },
+  { id: 'bandon', name: 'Bandon Dunes', location: 'Bandon, OR', rating: 4.9, reviews: '1.2k', distance: 'Trending this week', price: '$$$', accent: '#718B72', secondary: '#C1B388', image: dunesCourse, personalRank: 2, personalRating: 9.1, tier: 'green' },
+  { id: 'torrey', name: 'Torrey Pines (South)', location: 'San Diego, CA', rating: 4.7, reviews: '818', distance: '12 mi', price: '$$$', accent: '#68869A', secondary: '#A9B9AF', image: coastalCourse, personalRank: 4, personalRating: 8.1, tier: 'fairway' },
+  { id: 'pinehurst', name: 'Pinehurst No. 2', location: 'Pinehurst, NC', rating: 4.6, reviews: '904', distance: 'Saved by 12 friends', price: '$$$$', accent: '#778161', secondary: '#C2B88B', image: parklandCourse, personalRank: 5, personalRating: 7.5, tier: 'fairway' },
   { id: 'cabot', name: 'Cabot Cliffs', location: 'Inverness, NS', rating: 4.7, reviews: '476', distance: 'Bucket list', price: '$$$$', accent: '#5F7B82', secondary: '#A6B7AD', image: dunesCourse },
 ]
 

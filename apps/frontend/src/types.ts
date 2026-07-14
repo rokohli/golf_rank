@@ -31,9 +31,13 @@ export type Course = {
   green_fee: number
   difficulty: string
   is_public: boolean
+  community_rating?: number | null
+  rating_count?: number
 }
 
-export type RankingTier = 'loved_it' | 'liked_it' | 'fine' | 'no'
+export type RatingTier = 'green' | 'fairway' | 'rough' | 'bunker'
+
+export type RankingTier = RatingTier
 
 export type TierPlacement = {
   course_id: number
@@ -42,6 +46,62 @@ export type TierPlacement = {
 }
 
 export type ComparisonResult = 'course_a' | 'course_b' | 'too_close' | 'not_sure'
+
+type CourseRatingComparison =
+  | {
+      comparison_course_id?: never
+      comparison_result?: never
+    }
+  | {
+      comparison_course_id: number
+      comparison_result: ComparisonResult
+    }
+
+export type CourseRatingInput = {
+  tier: RatingTier
+  played_on: string
+  score: number | null
+} & CourseRatingComparison
+
+export type RatingDetailsInput = {
+  note: string | null
+  favorite_hole: number | null
+  friend_user_ids: number[]
+  guest_names: string[]
+  visibility: 'private' | 'friends'
+}
+
+export type CourseRatingState = {
+  course: Course
+  personal_rating: number | null
+  tier: RatingTier | null
+  confidence: number | null
+  community_rating: number | null
+  rating_count: number
+  round: {
+    id: number
+    played_on: string
+    score: number | null
+    note: string | null
+    favorite_hole: number | null
+    visibility: 'private' | 'friends'
+  } | null
+  companions: {
+    friend_user_id: number | null
+    guest_name: string | null
+  }[]
+}
+
+export type RatingCandidate = Course | null
+
+export type FriendSummary = {
+  id: number
+  display_name: string
+  username: string | null
+  home_region: string | null
+  follower_count: number
+  following_count: number
+}
 
 export type RankingComparison = {
   course_a_id: number

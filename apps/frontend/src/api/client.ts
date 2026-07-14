@@ -1,5 +1,17 @@
 import { ApiHeaders } from '../auth/useAuthToken'
-import { Course, OnboardingPreferences, RankingComparison, RankingSnapshot, TierPlacement } from '../types'
+import {
+  Course,
+  CourseRatingInput,
+  CourseRatingState,
+  FriendSummary,
+  OnboardingPreferences,
+  RankingComparison,
+  RankingSnapshot,
+  RatingCandidate,
+  RatingDetailsInput,
+  RatingTier,
+  TierPlacement,
+} from '../types'
 
 const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -86,4 +98,77 @@ export async function saveComparison(
   })
   if (!response.ok) throw await responseError(response, 'Unable to save this comparison. Please try again.')
   return response.json()
+}
+
+export async function getCourseRating(
+  courseId: number,
+  headers: ApiHeaders,
+): Promise<CourseRatingState> {
+  const response = await fetch(`${baseUrl}/api/v1/me/course-ratings/${courseId}`, { headers })
+  if (!response.ok) {
+    throw await responseError(response, 'Unable to load your rating for this course. Please try again.')
+  }
+  return response.json()
+}
+
+export async function getRatingCandidate(
+  courseId: number,
+  tier: RatingTier,
+  headers: ApiHeaders,
+): Promise<RatingCandidate> {
+  const response = await fetch(
+    `${baseUrl}/api/v1/me/course-ratings/${courseId}/comparison-candidate?tier=${encodeURIComponent(tier)}`,
+    { headers },
+  )
+  if (!response.ok) {
+    throw await responseError(response, 'Unable to load a course comparison. Please try again.')
+  }
+  return response.json()
+}
+
+export async function saveCourseRating(
+  courseId: number,
+  input: CourseRatingInput,
+  headers: ApiHeaders,
+): Promise<CourseRatingState> {
+  const response = await fetch(`${baseUrl}/api/v1/me/course-ratings/${courseId}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) {
+    throw await responseError(response, 'Unable to save your course rating. Please try again.')
+  }
+  return response.json()
+}
+
+export async function saveRatingDetails(
+  courseId: number,
+  input: RatingDetailsInput,
+  headers: ApiHeaders,
+): Promise<CourseRatingState> {
+  const response = await fetch(`${baseUrl}/api/v1/me/course-ratings/${courseId}/details`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) {
+    throw await responseError(response, 'Unable to save your round details. Please try again.')
+  }
+  return response.json()
+}
+
+type FollowResponse = {
+  user: FriendSummary
+  is_mutual: boolean
+  followed_at: string
+}
+
+export async function getFriends(headers: ApiHeaders): Promise<FriendSummary[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/follows`, { headers })
+  if (!response.ok) {
+    throw await responseError(response, 'Unable to load your friends. Please try again.')
+  }
+  const follows = await response.json() as FollowResponse[]
+  return follows.map(({ user }) => user)
 }
