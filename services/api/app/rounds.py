@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -11,9 +11,12 @@ from .db import get_session
 from .domain import course_data, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
+    Comparison,
     Course,
+    RankingConfidence,
     Round,
     RoundNote,
+    TierAssignment,
     UserCourseState,
 )
 from .schemas import CourseOut
@@ -113,6 +116,42 @@ def _event_data(round_: Round) -> dict:
         "played_on": round_.played_on.isoformat(),
         "score": round_.score,
     }
+
+
+def _delete_rating_ranking_evidence(
+    session: Session, user_id: int, course_id: int
+) -> None:
+    session.execute(
+        delete(Comparison).where(
+            Comparison.user_id == user_id,
+            or_(
+                Comparison.course_a_id == course_id,
+                Comparison.course_b_id == course_id,
+            ),
+        )
+    )
+    session.execute(
+        delete(RankingConfidence).where(
+            RankingConfidence.user_id == user_id,
+            RankingConfidence.course_id == course_id,
+        )
+    )
+    session.execute(
+        delete(TierAssignment).where(
+            TierAssignment.user_id == user_id,
+            TierAssignment.course_id == course_id,
+        )
+    )
+
+
+def _delete_round_activity_event(session: Session, user_id: int, round_id: int) -> None:
+    session.execute(
+        delete(ActivityEvent).where(
+            ActivityEvent.subject_type == "round",
+            ActivityEvent.subject_id == round_id,
+            ActivityEvent.actor_user_id == user_id,
+        )
+    )
 
 
 @router.post("", response_model=RoundOut, status_code=201)
@@ -243,17 +282,21 @@ def delete_round(
     if round_ is None:
         raise HTTPException(404, "Round not found")
     course_id = round_.course_id
-    session.execute(
-        delete(ActivityEvent).where(
-            ActivityEvent.subject_type == "round",
-            ActivityEvent.subject_id == round_.id,
-            ActivityEvent.actor_user_id == user.id,
-        )
-    )
+    is_rating_round = round_.is_rating_round
+    if is_rating_round:
+        # Keep the import local: course_ratings imports round state helpers.
+        from .ranking import _lock_user_for_ranking_update, _stage_snapshot
+
+        _lock_user_for_ranking_update(session, user.id)
+    _delete_round_activity_event(session, user.id, round_.id)
     session.execute(delete(RoundNote).where(RoundNote.round_id == round_.id))
+    if is_rating_round:
+        _delete_rating_ranking_evidence(session, user.id, course_id)
     session.delete(round_)
     session.flush()
     _refresh_course_state(session, user.id, course_id)
+    if is_rating_round:
+        _stage_snapshot(session, user.id)
     session.commit()
     return Response(status_code=204)
 

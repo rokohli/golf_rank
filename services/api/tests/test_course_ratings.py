@@ -152,6 +152,33 @@ def test_atomic_create_and_revision_reuse_one_private_nullable_score_round() -> 
         assert session.scalar(select(UserCourseState.round_count)) == 1
 
 
+def test_rating_locks_user_before_reading_or_inserting_assignment(monkeypatch) -> None:
+    from app import course_ratings
+
+    app = create_app()
+    client = TestClient(app)
+    calls: list[str] = []
+    original_lock = course_ratings._lock_user_for_ranking_update
+    original_place = course_ratings._place_assignment
+
+    def tracked_lock(session, user_id):
+        calls.append("lock")
+        return original_lock(session, user_id)
+
+    def tracked_place(session, user_id, course_id, tier):
+        assert calls == ["lock"]
+        calls.append("place")
+        return original_place(session, user_id, course_id, tier)
+
+    monkeypatch.setattr(course_ratings, "_lock_user_for_ranking_update", tracked_lock)
+    monkeypatch.setattr(course_ratings, "_place_assignment", tracked_place)
+
+    response = client.put("/api/v1/me/course-ratings/1", headers=ALICE, json=_rating())
+
+    assert response.status_code == 200
+    assert calls == ["lock", "place"]
+
+
 def test_second_user_changes_community_aggregate_and_public_courses() -> None:
     client = TestClient(create_app())
     client.put("/api/v1/me/course-ratings/1", headers=ALICE, json=_rating("green"))

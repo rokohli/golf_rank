@@ -19,7 +19,7 @@ from .models import (
     User,
     UserCourseRating,
 )
-from .ranking import _stage_snapshot
+from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 from .rounds import _event_data, _refresh_course_state
 from .schemas import (
     CourseOut,
@@ -316,6 +316,9 @@ def put_course_rating(
     course = require_course(session, course_id)
     try:
         user = require_user(session, current, create=True)
+        # Lock before reading or inserting the unique per-user assignment so
+        # concurrent first-time ratings cannot race each other.
+        _lock_user_for_ranking_update(session, user.id)
         _place_assignment(session, user.id, course_id, payload.tier)
         session.flush()
         if payload.comparison_course_id is not None and payload.comparison_result is not None:

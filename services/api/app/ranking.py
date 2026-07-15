@@ -54,6 +54,11 @@ def _stored_user(session: Session, user: CurrentUser, *, create: bool) -> User |
     return stored
 
 
+def _lock_user_for_ranking_update(session: Session, user_id: int) -> None:
+    """Serialize writes that can mutate a user's ranking state."""
+    session.execute(select(User.id).where(User.id == user_id).with_for_update())
+
+
 def _normalize_positions(session: Session, user_id: int) -> list[TierAssignment]:
     assignments = list(
         session.scalars(
@@ -109,7 +114,7 @@ def _confidence(decisive: int, uncertain: int) -> float:
 def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
     # Serialize snapshot versions per user so concurrent mobile writes cannot
     # produce the same (user_id, version) pair.
-    session.execute(select(User.id).where(User.id == user_id).with_for_update())
+    _lock_user_for_ranking_update(session, user_id)
     assignments = _normalize_positions(session, user_id)
     course_ids = [assignment.course_id for assignment in assignments]
     courses = {
