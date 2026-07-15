@@ -151,7 +151,6 @@ export default function Rankings() {
             <ComparisonCourse entry={refinementPair[1]} disabled={savingComparison} label="Choose second course" onPress={() => void submitComparison('course_b')} />
             <View style={styles.secondaryChoices}>
               <Pressable accessibilityRole="button" disabled={savingComparison} onPress={() => void submitComparison('too_close')} style={styles.secondaryChoice}><Text style={styles.secondaryChoiceText}>Too close</Text></Pressable>
-              <Pressable accessibilityRole="button" disabled={savingComparison} onPress={() => void submitComparison('not_sure')} style={styles.secondaryChoice}><Text style={styles.secondaryChoiceText}>Not sure</Text></Pressable>
             </View>
             {savingComparison ? <View style={styles.savingRow}><ActivityIndicator accessibilityLabel="Saving comparison" color={colors.pine} size="small" /><Text style={styles.statusText}>Updating your rankings...</Text></View> : null}
             {refinementError ? <Text accessibilityRole="alert" style={styles.errorText}>{refinementError}</Text> : null}

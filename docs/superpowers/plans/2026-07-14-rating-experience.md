@@ -457,7 +457,7 @@ Expected: FAIL because `RatingFlow` does not exist.
 
 Use explicit states `tier`, `round`, `compare`, `reveal`, and `details` without displaying their index. Keep data in one reducer so Back and retry never discard inputs. Render one focused question per state, use `KeyboardAvoidingView`, accessible labels, and existing theme tokens.
 
-Tier buttons must pair the golf name and description. The compare state offers both courses, Too close, and Not sure. The reveal saves the core rating before showing the derived number. Details contain note, favorite-hole selector, disabled/coming-soon photo affordance, friend chips, Add guest, and private/share-with-friends choice.
+Tier buttons must pair the golf name and description. The compare state offers both courses and Too close. The reveal saves the core rating before showing the derived number. Details contain note, favorite-hole selector, disabled/coming-soon photo affordance, friend chips, Add guest, and private/share-with-friends choice.
 
 - [ ] **Step 5: Implement contact and SMS adapters in the route**
 

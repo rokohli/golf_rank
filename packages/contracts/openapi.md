@@ -134,7 +134,7 @@ Request body:
 - `tier` is one of the four canonical wire values above.
 - `played_on` is an ISO `YYYY-MM-DD` date and cannot be in the future.
 - `score` is optional and nullable; when supplied it must be an integer from 40 through 250.
-- `comparison_course_id` and `comparison_result` are optional, but must be supplied together. `comparison_result` is one of `course_a`, `course_b`, `too_close`, or `not_sure`; course A is the `course_id` in the URL. The comparison course must be a different existing course already assigned to the same tier for this user.
+- `comparison_course_id` and `comparison_result` are optional, but must be supplied together. `comparison_result` is one of `course_a`, `course_b`, or `too_close`; course A is the `course_id` in the URL. The comparison course must be a different existing course already assigned to the same tier for this user.
 
 PUT uses replacement semantics for these optional fields when revising an existing rating. If `score` is omitted, its schema default is `null` and the existing round score is cleared. If both comparison fields are omitted, no new comparison record is added. Existing historical comparison records are not deleted; they remain available to the ranking algorithm, including its confidence calculation.
 

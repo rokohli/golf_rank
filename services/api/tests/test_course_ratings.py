@@ -387,15 +387,14 @@ def test_rating_revision_preserves_same_tier_order_until_decisive_comparison() -
     ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
     assert [entry["course"]["id"] for entry in ranking["entries"]] == [1, 2, 3]
 
-    for result in ("too_close", "not_sure"):
-        response = client.put(
-            "/api/v1/me/course-ratings/1",
-            headers=ALICE,
-            json=_rating(comparison_course_id=2, comparison_result=result),
-        )
-        assert response.status_code == 200
-        ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
-        assert [entry["course"]["id"] for entry in ranking["entries"]] == [1, 2, 3]
+    too_close = client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json=_rating(comparison_course_id=2, comparison_result="too_close"),
+    )
+    assert too_close.status_code == 200
+    ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
+    assert [entry["course"]["id"] for entry in ranking["entries"]] == [1, 2, 3]
 
     decisive = client.put(
         "/api/v1/me/course-ratings/1",
