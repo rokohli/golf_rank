@@ -1,6 +1,7 @@
+import httpx
 from sqlalchemy import select
 
-from app.catalog_import import import_courses, normalize_access
+from app.catalog_import import fetch_state_courses, import_courses, normalize_access
 from app.db import make_engine, make_session_factory
 from app.models import Base, Course
 
@@ -47,3 +48,12 @@ def test_catalog_dry_run_does_not_write_and_access_normalization_is_conservative
         assert session.scalar(select(Course.id)) is None
     assert normalize_access("Public/Municipal") == ("public", True)
     assert normalize_access("Resort") == ("resort", None)
+
+
+def test_catalog_fetch_uses_documented_v1_state_endpoint() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/courses/state/CA"
+        return httpx.Response(200, json={"courses": [{"id": "provider-1"}], "total": 1})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_state_courses("CA", client=client) == [{"id": "provider-1"}]

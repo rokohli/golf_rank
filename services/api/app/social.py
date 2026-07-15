@@ -239,42 +239,48 @@ def activity_feed(
         # SQLite serializes zero microseconds differently from PostgreSQL,
         # which makes direct timestamp equality unreliable in cross-DB tests.
         statement = statement.where(ActivityEvent.created_at <= created_at)
-    # One extra row determines whether another page exists. When a cursor is
-    # present, allow one further row because the boundary row can be returned
-    # by the cross-database-safe timestamp comparison and is skipped below.
-    fetch_limit = limit + (2 if cursor_boundary else 1)
-    events = session.scalars(
-        statement.order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc()).limit(fetch_limit)
-    ).all()
     output: list[ActivityOut] = []
     last_event: ActivityEvent | None = None
-    for event in events:
-        if cursor_boundary and (
-            event.created_at > cursor_boundary[0]
-            or (event.created_at == cursor_boundary[0] and event.id >= cursor_boundary[1])
-        ):
-            continue
-        if not _event_visible(event, user.id, followed_ids, mutual_ids):
-            continue
-        actor = session.get(User, event.actor_user_id)
-        if actor is None:
-            continue
-        course = None
-        course_id = event.event_data.get("course_id")
-        if isinstance(course_id, int):
-            stored_course = session.get(Course, course_id)
-            if stored_course is not None:
-                course = course_data(stored_course)
-        reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
-        output.append(ActivityOut(
-            id=event.id, event_type=event.event_type, subject_type=event.subject_type,
-            subject_id=event.subject_id, actor=_summary(session, actor), course=course,
-            data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
-            is_own_activity=event.actor_user_id == user.id,
-            created_at=event.created_at,
-        ))
-        last_event = event
-        if len(output) > limit:
+    batch_size = max(100, limit * 2)
+    offset = 0
+    while len(output) <= limit:
+        events = session.scalars(
+            statement.order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc())
+            .offset(offset)
+            .limit(batch_size)
+        ).all()
+        if not events:
+            break
+        offset += len(events)
+        for event in events:
+            if cursor_boundary and (
+                event.created_at > cursor_boundary[0]
+                or (event.created_at == cursor_boundary[0] and event.id >= cursor_boundary[1])
+            ):
+                continue
+            if not _event_visible(event, user.id, followed_ids, mutual_ids):
+                continue
+            actor = session.get(User, event.actor_user_id)
+            if actor is None:
+                continue
+            course = None
+            course_id = event.event_data.get("course_id")
+            if isinstance(course_id, int):
+                stored_course = session.get(Course, course_id)
+                if stored_course is not None:
+                    course = course_data(stored_course)
+            reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
+            output.append(ActivityOut(
+                id=event.id, event_type=event.event_type, subject_type=event.subject_type,
+                subject_id=event.subject_id, actor=_summary(session, actor), course=course,
+                data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+                is_own_activity=event.actor_user_id == user.id,
+                created_at=event.created_at,
+            ))
+            last_event = event
+            if len(output) > limit:
+                break
+        if len(output) > limit or len(events) < batch_size:
             break
     has_more = len(output) > limit
     if has_more:

@@ -1,6 +1,10 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.main import create_app
+from app.models import ActivityEvent, User
 
 
 def _profile(client: TestClient, subject: str, first_name: str, username: str) -> dict[str, str]:
@@ -158,3 +162,44 @@ def test_feed_cursor_is_stable_and_mute_hides_followed_activity() -> None:
 
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.get("/api/v1/feed", headers=alice).json()["items"] == []
+
+
+def test_feed_cursor_pages_through_many_events_with_the_same_timestamp() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:same-time-alice", "Alice", "alice")
+    bob = _profile(client, "dev:same-time-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+
+    with client.app.state.session_factory() as session:
+        bob_record = session.scalar(select(User).where(User.provider_subject == "dev:same-time-bob"))
+        assert bob_record is not None
+        created_at = datetime(2026, 7, 15, 12, 0, 0)
+        session.add_all([
+            ActivityEvent(
+                actor_user_id=bob_record.id,
+                event_type="course_saved",
+                subject_type="saved_course",
+                subject_id=index,
+                visibility="public",
+                event_data={"course_id": 1},
+                created_at=created_at,
+            )
+            for index in range(1, 61)
+        ])
+        session.commit()
+
+    event_ids: list[int] = []
+    cursor = None
+    while True:
+        params = {"limit": 20}
+        if cursor:
+            params["cursor"] = cursor
+        page = client.get("/api/v1/feed", headers=alice, params=params).json()
+        event_ids.extend(item["id"] for item in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+
+    assert len(event_ids) == 60
+    assert len(set(event_ids)) == 60

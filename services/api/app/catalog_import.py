@@ -12,7 +12,7 @@ from .models import Course
 
 
 SOURCE = "opengolfapi"
-API_BASE_URL = "https://api.opengolfapi.org/api/v1"
+API_BASE_URL = "https://api.opengolfapi.org/v1"
 STATE_NAMES = {"CA": "California"}
 
 
