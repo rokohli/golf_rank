@@ -12,7 +12,12 @@ export default function Layout() {
           headerShadowVisible: false,
           headerStyle: { backgroundColor: '#F8FAF7' },
         }}
-      />
+      >
+        <Stack.Screen
+          name="rate/[id]"
+          options={{ headerShown: false, presentation: 'fullScreenModal' }}
+        />
+      </Stack>
     </AuthProvider>
   )
 }

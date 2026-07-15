@@ -1,16 +1,15 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native'
 
 import {
-  getCourseRating,
-  getFriends,
   getRatingCandidate,
   saveCourseRating,
   saveRatingDetails,
 } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { RatingFlow } from '../../src/components/RatingFlow'
+import { loadRatingBootstrap } from '../../src/rating/loadRatingBootstrap'
 import { CourseRatingState, FriendSummary } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
@@ -18,42 +17,53 @@ export default function RateCourseRoute() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
   const { getAuthHeaders } = useAuthHeaders()
-  const [rating, setRating] = useState<CourseRatingState | null>(null)
-  const [friends, setFriends] = useState<FriendSummary[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const getAuthHeadersRef = useRef(getAuthHeaders)
+  const requestVersionRef = useRef(0)
   const courseId = id && /^\d+$/.test(id) ? Number(id) : null
+  getAuthHeadersRef.current = getAuthHeaders
 
   useEffect(() => {
-    let cancelled = false
+    const requestVersion = ++requestVersionRef.current
+    const isCurrentRequest = () => requestVersionRef.current === requestVersion
+
     if (!courseId) {
-      setError('Course not found.')
+      setBootstrap(null)
       return
     }
-    setRating(null)
-    setError(null)
-    getAuthHeaders()
-      .then(async (headers) => Promise.all([
-        getCourseRating(courseId, headers),
-        getFriends(headers),
-      ]))
+
+    setBootstrap({ courseId, error: null, friends: [], rating: null })
+    getAuthHeadersRef.current()
+      .then((headers) => loadRatingBootstrap(courseId, headers))
       .then(([nextRating, nextFriends]) => {
-        if (!cancelled) {
-          setRating(nextRating)
-          setFriends(nextFriends)
+        if (isCurrentRequest()) {
+          setBootstrap({ courseId, error: null, friends: nextFriends, rating: nextRating })
         }
       })
       .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Unable to load this rating.')
+        if (isCurrentRequest()) {
+          setBootstrap({
+            courseId,
+            error: reason instanceof Error ? reason.message : 'Unable to load this rating.',
+            friends: [],
+            rating: null,
+          })
+        }
       })
-    return () => { cancelled = true }
-  }, [courseId, getAuthHeaders, reloadKey])
+    return () => {
+      if (isCurrentRequest()) requestVersionRef.current += 1
+    }
+  }, [courseId, reloadKey])
 
   const close = useCallback(() => router.back(), [router])
+  const currentBootstrap = bootstrap?.courseId === courseId ? bootstrap : null
+  const error = courseId ? currentBootstrap?.error ?? null : 'Course not found.'
+  const rating = currentBootstrap?.rating ?? null
+  const friends = currentBootstrap?.friends ?? []
 
   if (!courseId || error || !rating) {
     return <>
-      <Stack.Screen options={{ headerShown: false, presentation: 'fullScreenModal' }} />
       <SafeAreaView style={styles.safe}>
         <View style={styles.state}>
           {error ? <>
@@ -67,7 +77,6 @@ export default function RateCourseRoute() {
   }
 
   return <>
-    <Stack.Screen options={{ headerShown: false, presentation: 'fullScreenModal' }} />
     <RatingFlow
       course={rating.course}
       friends={friends}
@@ -87,6 +96,13 @@ export default function RateCourseRoute() {
       }}
     />
   </>
+}
+
+type BootstrapState = {
+  courseId: number
+  error: string | null
+  friends: FriendSummary[]
+  rating: CourseRatingState | null
 }
 
 const styles = StyleSheet.create({
