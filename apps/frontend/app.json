@@ -15,6 +15,12 @@
         {
           "contactsPermission": "Allow GolfRank to let you choose a guest from your contacts."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow GolfRank to use your location to find nearby golf courses."
+        }
       ]
     ]
   }

@@ -1,14 +1,14 @@
 import { Feather } from '@expo/vector-icons'
 import { usePathname, useRouter } from 'expo-router'
-import { ReactNode } from 'react'
-import { ImageBackground, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ReactElement, ReactNode } from 'react'
+import { ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { DemoCourse } from '../data/demo'
 import { colors, radii } from '../ui/theme'
 
-export function ProductScreen({ children, scroll = true }: { children: ReactNode; scroll?: boolean }) {
+export function ProductScreen({ children, scroll = true, refreshControl }: { children: ReactNode; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
   const content = scroll ? (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+    <ScrollView contentInsetAdjustmentBehavior="automatic" refreshControl={refreshControl} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
       {children}
     </ScrollView>
   ) : <View style={styles.content}>{children}</View>

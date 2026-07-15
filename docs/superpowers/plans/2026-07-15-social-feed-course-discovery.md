@@ -1,30 +1,34 @@
 # Social Feed and Course Discovery Implementation Plan
 
+## Implementation status (2026-07-15)
+
+Implemented on `agent/discover-current-location`: real cursor-paginated feed, follows and mutual-Friends copy, search/follow/unfollow, reactions, mute/block safety, rating/re-rating events without refinement events, normalized canonical course schema, idempotent OpenGolfAPI California import, region/count and missing-course APIs, and region/distance/access/fee/difficulty Discover filters with current-location default and honest states. Comments remain intentionally excluded pending moderation/report requirements, as specified below.
+
 ## Current state
 
-- The social backend is functional: authenticated user search, follow/unfollow, follow listing, and a visibility-aware activity feed exist in `services/api/app/social.py`. Round, ranking, and saved-course writes create activity events. Focused backend tests pass.
-- The product is not socially functional end to end. `home.tsx` and `friends.tsx` render demo data, the frontend client has no feed/search/follow methods, and the Home heart, See all, friend search, add-friend, and friend tabs do not perform real actions.
-- Course discovery is only partially functional. The API supports name, exact-region, fee, difficulty, and access filters, but startup seeds only three courses. Discover loads profile-filtered results once, silently falls back to demo data, and its filter icon has no action.
+- The social experience is functional end to end: Home renders the authenticated, cursor-paginated feed; Following supports search, follow/unfollow, mutual-Friends state, block, and mute; reactions are persisted idempotently; and visibility is enforced by the API.
+- Course-page ratings and re-ratings create feed activity. Refinement comparisons only update rankings and do not create social activity.
+- Discover uses the canonical API catalog with current-location search, changeable region, distance/access/fee/difficulty filters, pagination, explicit loading/error/empty states, and missing-course submissions. It never silently substitutes demo catalog data.
+- California is the launch catalog. The explicit importer currently yields 1,144 valid OpenGolfAPI records; one provider record without coordinates is rejected and reported rather than silently imported.
 
 ## Recommended catalog strategy
 
-Use a GolfRank-owned canonical course catalog populated from a provider whose license explicitly permits persistent storage and public display. Do not use Google Places as the seed database.
+Use the GolfRank-owned canonical catalog populated from OpenGolfAPI's ODbL-licensed dataset. Keep the provider identity on every record, display attribution in Discover and feed surfaces, and retain the reconciliation layer so a different source can be added later without changing ranking IDs. Do not use Google Places as the seed database.
 
 Google Places now supports `golf_course` filtering in Nearby/Text Search, so it is useful for live “find a missing course” lookup and identity matching. However, Google prohibits prefetching, caching, or storing most Places content; only place IDs are broadly exempt. That makes Places a poor source for a durable `courses` table. It also requires attribution and pay-as-you-go field-mask discipline.
 
-Recommended source order:
+Implemented source strategy:
 
-1. For a production catalog, license a golf-specific bulk provider that permits app display and local persistence. Evaluate GolfAPI/Golf Course Database with a small coverage and duplicate-quality bakeoff before signing.
-2. For an inexpensive MVP, import an OpenStreetMap regional extract using `leisure=golf_course`, with required ODbL attribution and a deliberate review of share-alike obligations. Use a managed OSM data provider or bulk extracts, not systematic calls to public Nominatim/Overpass services.
-3. Use Google Places only as an ephemeral missing-course search and reconciliation layer. Store the Google place ID plus GolfRank/user-supplied canonical data only when the applicable terms permit it.
+1. Import OpenGolfAPI by state through the explicit idempotent CLI. California is first; expand state by state after checking completeness and duplicate quality.
+2. Treat incomplete commercial metadata as nullable and reject malformed identity/location records with an auditable import summary.
+3. Use user-submitted missing-course candidates for coverage gaps. Google Places can later be an ephemeral lookup/reconciliation aid, but not the durable source catalog; store only fields its applicable terms permit.
 
 Provider references:
 
+- OpenGolfAPI catalog and API documentation: https://opengolfapi.org/
+- OpenGolfAPI dataset terms (ODbL): https://courses.opengolfapi.org/legal/terms
 - Google place types and `golf_course`: https://developers.google.com/maps/documentation/places/web-service/place-types
 - Google Places storage/attribution policy: https://developers.google.com/maps/documentation/places/web-service/policies
-- OpenStreetMap golf-course tagging: https://wiki.openstreetmap.org/wiki/Golf_course
-- OpenStreetMap ODbL terms: https://www.openstreetmap.org/copyright/en-US
-- GolfAPI catalog claim: https://golfapi.io/
 
 ## Phase 1: Real read-only social feed
 
@@ -65,7 +69,7 @@ Exit criteria: a newly logged friends-visible round appears for a mutual followe
 3. Search names and normalized geography, not just `Course.name`; replace exact free-form `region` matching.
 4. Wire the Discover sliders button to a filter sheet with Region, distance, access, fee, and difficulty. Show active-filter chips and a clear-all action.
 5. Remove the silent demo fallback. Loading, empty catalog, zero matches, and API failure need distinct states.
-6. Default to the user's onboarding home region but allow “All regions.” Persist the last explicit selection locally.
+6. Default to current location after the user activates search, fall back to all California when location is unavailable, allow a changeable region, and persist the last explicit selection locally.
 7. Add API tests for combined region/search filters, pagination, null commercial data, and stable ordering; add frontend tests for applying/clearing filters and honest failure states.
 
 ## Rollout and observability

@@ -9,13 +9,25 @@ cd services/api
 /opt/anaconda3/bin/python -m pytest -v
 ```
 
-The API defaults to SQLite for isolated local tests. Docker Compose runs the production-shaped path with PostgreSQL/PostGIS, Redis, Alembic migrations, and deterministic course seed data.
+The API defaults to SQLite for isolated local tests. Docker Compose runs the production-shaped path with PostgreSQL/PostGIS, Redis, and Alembic migrations. The three deterministic course rows are SQLite test fixtures; development and production catalogs are populated by the explicit import job.
 
 ```bash
 cp .env.example .env
 docker compose up --build
 curl http://localhost:8000/health
 ```
+
+### California course catalog
+
+The MVP catalog imports OpenGolfAPI data under ODbL 1.0. Preview and apply an idempotent import with:
+
+```bash
+cd services/api
+python -m app.catalog_import --state CA --dry-run
+python -m app.catalog_import --state CA
+```
+
+The job fetches all pages, validates required identity/location fields, upserts by `(source, source_course_id)`, reports errors, and soft-retires provider records omitted from later complete imports. GolfRank must display `Course catalog data © OpenGolfAPI, ODbL 1.0` wherever this catalog is presented.
 
 ## Mobile client
 
