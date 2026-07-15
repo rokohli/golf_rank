@@ -112,7 +112,9 @@ def _confidence(decisive: int, uncertain: int) -> float:
     return round(max(0.15, min(0.95, 0.35 + decisive * 0.15 - uncertain * 0.1)), 2)
 
 
-def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
+def _stage_snapshot(
+    session: Session, user_id: int, *, emit_activity: bool = True
+) -> RankingSnapshotOut:
     # Serialize snapshot versions per user so concurrent mobile writes cannot
     # produce the same (user_id, version) pair.
     _lock_user_for_ranking_update(session, user_id)
@@ -239,16 +241,17 @@ def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
         created_at=created_at,
     )
     session.add(snapshot)
-    session.add(
-        ActivityEvent(
-            actor_user_id=user_id,
-            event_type="ranking_updated",
-            subject_type="ranking_snapshot",
-            subject_id=version,
-            visibility="friends",
-            event_data={"version": version, "course_count": len(entries)},
+    if emit_activity:
+        session.add(
+            ActivityEvent(
+                actor_user_id=user_id,
+                event_type="ranking_updated",
+                subject_type="ranking_snapshot",
+                subject_id=version,
+                visibility="friends",
+                event_data={"version": version, "course_count": len(entries)},
+            )
         )
-    )
     session.flush()
     return RankingSnapshotOut(
         version=version,
@@ -345,7 +348,7 @@ def place_in_tiers(
             session.add(peer)
         session.add(assignment)
     session.flush()
-    snapshot = _stage_snapshot(session, stored.id)
+    snapshot = _stage_snapshot(session, stored.id, emit_activity=False)
     session.commit()
     return snapshot
 
@@ -411,6 +414,6 @@ def compare_courses(
         )
     )
     session.flush()
-    snapshot = _stage_snapshot(session, stored.id)
+    snapshot = _stage_snapshot(session, stored.id, emit_activity=False)
     session.commit()
     return snapshot

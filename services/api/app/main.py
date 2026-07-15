@@ -1,11 +1,13 @@
+import logging
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
+from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import course_data
@@ -17,6 +19,9 @@ from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
 from .seed import seed_courses
 from .social import router as social_router
+
+
+logger = logging.getLogger("golfrank.catalog")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -32,14 +37,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(rounds_router)
     app.include_router(course_state_router)
     app.include_router(social_router)
+    app.include_router(catalog_router)
     app.include_router(saves_router)
     app.include_router(plans_router)
 
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
-
-    with app.state.session_factory() as session:
-        seed_courses(session)
+        with app.state.session_factory() as session:
+            seed_courses(session)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -113,11 +118,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def courses(
         q: str | None = None,
         region: str | None = None,
+        country: str | None = None,
+        admin1: str | None = None,
+        city: str | None = None,
+        lat: float | None = None,
+        lng: float | None = None,
+        radius_miles: float | None = None,
+        cursor: int | None = None,
+        limit: int = 50,
         max_green_fee: int | None = None,
         difficulty: str = "any",
         access: str = "any",
         session: Session = Depends(get_session),
     ) -> list[dict]:
+        if (lat is None) != (lng is None):
+            raise HTTPException(422, "lat and lng must be provided together")
+        if radius_miles is not None and (lat is None or lng is None):
+            raise HTTPException(422, "radius_miles requires lat and lng")
+        if not 1 <= limit <= 100:
+            raise HTTPException(422, "limit must be between 1 and 100")
         statement = (
             select(
                 Course,
@@ -125,18 +144,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 func.count(UserCourseRating.id).label("rating_count"),
             )
             .outerjoin(UserCourseRating, UserCourseRating.course_id == Course.id)
+            .where(Course.status == "active")
             .group_by(Course.id)
         )
         if q:
-            statement = statement.where(Course.name.ilike(f"%{q}%"))
+            needle = f"%{q}%"
+            statement = statement.where(or_(
+                Course.name.ilike(needle),
+                Course.course_name.ilike(needle),
+                Course.facility_name.ilike(needle),
+                Course.city.ilike(needle),
+                Course.region.ilike(needle),
+            ))
         if region:
-            statement = statement.where(Course.region == region)
+            statement = statement.where(or_(Course.region.ilike(f"%{region}%"), Course.city.ilike(f"%{region}%")))
+        if country:
+            statement = statement.where(Course.country_code == country.upper())
+        if admin1:
+            statement = statement.where(or_(Course.admin1_code == admin1.upper(), Course.admin1_name.ilike(admin1)))
+        if city:
+            statement = statement.where(Course.city.ilike(city))
+        if cursor is not None:
+            statement = statement.where(Course.id > cursor)
         if max_green_fee is not None:
             statement = statement.where(Course.green_fee <= max_green_fee)
         if difficulty != "any":
             statement = statement.where(Course.difficulty == difficulty)
         if access != "any":
             statement = statement.where(Course.is_public == (access == "public"))
+        rows = session.execute(
+            statement.order_by(Course.id) if lat is not None else statement.order_by(Course.id).limit(limit)
+        ).all()
+        if lat is not None and lng is not None:
+            maximum = radius_miles if radius_miles is not None else 50
+            rows = [row for row in rows if miles_between(lat, lng, row[0]) <= maximum][:limit]
+        logger.info(
+            "course_search result_count=%s q=%r country=%r admin1=%r city=%r region=%r "
+            "radius_miles=%r access=%r difficulty=%r max_green_fee=%r",
+            len(rows), q, country, admin1, city, region, radius_miles, access, difficulty,
+            max_green_fee,
+        )
         return [
             {
                 **course_data(stored_course),
@@ -147,9 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
                 "rating_count": int(rating_count),
             }
-            for stored_course, community_rating, rating_count in session.execute(
-                statement.order_by(Course.name)
-            ).all()
+            for stored_course, community_rating, rating_count in rows
         ]
 
     @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)

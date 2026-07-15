@@ -28,9 +28,21 @@ export type Course = {
   id: number
   name: string
   region: string
-  green_fee: number
-  difficulty: string
-  is_public: boolean
+  green_fee: number | null
+  difficulty: string | null
+  is_public: boolean | null
+  latitude?: number | null
+  longitude?: number | null
+  source?: string
+  country_code?: string
+  admin1_code?: string | null
+  admin1_name?: string | null
+  city?: string | null
+  facility_name?: string | null
+  course_name?: string | null
+  status?: string
+  hole_count?: number | null
+  access?: string | null
   community_rating?: number | null
   rating_count?: number
 }
@@ -99,6 +111,77 @@ export type FriendSummary = {
   id: number
   display_name: string
   username: string | null
+}
+
+export type UserSummary = FriendSummary & {
+  home_region: string | null
+  follower_count: number
+  following_count: number
+}
+
+export type Follow = {
+  user: UserSummary
+  is_mutual: boolean
+  followed_at: string
+}
+
+export type Activity = {
+  id: number
+  event_type: 'round_logged' | 'ranking_updated' | 'course_saved' | 'course_rated' | string
+  subject_type: string
+  subject_id: number
+  actor: UserSummary
+  course: Course | null
+  data: Record<string, unknown>
+  reaction_count: number
+  viewer_reacted: boolean
+  is_own_activity: boolean
+  created_at: string
+}
+
+export type FeedPage = {
+  items: Activity[]
+  next_cursor: string | null
+}
+
+export type CourseSearchFilters = {
+  q?: string
+  region?: string
+  country?: string
+  admin1?: string
+  city?: string
+  lat?: number
+  lng?: number
+  radius_miles?: number
+  cursor?: number
+  limit?: number
+  max_green_fee?: number
+  difficulty?: 'beginner' | 'intermediate' | 'challenging' | 'any'
+  access?: 'public' | 'private' | 'any'
+}
+
+export type CourseRegion = {
+  country_code: string
+  admin1_code: string | null
+  admin1_name: string | null
+  city: string | null
+  course_count: number
+}
+
+export type SavedCourse = {
+  id: number
+  course: Course
+  note: string | null
+  created_at: string
+}
+
+export type SavedList = {
+  id: number
+  name: string
+  visibility: 'private' | 'friends' | 'public'
+  is_default: boolean
+  courses: SavedCourse[]
+  created_at: string
 }
 
 export type RankingComparison = {

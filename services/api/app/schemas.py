@@ -48,9 +48,21 @@ class CourseOut(BaseModel):
     id: int
     name: str
     region: str
-    green_fee: int
-    difficulty: str
-    is_public: bool
+    green_fee: int | None
+    difficulty: str | None
+    is_public: bool | None
+    latitude: float | None = None
+    longitude: float | None = None
+    source: str = "seed"
+    country_code: str = "US"
+    admin1_code: str | None = None
+    admin1_name: str | None = None
+    city: str | None = None
+    facility_name: str | None = None
+    course_name: str | None = None
+    status: str = "active"
+    hole_count: int | None = None
+    access: str | None = None
     community_rating: float | None = None
     rating_count: int = 0
 

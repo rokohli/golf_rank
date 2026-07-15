@@ -221,23 +221,31 @@ def _ensure_target_rating_projection(
     session.add(projection)
 
 
-def _upsert_round_event(session: Session, user_id: int, round_: Round) -> None:
-    event = session.scalar(
-        select(ActivityEvent).where(
-            ActivityEvent.actor_user_id == user_id,
-            ActivityEvent.subject_type == "round",
-            ActivityEvent.subject_id == round_.id,
+def _record_rating_event(
+    session: Session, user_id: int, round_: Round, rating: UserCourseRating, *, create: bool
+) -> None:
+    event = None
+    if not create:
+        event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.actor_user_id == user_id,
+                ActivityEvent.subject_type == "rating_round",
+                ActivityEvent.subject_id == round_.id,
+            ).order_by(ActivityEvent.id.desc()).limit(1)
         )
-    )
     if event is None:
         event = ActivityEvent(
             actor_user_id=user_id,
-            event_type="round_logged",
-            subject_type="round",
+            event_type="course_rated",
+            subject_type="rating_round",
             subject_id=round_.id,
         )
     event.visibility = round_.visibility
-    event.event_data = _event_data(round_)
+    event.event_data = {
+        **_event_data(round_),
+        "rating": rating.rating,
+        "tier": rating.tier,
+    }
     session.add(event)
 
 
@@ -350,10 +358,18 @@ def put_course_rating(
         session.add(round_)
         session.flush()
 
-        snapshot = _stage_snapshot(session, user.id)
+        snapshot = _stage_snapshot(session, user.id, emit_activity=False)
         _ensure_target_rating_projection(session, user.id, course_id, round_.id, snapshot)
+        session.flush()
+        rating_projection = session.scalar(
+            select(UserCourseRating).where(
+                UserCourseRating.user_id == user.id,
+                UserCourseRating.course_id == course_id,
+            )
+        )
+        assert rating_projection is not None
         _refresh_course_state(session, user.id, course_id)
-        _upsert_round_event(session, user.id, round_)
+        _record_rating_event(session, user.id, round_, rating_projection, create=True)
         session.flush()
         result = _state(session, course, user.id)
         session.commit()
@@ -416,7 +432,7 @@ def patch_rating_details(
         [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
         + [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
     )
-    _upsert_round_event(session, user.id, round_)
+    _record_rating_event(session, user.id, round_, rating, create=False)
     session.flush()
     result = _state(session, course, user.id)
     session.commit()
