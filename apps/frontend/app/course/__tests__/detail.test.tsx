@@ -5,6 +5,10 @@ import { CourseRatingState } from '../../../src/types'
 
 const mockGetCourse = jest.fn()
 const mockGetCourseRating = jest.fn()
+const mockGetSavedLists = jest.fn()
+const mockCreateSavedList = jest.fn()
+const mockSaveCourseToList = jest.fn()
+const mockRemoveCourseFromList = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
   Authorization: 'Bearer test-token',
@@ -40,8 +44,12 @@ jest.mock('expo-router', () => {
 })
 
 jest.mock('../../../src/api/client', () => ({
+  createSavedList: (...args: unknown[]) => mockCreateSavedList(...args),
   getCourse: (...args: unknown[]) => mockGetCourse(...args),
   getCourseRating: (...args: unknown[]) => mockGetCourseRating(...args),
+  getSavedLists: (...args: unknown[]) => mockGetSavedLists(...args),
+  removeCourseFromList: (...args: unknown[]) => mockRemoveCourseFromList(...args),
+  saveCourseToList: (...args: unknown[]) => mockSaveCourseToList(...args),
 }))
 
 jest.mock('../../../src/auth/useAuthToken', () => ({
@@ -80,6 +88,8 @@ describe('course detail ratings', () => {
     mockFocusCleanup = undefined
     mockGetCourse.mockResolvedValue(course)
     mockGetCourseRating.mockResolvedValue(rating(null))
+    mockGetSavedLists.mockResolvedValue([])
+    mockRemoveCourseFromList.mockResolvedValue(undefined)
   })
 
   it('shows distinct community and personal /10 values with only the supported actions', async () => {
@@ -121,7 +131,33 @@ describe('course detail ratings', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Rated' }))
     expect(mockPush).toHaveBeenLastCalledWith('/rate/7')
     expect(mockGetCourseRating).toHaveBeenCalledTimes(2)
-    expect(mockGetAuthHeaders).toHaveBeenCalledTimes(2)
+    expect(mockGetAuthHeaders).toHaveBeenCalledTimes(4)
+  })
+
+  it('creates a default list, persists the course, and can remove it again', async () => {
+    const emptyList = { id: 12, name: 'Saved', visibility: 'private', is_default: true, courses: [], created_at: '2026-07-15T12:00:00Z' }
+    const populatedList = {
+      ...emptyList,
+      courses: [{ id: 44, course, note: null, created_at: '2026-07-15T12:01:00Z' }],
+    }
+    mockCreateSavedList.mockResolvedValue(emptyList)
+    mockSaveCourseToList.mockResolvedValue(populatedList)
+
+    render(<CourseDetail />)
+    await waitFor(() => expect(mockGetSavedLists).toHaveBeenCalledTimes(1))
+
+    fireEvent.press(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeOnTheScreen()
+    expect(mockCreateSavedList).toHaveBeenCalledWith(
+      { name: 'Saved', visibility: 'private', is_default: true },
+      expect.objectContaining({ Authorization: 'Bearer test-token' }),
+    )
+    expect(mockSaveCourseToList).toHaveBeenCalledWith(12, 7, expect.any(Object))
+
+    fireEvent.press(screen.getByRole('button', { name: 'Saved' }))
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeOnTheScreen()
+    expect(mockRemoveCourseFromList).toHaveBeenCalledWith(12, 7, expect.any(Object))
   })
 
   it('does not classify a failed initial rating load as unrated or enable rating navigation', async () => {

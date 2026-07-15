@@ -22,7 +22,7 @@ Returns the authenticated user's persisted onboarding preferences. Returns `404`
 
 ## `GET /api/v1/courses`
 
-Optional query parameters: `q`, `region`, `max_green_fee`, `difficulty`, and `access` (`public`, `private`, or `any`). No authentication is required. Returns seed-backed course data with the community aggregate for every course:
+Optional query parameters: `q`, legacy free-form `region`, normalized `country`, `admin1`, `city`, `lat`, `lng`, `radius_miles`, stable numeric `cursor`, `limit`, `max_green_fee`, `difficulty`, and `access` (`public`, `private`, or `any`). `lat` and `lng` must be supplied together; radius defaults to 50 miles when coordinates are supplied. No authentication is required. Returns active canonical catalog records in stable ID order with nullable commercial metadata and the community aggregate:
 
 ```json
 [
@@ -33,6 +33,16 @@ Optional query parameters: `q`, `region`, `max_green_fee`, `difficulty`, and `ac
     "green_fee": 675,
     "difficulty": "challenging",
     "is_public": true,
+    "latitude": 36.568,
+    "longitude": -121.949,
+    "source": "opengolfapi",
+    "country_code": "US",
+    "admin1_code": "CA",
+    "admin1_name": "California",
+    "city": "Monterey",
+    "status": "active",
+    "hole_count": 18,
+    "access": "public",
     "community_rating": 9.2,
     "rating_count": 1
   }
@@ -40,6 +50,48 @@ Optional query parameters: `q`, `region`, `max_green_fee`, `difficulty`, and `ac
 ```
 
 `community_rating` is the one-decimal average of current personal ratings and is `null` when nobody has rated the course. `rating_count` is the number of current personal ratings and is `0` when unrated.
+
+`green_fee`, `difficulty`, `access`, and `is_public` may be `null` when the provider does not supply trustworthy values. Clients must display an unavailable state rather than invent defaults.
+
+## `GET /api/v1/course-regions`
+
+Returns normalized country, admin-area, and city combinations with counts of active courses. The Discover UI uses this response for region suggestions and counts.
+
+## `POST /api/v1/course-candidates`
+
+Creates an authenticated pending catalog-review candidate with `name`, optional `city`, `admin1_code`, and `notes`. Provider lookup results are not inserted directly into the canonical catalog.
+
+## Social graph and feed
+
+- `GET /api/v1/users?q=...` searches golfers without exposing provider identities and excludes blocks in either direction.
+- `PUT` and `DELETE /api/v1/me/follows/{user_id}` manage one-way follows. Mutual follows are presented as Friends.
+- `GET /api/v1/me/follows` returns followed-user envelopes with `is_mutual`.
+- `PUT` and `DELETE /api/v1/me/mutes/{user_id}` hide or restore a followed user's feed activity.
+- `PUT` and `DELETE /api/v1/me/blocks/{user_id}` hide both users from search/feed and remove follows in both directions.
+
+`GET /api/v1/feed?limit=20&cursor=...` returns a privacy-filtered cursor page:
+
+```json
+{
+  "items": [{
+    "id": 9,
+    "event_type": "course_rated",
+    "subject_type": "rating_round",
+    "subject_id": 42,
+    "actor": {"id": 2, "username": "maya", "display_name": "Maya Golfer", "home_region": "San Diego, CA", "follower_count": 3, "following_count": 4},
+    "course": {"id": 1, "name": "Pebble Beach Golf Links", "region": "Monterey, CA"},
+    "data": {"course_id": 1, "played_on": "2026-07-01", "score": 82, "rating": 9.4, "tier": "green"},
+    "reaction_count": 2,
+    "viewer_reacted": true,
+    "created_at": "2026-07-15T12:00:00Z"
+  }],
+  "next_cursor": null
+}
+```
+
+Friends-visible events require a mutual follow; public events require the viewer to follow the actor; private events are visible only to their actor. Rating and re-rating through the course-rating endpoint create `course_rated` events. Ranking-refinement tier/comparison writes do not create social events.
+
+`PUT` and `DELETE /api/v1/feed/{event_id}/reactions/like` idempotently add or remove a like and return the updated count/viewer state. Reactions are allowed only when the requesting user can view the event.
 
 ## `GET /api/v1/courses/{course_id}`
 

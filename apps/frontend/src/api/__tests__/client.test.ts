@@ -1,16 +1,25 @@
 import {
+  createSavedList,
   getCourse,
+  getCourseRegions,
+  getFeed,
+  getFollows,
   getCourseRating,
   getFriends,
   getProfile,
   getRanking,
   getRatingCandidate,
+  getSavedLists,
+  removeCourseFromList,
   saveComparison,
   saveCourseRating,
+  saveCourseToList,
   savePreferences,
   saveRatingDetails,
   saveTierPlacements,
+  searchUsers,
   searchCourses,
+  setActivityReaction,
 } from '../client'
 
 describe('api client', () => {
@@ -64,6 +73,31 @@ describe('api client', () => {
 
     await expect(getCourse(2)).resolves.toMatchObject({ id: 2, name: 'Spyglass Hill Golf Course' })
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/courses/2')
+  })
+
+  it('loads, creates, saves to, and removes from saved lists', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+    const input = { name: 'Saved', visibility: 'private' as const, is_default: true }
+
+    await getSavedLists(headers)
+    await createSavedList(input, headers)
+    await saveCourseToList(12, 7, headers)
+    await removeCourseFromList(12, 7, headers)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8000/api/v1/me/saved-lists', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/saved-lists', {
+      method: 'POST', headers, body: JSON.stringify(input),
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/me/saved-lists/12/courses/7', {
+      method: 'PUT', headers, body: JSON.stringify({ note: null }),
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/me/saved-lists/12/courses/7', {
+      method: 'DELETE', headers,
+    })
   })
 
   it('surfaces API authentication errors during onboarding', async () => {
@@ -216,5 +250,25 @@ describe('api client', () => {
       'Content-Type': 'application/json',
       Authorization: 'Bearer test.jwt',
     })).rejects.toThrow('All friend_user_ids must be followed users')
+  })
+
+  it('loads paginated feed, following, user search, regions, and reactions', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], next_cursor: null, regions: [] }),
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+
+    await getFeed(headers, 'next page')
+    await getFollows(headers)
+    await searchUsers('Maya Golfer', headers)
+    await getCourseRegions()
+    await setActivityReaction(7, true, headers)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8000/api/v1/feed?limit=20&cursor=next+page', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/follows', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/users?q=Maya%20Golfer', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/course-regions')
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/feed/7/reactions/like', { method: 'PUT', headers })
   })
 })

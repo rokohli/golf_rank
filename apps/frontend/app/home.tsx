@@ -1,67 +1,137 @@
 import { Feather } from '@expo/vector-icons'
-import { Stack, useRouter } from 'expo-router'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Stack, useFocusEffect, useRouter } from 'expo-router'
+import { useCallback, useState } from 'react'
+import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
-import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
-import { demoCourses, friends } from '../src/data/demo'
+import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
+import { useAuthHeaders } from '../src/auth/useAuthToken'
+import { Activity } from '../src/types'
+import { Avatar, BottomNav, IconButton, ProductScreen, ScreenHeader } from '../src/components/ProductUI'
 import { colors } from '../src/ui/theme'
 
 export default function Home() {
   const router = useRouter()
-  const recent = [
-    { person: 'Maya ranked', course: 'Bandon Dunes', detail: '74 (+2)', when: 'Yesterday' },
-    { person: 'Alex saved', course: 'Pinehurst No. 2', detail: '', when: '2d ago' },
-    { person: 'Chris played', course: 'Pasatiempo GC', detail: '78 (+6)', when: '3d ago' },
-  ]
+  const { getAuthHeaders } = useAuthHeaders()
+  const [activities, setActivities] = useState<Activity[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  return (
-    <>
-      <Stack.Screen options={{ headerShown: false }} />
-      <ProductScreen>
-        <View style={styles.topRow}>
-          <Text style={styles.title}>Good morning,{`\n`}Rohan</Text>
-          <View style={styles.topActions}>
-            <IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} />
-            <Pressable onPress={() => router.push('/profile')}><Avatar initials="RK" /></Pressable>
-          </View>
-        </View>
+  const load = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshing(true)
+    else setLoading(true)
+    setError(null)
+    try {
+      const headers = await getAuthHeaders()
+      const page = await getFeed(headers)
+      setActivities(page.items)
+      setNextCursor(page.next_cursor)
+    } catch (reason) {
+      setActivities([])
+      setError(message(reason, 'Unable to load friends activity.'))
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [getAuthHeaders])
 
-        <SectionTitle title="FRIENDS ACTIVITY" action="See all" onPress={() => router.push('/friends')} />
-        <Pressable onPress={() => router.push('/round/torrey-may')}>
-          <CourseVisual course={demoCourses[3]} height={228}>
-            <View style={styles.storyScrim} />
-            <View style={styles.storyContent}>
-              <View style={styles.storyIdentity}><Avatar initials={friends[0].initials} color={friends[0].accent} size={36} /><View><Text style={styles.storyKicker}>Jake played</Text><Text style={styles.storyTitle}>Torrey Pines (South)</Text><Text style={styles.storyMeta}>San Diego, CA</Text></View></View>
-              <View style={styles.storyScore}><Text style={styles.score}>82</Text><Text style={styles.storyMeta}>(+10)</Text></View>
-            </View>
-          </CourseVisual>
-        </Pressable>
-        <View style={styles.socialProof}><View style={styles.avatarStack}>{friends.slice(1, 4).map((friend, index) => <View key={friend.name} style={{ marginLeft: index ? -7 : 0 }}><Avatar initials={friend.initials} color={friend.accent} size={25} /></View>)}</View><Text style={styles.muted}>Evan and 8 others liked this</Text><Feather name="heart" size={18} color={colors.pine} style={{ marginLeft: 'auto' }} /></View>
+  useFocusEffect(useCallback(() => {
+    void load()
+  }, [load]))
 
-        <SectionTitle title="RECENT ACTIVITY" />
-        <View>{recent.map((item, index) => <View key={item.person} style={[styles.activityRow, index === recent.length - 1 && styles.lastRow]}><Avatar initials={friends[index + 1].initials} color={friends[index + 1].accent} size={38} /><View style={{ flex: 1 }}><Text style={styles.activityPerson}>{item.person}</Text><Text style={styles.activityCourse}>{item.course}</Text></View><View style={{ alignItems: 'flex-end' }}><Text style={styles.activityDetail}>{item.detail}</Text><Text style={styles.muted}>{item.when}</Text></View></View>)}</View>
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const page = await getFeed(await getAuthHeaders(), nextCursor)
+      setActivities((current) => [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))])
+      setNextCursor(page.next_cursor)
+    } catch (reason) {
+      setError(message(reason, 'Unable to load more activity.'))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
-        <SectionTitle title="RECOMMENDED FOR YOU" />
-        <Pressable onPress={() => router.push('/course/pasatiempo')} style={styles.recommendation}><View style={styles.recommendationImage}><CourseVisual course={demoCourses[1]} height={78} /></View><View style={{ flex: 1 }}><Text style={styles.recommendationTitle}>Pasatiempo Golf Club</Text><Text style={styles.muted}>Santa Cruz, CA</Text><Text accessibilityLabel="Community rating 9.4 out of 10, 392 ratings" style={styles.rating}>9.4/10  <Text style={styles.muted}>(392 ratings)</Text></Text></View><Feather name="chevron-right" size={18} color={colors.muted} /></Pressable>
+  const toggleReaction = async (activity: Activity) => {
+    const nextReacted = !activity.viewer_reacted
+    setActivities((items) => items.map((item) => item.id === activity.id ? {
+      ...item,
+      viewer_reacted: nextReacted,
+      reaction_count: Math.max(0, item.reaction_count + (nextReacted ? 1 : -1)),
+    } : item))
+    try {
+      const result = await setActivityReaction(activity.id, nextReacted, await getAuthHeaders())
+      setActivities((items) => items.map((item) => item.id === activity.id ? { ...item, ...result } : item))
+    } catch (reason) {
+      setActivities((items) => items.map((item) => item.id === activity.id ? activity : item))
+      setError(message(reason, 'Unable to update this reaction.'))
+    }
+  }
 
-        <Pressable onPress={() => router.push('/planner')} style={styles.planLink}><View><Text style={styles.planTitle}>Plan a golf weekend</Text><Text style={styles.muted}>Built around your courses and constraints</Text></View><Feather name="arrow-up-right" size={20} color={colors.pine} /></Pressable>
-      </ProductScreen>
-      <BottomNav />
-    </>
-  )
+  const mute = async (activity: Activity) => {
+    try {
+      await muteUser(activity.actor.id, true, await getAuthHeaders())
+      setActivities((items) => items.filter((item) => item.actor.id !== activity.actor.id))
+    } catch (reason) {
+      setError(message(reason, 'Unable to mute this golfer.'))
+    }
+  }
+
+  return <>
+    <Stack.Screen options={{ headerShown: false }} />
+    <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
+      <ScreenHeader title="Home" action={<View style={styles.actions}><IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} /><Pressable accessibilityRole="button" accessibilityLabel="Profile" onPress={() => router.push('/profile')}><Avatar initials="GR" /></Pressable></View>} />
+      <View><Text style={styles.eyebrow}>FRIENDS ACTIVITY</Text><Text style={styles.subtitle}>Rounds, ratings, rankings, and saved courses from people you follow.</Text></View>
+
+      {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading friends activity" color={colors.pine} /><Text style={styles.muted}>Loading activity…</Text></View> : null}
+      {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : null}
+      {!loading && !error && !activities.length ? <View style={styles.state}><Feather name="users" size={26} color={colors.muted} /><Text style={styles.emptyTitle}>Your feed is quiet</Text><Text style={styles.muted}>Follow golfers to see their friends-visible and public activity here.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/friends')} style={styles.retry}><Text style={styles.retryText}>Find golfers</Text></Pressable></View> : null}
+
+      <View>{activities.map((activity) => <ActivityCard key={activity.id} activity={activity} onOpen={() => openActivity(activity, router)} onReact={() => void toggleReaction(activity)} onMute={() => void mute(activity)} />)}</View>
+      {nextCursor ? <Pressable accessibilityRole="button" disabled={loadingMore} onPress={() => void loadMore()} style={styles.loadMore}>{loadingMore ? <ActivityIndicator color={colors.pine} /> : <Text style={styles.loadMoreText}>Load more</Text>}</Pressable> : null}
+      <Text style={styles.attribution}>Course catalog data © OpenGolfAPI, ODbL 1.0</Text>
+    </ProductScreen>
+    <BottomNav />
+  </>
 }
 
+function ActivityCard({ activity, onOpen, onReact, onMute }: { activity: Activity; onOpen: () => void; onReact: () => void; onMute: () => void }) {
+  const presentation = eventPresentation(activity)
+  return <View style={styles.card}>
+    <View style={styles.cardHeader}><Avatar initials={initials(activity.actor.display_name)} size={38} /><View style={{ flex: 1 }}><Text style={styles.actor}>{activity.actor.display_name}</Text><Text style={styles.muted}>{presentation.action} · {relativeTime(activity.created_at)}</Text></View>{!activity.is_own_activity ? <Pressable accessibilityRole="button" accessibilityLabel={`Mute ${activity.actor.display_name}`} onPress={onMute} hitSlop={8}><Feather name="more-horizontal" size={18} color={colors.muted} /></Pressable> : null}</View>
+    <Pressable accessibilityRole="button" accessibilityLabel={presentation.accessibilityLabel} onPress={onOpen} style={styles.subject}>
+      <Feather name={presentation.icon} size={18} color={colors.pine} />
+      <View style={{ flex: 1 }}><Text style={styles.course}>{activity.course?.name ?? presentation.title}</Text>{activity.course ? <Text style={styles.muted}>{activity.course.region}</Text> : null}</View>
+      {presentation.detail ? <Text style={styles.detail}>{presentation.detail}</Text> : null}
+      <Feather name="chevron-right" size={16} color={colors.muted} />
+    </Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={activity.viewer_reacted ? 'Unlike activity' : 'Like activity'} onPress={onReact} style={styles.reaction}><Feather name="heart" size={17} color={activity.viewer_reacted ? '#A14E4E' : colors.muted} /><Text style={[styles.muted, activity.viewer_reacted && { color: '#A14E4E' }]}>{activity.reaction_count || 'Like'}</Text></Pressable>
+  </View>
+}
+
+function eventPresentation(activity: Activity): { action: string; title: string; detail: string | null; icon: keyof typeof Feather.glyphMap; accessibilityLabel: string } {
+  const course = activity.course?.name ?? 'activity'
+  if (activity.event_type === 'round_logged') return { action: 'played a round', title: 'Round', detail: numberDetail(activity.data.score), icon: 'flag', accessibilityLabel: `Open round at ${course}` }
+  if (activity.event_type === 'course_rated') return { action: 'rated a course', title: 'Course rating', detail: numberDetail(activity.data.rating, '/10'), icon: 'award', accessibilityLabel: `Open rated course ${course}` }
+  if (activity.event_type === 'course_saved') return { action: 'saved a course', title: 'Saved course', detail: null, icon: 'bookmark', accessibilityLabel: `Open saved course ${course}` }
+  if (activity.event_type === 'ranking_updated') return { action: 'updated their rankings', title: 'Ranking update', detail: numberDetail(activity.data.course_count, ' courses'), icon: 'bar-chart-2', accessibilityLabel: 'Open ranking activity' }
+  return { action: 'shared an update', title: 'Golf update', detail: null, icon: 'activity', accessibilityLabel: 'Open activity' }
+}
+
+function openActivity(activity: Activity, router: ReturnType<typeof useRouter>) {
+  if (activity.course) router.push(`/course/${activity.course.id}` as never)
+}
+
+function numberDetail(value: unknown, suffix = '') { return typeof value === 'number' ? `${value}${suffix}` : null }
+function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
+function relativeTime(value: string) { const days = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000)); return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : `${days}d ago` }
+function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
+
 const styles = StyleSheet.create({
-  topRow: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' },
-  topActions: { alignItems: 'center', flexDirection: 'row', gap: 9 },
-  title: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 31, fontWeight: '400', letterSpacing: -0.8, lineHeight: 36 },
-  storyScrim: { backgroundColor: 'rgba(5, 21, 13, 0.62)', bottom: 0, height: 92, left: 0, position: 'absolute', right: 0 },
-  storyContent: { alignItems: 'center', bottom: 13, flexDirection: 'row', left: 13, position: 'absolute', right: 13 },
-  storyIdentity: { alignItems: 'center', flexDirection: 'row', flex: 1, gap: 9 },
-  storyKicker: { color: '#DCE5DE', fontSize: 9 }, storyTitle: { color: '#FFF', fontFamily: 'Georgia', fontSize: 18, marginTop: 2 }, storyMeta: { color: '#E4E9E5', fontSize: 10, marginTop: 2 },
-  storyScore: { alignItems: 'flex-end' }, score: { color: '#FFF', fontFamily: 'Georgia', fontSize: 33 },
-  socialProof: { alignItems: 'center', borderBottomColor: '#DCDDD8', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 13 }, avatarStack: { flexDirection: 'row', marginRight: 9 }, muted: { color: colors.muted, fontSize: 10, lineHeight: 15 },
-  activityRow: { alignItems: 'center', borderBottomColor: '#DCDDD8', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 12 }, lastRow: { borderBottomWidth: 0 }, activityPerson: { color: colors.muted, fontSize: 10 }, activityCourse: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14, marginTop: 3 }, activityDetail: { color: colors.ink, fontSize: 11, fontWeight: '700' },
-  recommendation: { alignItems: 'center', borderColor: '#D8D9D4', borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, overflow: 'hidden', paddingRight: 12 }, recommendationImage: { width: 108 }, recommendationTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 15 }, rating: { color: colors.gold, fontSize: 10, fontWeight: '700', marginTop: 7 },
-  planLink: { alignItems: 'center', borderBottomColor: '#D8D9D4', borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: '#D8D9D4', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 15 }, planTitle: { color: colors.pine, fontFamily: 'Georgia', fontSize: 17, marginBottom: 3 },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: 8 }, eyebrow: { color: colors.ink, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 }, subtitle: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 5 },
+  state: { alignItems: 'center', gap: 10, paddingHorizontal: 24, paddingVertical: 42 }, muted: { color: colors.muted, fontSize: 10, lineHeight: 15 }, error: { color: '#9A3E3E', fontSize: 12, lineHeight: 18, textAlign: 'center' }, emptyTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 }, retry: { backgroundColor: colors.pine, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 9 }, retryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  card: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 11, paddingVertical: 15 }, cardHeader: { alignItems: 'center', flexDirection: 'row', gap: 10 }, actor: { color: colors.ink, fontSize: 12, fontWeight: '800' }, subject: { alignItems: 'center', backgroundColor: '#F4F5F1', borderRadius: 9, flexDirection: 'row', gap: 11, padding: 12 }, course: { color: colors.ink, fontFamily: 'Georgia', fontSize: 15, marginBottom: 3 }, detail: { color: colors.pineDark, fontSize: 12, fontWeight: '800' }, reaction: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 6 }, loadMore: { alignItems: 'center', padding: 14 }, loadMoreText: { color: colors.pine, fontSize: 11, fontWeight: '800' }, attribution: { color: colors.muted, fontSize: 8, textAlign: 'center' },
 })

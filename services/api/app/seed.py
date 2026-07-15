@@ -5,9 +5,9 @@ from .models import Course
 
 
 COURSES = [
-    {"name": "Pebble Beach Golf Links", "region": "Monterey, CA", "latitude": 36.568, "longitude": -121.949, "is_public": True, "difficulty": "challenging", "green_fee": 675},
-    {"name": "Spyglass Hill Golf Course", "region": "Monterey, CA", "latitude": 36.585, "longitude": -121.942, "is_public": True, "difficulty": "challenging", "green_fee": 495},
-    {"name": "Pasatiempo Golf Club", "region": "Santa Cruz, CA", "latitude": 37.004, "longitude": -121.998, "is_public": True, "difficulty": "challenging", "green_fee": 410},
+    {"name": "Pebble Beach Golf Links", "region": "Monterey, CA", "latitude": 36.568, "longitude": -121.949, "is_public": True, "difficulty": "challenging", "green_fee": 675, "source": "seed", "source_course_id": "pebble", "country_code": "US", "admin1_code": "CA", "admin1_name": "California", "city": "Monterey", "course_name": "Pebble Beach Golf Links", "access": "public"},
+    {"name": "Spyglass Hill Golf Course", "region": "Monterey, CA", "latitude": 36.585, "longitude": -121.942, "is_public": True, "difficulty": "challenging", "green_fee": 495, "source": "seed", "source_course_id": "spyglass", "country_code": "US", "admin1_code": "CA", "admin1_name": "California", "city": "Monterey", "course_name": "Spyglass Hill Golf Course", "access": "public"},
+    {"name": "Pasatiempo Golf Club", "region": "Santa Cruz, CA", "latitude": 37.004, "longitude": -121.998, "is_public": True, "difficulty": "challenging", "green_fee": 410, "source": "seed", "source_course_id": "pasatiempo", "country_code": "US", "admin1_code": "CA", "admin1_name": "California", "city": "Santa Cruz", "course_name": "Pasatiempo Golf Club", "access": "public"},
 ]
 
 

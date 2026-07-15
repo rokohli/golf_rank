@@ -49,14 +49,46 @@ class OnboardingPreference(Base):
 
 class Course(Base):
     __tablename__ = "courses"
+    __table_args__ = (
+        UniqueConstraint("source", "source_course_id", name="uq_course_source_identity"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     region: Mapped[str] = mapped_column(String(120), index=True)
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
-    is_public: Mapped[bool] = mapped_column(Boolean, index=True)
-    difficulty: Mapped[str] = mapped_column(String(20), index=True)
-    green_fee: Mapped[int] = mapped_column(Integer, index=True)
+    is_public: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    difficulty: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    green_fee: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(40), default="seed", server_default="seed", index=True)
+    source_course_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    google_place_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    country_code: Mapped[str] = mapped_column(String(2), default="US", server_default="US", index=True)
+    admin1_code: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    admin1_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    facility_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    course_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active", index=True)
+    hole_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    access: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CourseReconciliation(Base):
+    __tablename__ = "course_reconciliations"
+    __table_args__ = (
+        UniqueConstraint("source", "source_course_id", "canonical_course_id", name="uq_course_reconciliation"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(40), index=True)
+    source_course_id: Mapped[str] = mapped_column(String(120), index=True)
+    canonical_course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    match_status: Mapped[str] = mapped_column(String(20), default="confirmed", server_default="confirmed")
+    match_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TierAssignment(Base):
@@ -246,6 +278,52 @@ class ActivityEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class ActivityReaction(Base):
+    __tablename__ = "activity_reactions"
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", "reaction", name="uq_activity_reaction"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("activity_events.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    reaction: Mapped[str] = mapped_column(String(20), default="like", server_default="like")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserBlock(Base):
+    __tablename__ = "user_blocks"
+    __table_args__ = (UniqueConstraint("blocker_id", "blocked_id", name="uq_user_block"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    blocker_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    blocked_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserMute(Base):
+    __tablename__ = "user_mutes"
+    __table_args__ = (UniqueConstraint("muter_id", "muted_id", name="uq_user_mute"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    muter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    muted_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CourseCandidate(Base):
+    __tablename__ = "course_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submitted_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    admin1_code: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SavedList(Base):
