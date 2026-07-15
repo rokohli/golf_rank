@@ -1,9 +1,10 @@
 import { Feather } from '@expo/vector-icons'
 import * as Contacts from 'expo-contacts'
 import * as SMS from 'expo-sms'
-import { ReactNode, useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,9 +27,11 @@ import {
   RatingDetailsInput,
   RatingTier,
 } from '../types'
-import { colors, radii } from '../ui/theme'
+import { colors } from '../ui/theme'
 
 type Guest = { name: string; phone: string | null }
+type Stage = 'tier' | 'round' | 'comparison' | 'reveal'
+type RoundEditor = 'played' | 'score' | 'notes' | 'favorite' | 'people' | null
 
 export type ContactsAdapter = {
   requestPermission: () => Promise<'granted' | 'denied'>
@@ -54,20 +57,17 @@ export type RatingFlowProps = {
   today?: string
 }
 
-type Stage = 'tier' | 'round' | 'comparison' | 'reveal' | 'details'
-
-const tiers: { key: RatingTier; name: string; range: string; description: string }[] = [
-  { key: 'green', name: 'Green', range: '8.5–10', description: 'One of your very best' },
-  { key: 'fairway', name: 'Fairway', range: '7–8.4', description: 'A course you really enjoyed' },
-  { key: 'rough', name: 'Rough', range: '5–6.9', description: 'Good, with some reservations' },
-  { key: 'bunker', name: 'Bunker', range: '1–4.9', description: 'Not one you would rush back to' },
+const tiers: { key: RatingTier; name: string; range: string; icon: keyof typeof Feather.glyphMap }[] = [
+  { key: 'green', name: 'Green', range: '8.5–10', icon: 'flag' },
+  { key: 'fairway', name: 'Fairway', range: '7–8.4', icon: 'compass' },
+  { key: 'rough', name: 'Rough', range: '5–6.9', icon: 'wind' },
+  { key: 'bunker', name: 'Bunker', range: '1–4.9', icon: 'circle' },
 ]
 
-const comparisonOptions: { value: ComparisonResult; label: string }[] = [
-  { value: 'course_a', label: 'Prefer this course' },
-  { value: 'course_b', label: 'Prefer the other course' },
-  { value: 'too_close', label: 'Too close' },
-  { value: 'not_sure', label: 'Not sure' },
+const courseImages = [
+  require('../../assets/course-images/coastal-course.png'),
+  require('../../assets/course-images/parkland-course.png'),
+  require('../../assets/course-images/dunes-course.png'),
 ]
 
 function localToday() {
@@ -113,40 +113,69 @@ export function RatingFlow({
 }: RatingFlowProps) {
   const initialFriendIds = initialRating.companions.flatMap((item) => item.friend_user_id == null ? [] : [item.friend_user_id])
   const initialGuests = initialRating.companions.flatMap((item) => item.guest_name ? [{ name: item.guest_name, phone: null }] : [])
+  const initialDetails = detailsPayload(
+    initialRating.round?.note ?? '',
+    initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
+    initialFriendIds,
+    initialGuests,
+    initialRating.round?.visibility === 'friends',
+  )
+
   const [stage, setStage] = useState<Stage>('tier')
   const [tier, setTier] = useState<RatingTier | null>(initialRating.tier)
-  const [playedOn, setPlayedOn] = useState(initialRating.round?.played_on ?? today)
+  const [playedOnInput, setPlayedOnInput] = useState(formatDateInput(initialRating.round?.played_on ?? today))
   const [score, setScore] = useState(initialRating.round?.score == null ? '' : String(initialRating.round.score))
   const [candidate, setCandidate] = useState<RatingCandidate>(null)
-  const [comparison, setComparison] = useState<ComparisonResult | null>(null)
   const [ratingState, setRatingState] = useState(initialRating)
   const [coreBaseline, setCoreBaseline] = useState({
     tier: initialRating.tier,
     playedOn: initialRating.round?.played_on ?? null,
     score: initialRating.round?.score == null ? '' : String(initialRating.round.score),
   })
+  const [detailsBaseline, setDetailsBaseline] = useState(initialDetails)
   const [note, setNote] = useState(initialRating.round?.note ?? '')
   const [favoriteHole, setFavoriteHole] = useState(initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole))
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [guests, setGuests] = useState<Guest[]>(initialGuests)
   const [shareWithFriends, setShareWithFriends] = useState(initialRating.round?.visibility === 'friends')
+  const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guestMessage, setGuestMessage] = useState<string | null>(null)
+  const savingRef = useRef(false)
 
+  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
+  const detailsChanged = JSON.stringify(detailsBaseline) !== JSON.stringify(currentDetails)
+  const playedOn = parseUsDate(playedOnInput)
   const coreUnchanged = coreBaseline.tier === tier
     && coreBaseline.playedOn === playedOn
     && coreBaseline.score === score.trim()
   const scoreNumber = score.trim() ? Number(score) : null
-  const roundValid = isValidDate(playedOn)
+  const roundValid = playedOn !== null
     && playedOn <= today
     && (scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 40 && scoreNumber <= 250))
+  const favoriteHoleValid = currentDetails.favorite_hole === null
+    || (Number.isInteger(currentDetails.favorite_hole) && currentDetails.favorite_hole >= 1 && currentDetails.favorite_hole <= 18)
 
   async function continueFromRound() {
-    if (!tier || !roundValid) return
+    if (!tier || !playedOn || !roundValid || !favoriteHoleValid) return
     setError(null)
     if (coreUnchanged && ratingState.personal_rating != null) {
-      setStage('reveal')
+      if (!detailsChanged) {
+        setStage('reveal')
+        return
+      }
+      setBusy(true)
+      try {
+        const saved = await saveDetails(currentDetails)
+        setRatingState(saved)
+        setDetailsBaseline(currentDetails)
+        setStage('reveal')
+      } catch (reason) {
+        setError(errorMessage(reason, 'Unable to save your round details. Your answers are still here.'))
+      } finally {
+        setBusy(false)
+      }
       return
     }
     if (tier === coreBaseline.tier) {
@@ -154,7 +183,6 @@ export function RatingFlow({
       return
     }
     setCandidate(null)
-    setComparison(null)
     setBusy(true)
     try {
       const nextCandidate = await getCandidate(tier)
@@ -169,47 +197,41 @@ export function RatingFlow({
   }
 
   async function persistRating(comparisonCourseId: number | null, result: ComparisonResult | null, alreadyBusy = false) {
-    if (!tier) return
+    if (!tier || !playedOn || savingRef.current) return
+    savingRef.current = true
     setError(null)
     if (!alreadyBusy) setBusy(true)
     const input: CourseRatingInput = comparisonCourseId && result
       ? { tier, played_on: playedOn, score: scoreNumber, comparison_course_id: comparisonCourseId, comparison_result: result }
       : { tier, played_on: playedOn, score: scoreNumber }
+    let saved: CourseRatingState
     try {
-      const saved = await saveRating(input)
+      saved = await saveRating(input)
       setRatingState(saved)
       setCoreBaseline({ tier, playedOn, score: score.trim() })
-      setStage('reveal')
     } catch (reason) {
       setError(errorMessage(reason, 'Unable to save your rating. Your answers are still here.'))
-    } finally {
+      savingRef.current = false
       setBusy(false)
-    }
-  }
-
-  async function saveOptionalDetails() {
-    const hole = favoriteHole.trim() ? Number(favoriteHole) : null
-    if (hole !== null && (!Number.isInteger(hole) || hole < 1 || hole > 18)) {
-      setError('Favorite hole must be between 1 and 18.')
       return
     }
-    setBusy(true)
-    setError(null)
-    try {
-      const saved = await saveDetails({
-        note: note.trim() || null,
-        favorite_hole: hole,
-        friend_user_ids: friendIds,
-        guest_names: guests.map((guest) => guest.name),
-        visibility: shareWithFriends ? 'friends' : 'private',
-      })
-      setRatingState(saved)
-      onClose()
-    } catch (reason) {
-      setError(errorMessage(reason, 'Unable to save your details. Your answers are still here.'))
-    } finally {
-      setBusy(false)
+
+    if (detailsChanged) {
+      try {
+        saved = await saveDetails(currentDetails)
+        setRatingState(saved)
+        setDetailsBaseline(currentDetails)
+      } catch (reason) {
+        setError(errorMessage(reason, 'Your rating was saved, but the round details were not. Tap Continue to retry.'))
+        setStage('round')
+        savingRef.current = false
+        setBusy(false)
+        return
+      }
     }
+    setStage('reveal')
+    savingRef.current = false
+    setBusy(false)
   }
 
   async function addGuest() {
@@ -241,11 +263,10 @@ export function RatingFlow({
   }
 
   const title = useMemo(() => {
-    if (stage === 'tier') return `How did ${course.name} feel?`
-    if (stage === 'round') return 'When did you play?'
-    if (stage === 'comparison') return 'Which course do you prefer?'
-    if (stage === 'reveal') return 'Your rating'
-    return 'Remember the round'
+    if (stage === 'tier') return 'Where does it sit?'
+    if (stage === 'round') return 'About the round'
+    if (stage === 'comparison') return 'Which would you play again?'
+    return `${shortCourseName(course.name)} lands at`
   }, [course.name, stage])
 
   function goBack() {
@@ -253,99 +274,110 @@ export function RatingFlow({
     if (stage === 'tier') onClose()
     else if (stage === 'round') setStage('tier')
     else if (stage === 'comparison') setStage('round')
-    else if (stage === 'reveal') setStage('round')
-    else setStage('reveal')
+    else setStage('round')
   }
 
   function selectTier(nextTier: RatingTier) {
     setTier(nextTier)
     setCandidate(null)
-    setComparison(null)
     setError(null)
+  }
+
+  function toggleEditor(editor: RoundEditor) {
+    setRoundEditor((current) => current === editor ? null : editor)
+    setGuestMessage(null)
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView behavior={platform === 'ios' ? 'padding' : undefined} style={styles.safe}>
         <View style={styles.header}>
-          <Pressable accessibilityLabel="Go back" accessibilityRole="button" hitSlop={4} onPress={goBack} style={styles.iconButton}>
-            <Feather name="arrow-left" size={19} color={colors.ink} />
+          <Pressable accessibilityLabel="Go back" accessibilityRole="button" hitSlop={8} onPress={goBack} style={styles.iconButton}>
+            <Feather name="arrow-left" size={21} color={colors.ink} />
           </Pressable>
           <Text numberOfLines={1} style={styles.courseName}>{course.name}</Text>
-          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={4} onPress={onClose} style={styles.iconButton}>
-            <Feather name="x" size={19} color={colors.ink} />
+          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.iconButton}>
+            <Feather name="x" size={21} color={colors.ink} />
           </Pressable>
         </View>
 
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <View style={styles.headingBlock}>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle(stage, candidate?.name)}</Text>
+          <View style={[styles.headingBlock, stage === 'reveal' && styles.revealHeading]}>
+            <Text style={[styles.title, stage === 'reveal' && styles.revealTitle]}>{title}</Text>
+            {stage === 'tier' ? <Text style={styles.subtitle}>Start with the group that feels right.</Text> : null}
           </View>
 
           {stage === 'tier' ? (
-            <View style={styles.options}>
-              {tiers.map((item) => <Choice
-                key={item.key}
-                label={`${item.name} ${item.range}`}
-                selected={tier === item.key}
-                onPress={() => selectTier(item.key)}
-              >
-                <View style={styles.tierContent}>
-                  <View style={styles.tierCopy}><Text style={styles.choiceTitle}>{item.name}</Text><Text style={styles.range}>{item.range}</Text></View>
-                  <Text style={styles.choiceDescription}>{item.description}</Text>
-                </View>
-              </Choice>)}
+            <View style={styles.stageBody}>
+              <View style={styles.tierList}>
+                {tiers.map((item) => {
+                  const selected = tier === item.key
+                  return <Pressable
+                    key={item.key}
+                    accessibilityLabel={`${item.name} ${item.range}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => selectTier(item.key)}
+                    style={({ pressed }) => [styles.tierRow, pressed && styles.pressed]}
+                  >
+                    <View style={[styles.tierIcon, selected && styles.tierIconSelected]}><Feather name={item.icon} size={20} color={colors.pine} /></View>
+                    <Text style={styles.tierName}>{item.name}</Text>
+                    <Text style={styles.tierRange}>{item.range}</Text>
+                    <View style={styles.tierCheck}>{selected ? <Feather name="check" size={22} color={colors.pine} /> : null}</View>
+                  </Pressable>
+                })}
+              </View>
               <ActionButton disabled={!tier} label="Continue" onPress={() => setStage('round')} />
             </View>
           ) : null}
 
           {stage === 'round' ? (
-            <View style={styles.form}>
-              <Field label="Date played" value={playedOn} onChangeText={setPlayedOn} placeholder="YYYY-MM-DD" />
-              <Text style={styles.help}>Use YYYY-MM-DD. Today is selected by default.</Text>
-              <Field keyboardType="number-pad" label="Golf score (optional)" value={score} onChangeText={setScore} placeholder="e.g. 82" />
-              {!roundValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a valid date (not in the future) and a score from 40 to 250.</Text> : null}
-              <ActionButton disabled={!roundValid || busy} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
+            <View style={styles.stageBody}>
+              <View style={styles.roundList}>
+                <RoundRow expanded={roundEditor === 'played'} icon="calendar" label="Played" onPress={() => toggleEditor('played')} value={playedOn ? formatPlayedDate(playedOn) : playedOnInput} />
+                {roundEditor === 'played' ? <InlineField accessibilityLabel="Date played" keyboardType="numbers-and-punctuation" value={playedOnInput} onChangeText={setPlayedOnInput} placeholder="MM/DD/YYYY" /> : null}
+                <RoundRow expanded={roundEditor === 'score'} icon="file-text" label="Score" onPress={() => toggleEditor('score')} />
+                {roundEditor === 'score' ? <InlineField accessibilityLabel="Golf score" keyboardType="number-pad" value={score} onChangeText={setScore} placeholder="e.g. 82" /> : null}
+                <RoundRow expanded={roundEditor === 'notes'} icon="edit-3" label="Notes" onPress={() => toggleEditor('notes')} />
+                {roundEditor === 'notes' ? <InlineField accessibilityLabel="Notes (optional)" multiline value={note} onChangeText={setNote} placeholder="What stood out?" /> : null}
+                <RoundRow expanded={roundEditor === 'favorite'} icon="flag" label="Favorite hole" onPress={() => toggleEditor('favorite')} />
+                {roundEditor === 'favorite' ? <InlineField accessibilityLabel="Favorite hole (optional)" keyboardType="number-pad" value={favoriteHole} onChangeText={setFavoriteHole} placeholder="1–18" /> : null}
+                <RoundRow expanded={roundEditor === 'people'} icon="users" label="Who joined" onPress={() => toggleEditor('people')} />
+                {roundEditor === 'people' ? <View style={styles.peopleEditor}>
+                  {friends.length ? <View style={styles.friendWrap}>{friends.map((friend) => {
+                    const selected = friendIds.includes(friend.id)
+                    return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
+                  })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
+                  <Pressable accessibilityLabel="Add guest" accessibilityRole="button" onPress={addGuest} style={styles.smallTextControl}><Text style={styles.addGuest}>+ Add guest</Text></Pressable>
+                  {guests.map((guest) => <View key={guest.name} style={styles.guestRow}><Text style={styles.guestName}>{guest.name}</Text>{guest.phone ? <Pressable accessibilityLabel={`Send invite to ${guest.name}`} accessibilityRole="button" onPress={() => sendInvite(guest)} style={styles.smallTextControl}><Text style={styles.addGuest}>Send invite</Text></Pressable> : null}</View>)}
+                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with friends</Text><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
+                </View> : null}
+                <RoundRow icon="camera" label="Photos" onPress={() => setGuestMessage('Photo upload is coming soon.')} />
+              </View>
+              {!roundValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a valid date in MM/DD/YYYY (not in the future) and a score from 40 to 250.</Text> : null}
+              {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.error}>Favorite hole must be between 1 and 18.</Text> : null}
+              <ActionButton disabled={!roundValid || !favoriteHoleValid || busy} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
             </View>
           ) : null}
 
           {stage === 'comparison' && candidate ? (
-            <View style={styles.options}>
-              <View style={styles.comparisonCard}><Text style={styles.comparisonName}>{course.name}</Text><Text style={styles.versus}>or</Text><Text style={styles.comparisonName}>{candidate.name}</Text></View>
-              {comparisonOptions.map((option) => <Choice key={option.value} label={option.label} selected={comparison === option.value} onPress={() => setComparison(option.value)}>
-                <Text style={styles.choiceTitle}>{option.label}</Text>
-              </Choice>)}
-              <ActionButton disabled={!comparison || busy} label={busy ? 'Saving...' : error ? 'Retry save' : 'Save rating'} onPress={() => comparison && persistRating(candidate.id, comparison)} />
+            <View style={styles.comparisonStage}>
+              <CourseChoice course={course} disabled={busy} imageIndex={0} onPress={() => persistRating(candidate.id, 'course_a')} />
+              <View style={styles.versusRow}><View style={styles.versusLine} /><Text style={styles.versus}>VS.</Text><View style={styles.versusLine} /></View>
+              <CourseChoice course={candidate} disabled={busy} imageIndex={1} onPress={() => persistRating(candidate.id, 'course_b')} />
+              <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => persistRating(candidate.id, 'too_close')} style={styles.tooClose}><Text style={styles.tooCloseText}>Too close</Text></Pressable>
             </View>
           ) : null}
 
           {stage === 'reveal' ? (
             <View style={styles.reveal}>
               <Text accessibilityLabel={`Your rating is ${ratingState.personal_rating} out of 10`} style={styles.ratingValue}>
-                {ratingState.personal_rating ?? '—'}<Text style={styles.outOf}>/10</Text>
+                {ratingState.personal_rating ?? '—'} <Text style={styles.outOf}>/ 10</Text>
               </Text>
-              <Text style={styles.revealCopy}>Based on your tier and how this course compares with the courses you know.</Text>
-              <ActionButton label="Add round details" onPress={() => setStage('details')} />
-              <Pressable accessibilityRole="button" onPress={onClose} style={styles.textControl}><Text style={styles.textButton}>Done</Text></Pressable>
-            </View>
-          ) : null}
-
-          {stage === 'details' ? (
-            <View style={styles.form}>
-              <Field label="Notes (optional)" multiline value={note} onChangeText={setNote} placeholder="What stood out?" />
-              <Field keyboardType="number-pad" label="Favorite hole (optional)" value={favoriteHole} onChangeText={setFavoriteHole} placeholder="1–18" />
-              <View><Text style={styles.fieldLabel}>Photo</Text><Pressable accessibilityLabel="Add a photo, Coming soon" accessibilityRole="button" onPress={() => setGuestMessage('Photo upload is Coming soon.')} style={styles.photoButton}><Feather name="camera" size={20} color={colors.pine} /><Text style={styles.photoText}>Add photo</Text><Text style={styles.comingSoon}>Coming soon</Text></Pressable></View>
-              {friends.length ? <View><Text style={styles.fieldLabel}>Friends who played</Text><View style={styles.friendWrap}>{friends.map((friend) => {
-                const selected = friendIds.includes(friend.id)
-                return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
-              })}</View></View> : null}
-              <View>
-                <Pressable accessibilityLabel="Add guest" accessibilityRole="button" onPress={addGuest} style={styles.smallTextControl}><Text style={styles.addGuest}>+ Add guest</Text></Pressable>
-                {guests.map((guest) => <View key={guest.name} style={styles.guestRow}><Text style={styles.guestName}>{guest.name}</Text>{guest.phone ? <Pressable accessibilityLabel={`Send invite to ${guest.name}`} accessibilityRole="button" onPress={() => sendInvite(guest)} style={styles.smallTextControl}><Text style={styles.addGuest}>Send invite</Text></Pressable> : null}</View>)}
-              </View>
-              <View style={styles.switchRow}><View style={{ flex: 1 }}><Text style={styles.fieldLabel}>Share with friends</Text><Text style={styles.help}>Off by default. Your rating stays private.</Text></View><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
-              <ActionButton disabled={busy} label={busy ? 'Saving...' : error ? 'Retry save' : 'Save details'} onPress={saveOptionalDetails} />
+              <View style={styles.goldRule} />
+              <Text style={styles.revealMeta}>{tierName(ratingState.tier)}  ·  Your course rating</Text>
+              <View style={styles.revealSpacer} />
+              <ActionButton label="Done" onPress={onClose} />
             </View>
           ) : null}
 
@@ -358,12 +390,45 @@ export function RatingFlow({
   )
 }
 
-function subtitle(stage: Stage, candidateName?: string) {
-  if (stage === 'tier') return 'Choose the tier that fits. We will calculate the number for you.'
-  if (stage === 'round') return 'A rating means you played this course. Score is optional.'
-  if (stage === 'comparison') return candidateName ? `One quick comparison with ${candidateName}.` : ''
-  if (stage === 'reveal') return 'Your personal course rating is ready.'
-  return 'Everything here is optional.'
+function RoundRow({ expanded = false, icon, label, value, onPress }: { expanded?: boolean; icon: keyof typeof Feather.glyphMap; label: string; value?: string; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded }} onPress={onPress} style={({ pressed }) => [styles.roundRow, pressed && styles.pressed]}>
+    <Feather name={icon} size={21} color={colors.pineDark} />
+    <Text style={styles.roundLabel}>{label}</Text>
+    {value ? <Text numberOfLines={1} style={styles.roundValue}>{value}</Text> : null}
+    <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={18} color={colors.pineDark} />
+  </Pressable>
+}
+
+function InlineField(props: React.ComponentProps<typeof TextInput>) {
+  return <View style={styles.inlineFieldWrap}><TextInput placeholderTextColor="#929A95" style={[styles.inlineField, props.multiline && styles.multiline]} {...props} /></View>
+}
+
+function CourseChoice({ course, imageIndex, disabled, onPress }: { course: Course; imageIndex: number; disabled: boolean; onPress: () => void }) {
+  return <Pressable
+    accessibilityLabel={course.name}
+    accessibilityRole="button"
+    accessibilityState={{ disabled }}
+    disabled={disabled}
+    onPress={onPress}
+    style={({ pressed }) => [styles.courseChoice, pressed && styles.courseChoicePressed]}
+  >
+    <ImageBackground source={courseImages[imageIndex % courseImages.length]} style={styles.courseImage} imageStyle={styles.courseImageRadius} />
+    <View style={styles.courseCopy}><Text style={styles.comparisonName}>{course.name}</Text><Text style={styles.courseRegion}>{course.region}</Text></View>
+  </Pressable>
+}
+
+function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label: string; onPress: () => void | Promise<void> }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionButton, disabled && styles.disabled, pressed && !disabled && styles.actionPressed]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
+}
+
+function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFriends: boolean): RatingDetailsInput {
+  return {
+    note: note.trim() || null,
+    favorite_hole: favoriteHole.trim() ? Number(favoriteHole) : null,
+    friend_user_ids: friendIds,
+    guest_names: guests.map((guest) => guest.name),
+    visibility: shareWithFriends ? 'friends' : 'private',
+  }
 }
 
 function errorMessage(reason: unknown, fallback: string) {
@@ -377,49 +442,97 @@ function isValidDate(value: string) {
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
 }
 
-function Choice({ children, label, selected, onPress }: { children: ReactNode; label: string; selected: boolean; onPress: () => void }) {
-  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.choice, selected && styles.choiceSelected]}>{children}<Feather name={selected ? 'check-circle' : 'circle'} size={20} color={selected ? colors.pine : colors.muted} /></Pressable>
+function formatPlayedDate(value: string) {
+  if (!isValidDate(value)) return value
+  const [year, month, day] = value.split('-').map(Number)
+  return new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(year, month - 1, day)))
 }
 
-function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label: string; onPress: () => void | Promise<void> }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={[styles.actionButton, disabled && styles.disabled]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
+function formatDateInput(value: string) {
+  if (!isValidDate(value)) return value
+  const [year, month, day] = value.split('-')
+  return `${month}/${day}/${year}`
 }
 
-function Field({ label, ...props }: { label: string } & React.ComponentProps<typeof TextInput>) {
-  return <View><Text style={styles.fieldLabel}>{label}</Text><TextInput accessibilityLabel={label} placeholderTextColor="#929A95" style={[styles.input, props.multiline && styles.multiline]} {...props} /></View>
+function parseUsDate(value: string) {
+  const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (!match) return null
+  const [, month, day, year] = match
+  const iso = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  return isValidDate(iso) ? iso : null
+}
+
+function tierName(tier: RatingTier | null) {
+  return tiers.find((item) => item.key === tier)?.name ?? 'Rated'
+}
+
+function shortCourseName(name: string) {
+  return name.replace(/\s+(Golf Links|Golf Club)$/i, '')
 }
 
 const styles = StyleSheet.create({
-  safe: { backgroundColor: colors.background, flex: 1 },
-  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 10 },
-  iconButton: { alignItems: 'center', backgroundColor: '#EFF0EC', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
-  courseName: { color: colors.muted, flex: 1, fontSize: 12, fontWeight: '700', marginHorizontal: 12, textAlign: 'center' },
-  content: { flexGrow: 1, gap: 22, padding: 24, paddingBottom: 48 },
-  headingBlock: { gap: 9, marginTop: 20 },
-  title: { color: colors.ink, fontFamily: 'Georgia', fontSize: 34, letterSpacing: -0.9, lineHeight: 40 },
-  subtitle: { color: colors.muted, fontSize: 14, lineHeight: 21 },
-  options: { gap: 12 }, form: { gap: 17 },
-  choice: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.card, borderWidth: 1, flexDirection: 'row', gap: 12, minHeight: 72, padding: 16 },
-  choiceSelected: { backgroundColor: colors.pineSoft, borderColor: colors.pine },
-  tierContent: { flex: 1, gap: 4 }, tierCopy: { alignItems: 'baseline', flexDirection: 'row', gap: 8 },
-  choiceTitle: { color: colors.ink, flex: 1, fontSize: 16, fontWeight: '800' },
-  choiceDescription: { color: colors.muted, fontSize: 11, lineHeight: 16 },
-  range: { color: colors.pine, fontSize: 13, fontWeight: '800' },
-  actionButton: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: radii.pill, justifyContent: 'center', marginTop: 6, minHeight: 52, paddingHorizontal: 20 },
-  actionButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' }, disabled: { opacity: 0.4 },
-  fieldLabel: { color: colors.ink, fontSize: 12, fontWeight: '800', marginBottom: 8 },
-  input: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, color: colors.ink, fontSize: 15, minHeight: 50, paddingHorizontal: 14, paddingVertical: 12 },
-  multiline: { minHeight: 105, textAlignVertical: 'top' }, help: { color: colors.muted, fontSize: 11, lineHeight: 16 },
-  error: { color: colors.error, fontSize: 12, lineHeight: 18, textAlign: 'center' }, message: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },
-  comparisonCard: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: radii.card, gap: 4, padding: 18 },
-  comparisonName: { color: colors.ink, fontFamily: 'Georgia', fontSize: 19, textAlign: 'center' }, versus: { color: colors.muted, fontSize: 11, fontWeight: '700' },
-  reveal: { alignItems: 'center', flex: 1, gap: 22, justifyContent: 'center', paddingVertical: 32 },
-  ratingValue: { color: colors.pine, fontFamily: 'Georgia', fontSize: 80, letterSpacing: -3 }, outOf: { color: colors.muted, fontSize: 28, letterSpacing: -1 },
-  revealCopy: { color: colors.muted, fontSize: 14, lineHeight: 21, maxWidth: 300, textAlign: 'center' }, textControl: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 72 }, textButton: { color: colors.pine, fontSize: 14, fontWeight: '800' },
-  photoButton: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderStyle: 'dashed', borderWidth: 1, flexDirection: 'row', gap: 10, minHeight: 54, paddingHorizontal: 14 },
-  photoText: { color: colors.ink, flex: 1, fontSize: 13, fontWeight: '700' }, comingSoon: { color: colors.muted, fontSize: 10, fontWeight: '700' },
-  friendWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, friendChip: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.pill, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8 }, friendChipSelected: { backgroundColor: colors.pine, borderColor: colors.pine },
-  friendChipText: { color: colors.ink, fontSize: 11, fontWeight: '700' }, friendChipTextSelected: { color: '#FFFFFF' }, smallTextControl: { alignItems: 'center', alignSelf: 'flex-start', justifyContent: 'center', minHeight: 44, minWidth: 72 }, addGuest: { color: colors.pine, fontSize: 12, fontWeight: '800' },
-  guestRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 42 }, guestName: { color: colors.ink, fontSize: 13 },
-  switchRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  safe: { backgroundColor: '#FBF8F1', flex: 1 },
+  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10 },
+  iconButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
+  courseName: { color: colors.ink, flex: 1, fontSize: 13, fontWeight: '700', marginHorizontal: 10, textAlign: 'center' },
+  content: { flexGrow: 1, gap: 24, padding: 24, paddingBottom: 28 },
+  headingBlock: { gap: 8, marginTop: 18 },
+  title: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 35, letterSpacing: -0.8, lineHeight: 41, textAlign: 'center' },
+  subtitle: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  stageBody: { flex: 1, gap: 22 },
+  tierList: { borderTopColor: '#D8D3C7', borderTopWidth: StyleSheet.hairlineWidth },
+  tierRow: { alignItems: 'center', borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 82, paddingHorizontal: 10 },
+  tierIcon: { alignItems: 'center', borderColor: '#A8B9B0', borderRadius: 24, borderWidth: StyleSheet.hairlineWidth, height: 48, justifyContent: 'center', width: 48 },
+  tierIconSelected: { borderColor: colors.gold },
+  tierName: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 20, marginLeft: 18 },
+  tierRange: { color: colors.ink, fontSize: 14 },
+  tierCheck: { alignItems: 'flex-end', width: 34 },
+  actionButton: { alignItems: 'center', backgroundColor: colors.pineDark, borderRadius: 2, justifyContent: 'center', marginTop: 'auto', minHeight: 54, paddingHorizontal: 20 },
+  actionButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  actionPressed: { opacity: 0.86 },
+  disabled: { opacity: 0.35 },
+  pressed: { backgroundColor: 'rgba(23, 76, 56, 0.045)' },
+  roundList: { borderTopColor: '#D8D3C7', borderTopWidth: StyleSheet.hairlineWidth },
+  roundRow: { alignItems: 'center', borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 16, minHeight: 70, paddingHorizontal: 14 },
+  roundLabel: { color: colors.pineDark, flex: 1, fontSize: 15, fontWeight: '600' },
+  roundValue: { color: colors.muted, fontSize: 13, maxWidth: 118 },
+  inlineFieldWrap: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, padding: 12 },
+  inlineField: { backgroundColor: '#FFFFFF', borderColor: '#D8D3C7', borderRadius: 4, borderWidth: StyleSheet.hairlineWidth, color: colors.ink, fontSize: 15, minHeight: 46, paddingHorizontal: 13, paddingVertical: 11 },
+  multiline: { minHeight: 92, textAlignVertical: 'top' },
+  peopleEditor: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, padding: 14 },
+  friendWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  friendChip: { borderColor: '#C9CBC5', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 8 },
+  friendChipSelected: { backgroundColor: colors.pine, borderColor: colors.pine },
+  friendChipText: { color: colors.ink, fontSize: 11, fontWeight: '700' },
+  friendChipTextSelected: { color: '#FFFFFF' },
+  smallTextControl: { alignItems: 'center', alignSelf: 'flex-start', justifyContent: 'center', minHeight: 40 },
+  addGuest: { color: colors.pine, fontSize: 12, fontWeight: '800' },
+  guestRow: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 42 },
+  guestName: { color: colors.ink, fontSize: 13 },
+  switchRow: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8 },
+  shareLabel: { color: colors.ink, fontSize: 12, fontWeight: '700' },
+  help: { color: colors.muted, fontSize: 11, lineHeight: 16 },
+  error: { color: colors.error, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  message: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  comparisonStage: { gap: 18 },
+  courseChoice: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 16, minHeight: 136, padding: 12 },
+  courseChoicePressed: { backgroundColor: colors.pineSoft, borderWidth: 1, transform: [{ scale: 0.995 }] },
+  courseImage: { height: 112, width: 140 },
+  courseImageRadius: { borderRadius: 3 },
+  courseCopy: { flex: 1, gap: 8 },
+  comparisonName: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 20, lineHeight: 24 },
+  courseRegion: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  versusRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  versusLine: { backgroundColor: '#D8D3C7', flex: 1, height: StyleSheet.hairlineWidth },
+  versus: { color: colors.gold, fontFamily: 'Georgia', fontSize: 17 },
+  tooClose: { alignItems: 'center', alignSelf: 'center', justifyContent: 'center', minHeight: 48, paddingHorizontal: 18 },
+  tooCloseText: { borderBottomColor: colors.pineDark, borderBottomWidth: StyleSheet.hairlineWidth, color: colors.pineDark, fontSize: 14, fontWeight: '700', paddingBottom: 3 },
+  revealHeading: { marginTop: 95 },
+  revealTitle: { fontSize: 28, lineHeight: 34 },
+  reveal: { alignItems: 'center', flex: 1, gap: 20 },
+  ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 76, letterSpacing: -2.5 },
+  outOf: { color: colors.pineDark, fontSize: 32, letterSpacing: -1 },
+  goldRule: { backgroundColor: colors.gold, height: StyleSheet.hairlineWidth, width: '72%' },
+  revealMeta: { color: colors.pineDark, fontSize: 13, fontWeight: '600' },
+  revealSpacer: { flex: 1, minHeight: 120 },
 })

@@ -4,6 +4,7 @@ import Rankings from '../rankings'
 import { RankingSnapshot } from '../../src/types'
 
 const mockGetRanking = jest.fn()
+const mockSaveComparison = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
   Authorization: 'Bearer test-token',
@@ -39,6 +40,7 @@ jest.mock('expo-router', () => {
 
 jest.mock('../../src/api/client', () => ({
   getRanking: (...args: unknown[]) => mockGetRanking(...args),
+  saveComparison: (...args: unknown[]) => mockSaveComparison(...args),
 }))
 
 jest.mock('../../src/auth/useAuthToken', () => ({
@@ -54,6 +56,25 @@ describe('rankings refresh', () => {
       'Content-Type': 'application/json',
       Authorization: 'Bearer test-token',
     })
+  })
+
+  it('refines an eligible same-tier pair and applies the returned ranking', async () => {
+    mockGetRanking.mockResolvedValue(refinableSnapshot('First Course', 'Second Course'))
+    mockSaveComparison.mockResolvedValue(refinableSnapshot('Second Course', 'First Course'))
+
+    render(<Rankings />)
+
+    expect(await screen.findByText('First Course')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Refine my rankings' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Choose second course: Second Course' }))
+
+    await waitFor(() => expect(mockSaveComparison).toHaveBeenCalledWith({
+      course_a_id: 41,
+      course_b_id: 42,
+      result: 'course_b',
+    }, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+    expect(await screen.findByText('Rankings refined')).toBeOnTheScreen()
+    expect(screen.getByText('1 comparison has been saved.')).toBeOnTheScreen()
   })
 
   it('shows initial loading and then renders the authenticated ranking with /10 values', async () => {
@@ -230,6 +251,31 @@ function rankingSnapshot(name?: string, personalRating = 8.5): RankingSnapshot {
       confidence: 0.9,
       confidence_label: 'high',
     }] : [],
+    unranked_courses: [],
+  }
+}
+
+function refinableSnapshot(firstName: string, secondName: string): RankingSnapshot {
+  return {
+    version: 2,
+    algorithm_version: 'test',
+    overall_confidence: 0.4,
+    entries: [firstName, secondName].map((name, index) => ({
+      rank: index + 1,
+      course: {
+        id: name === 'First Course' ? 41 : 42,
+        name,
+        region: 'Monterey, CA',
+        green_fee: 200,
+        difficulty: 'challenging',
+        is_public: true,
+      },
+      tier: 'green' as const,
+      tier_position: index + 1,
+      personal_rating: index === 0 ? 10 : 8.5,
+      confidence: 0.4,
+      confidence_label: 'low' as const,
+    })),
     unranked_courses: [],
   }
 }
