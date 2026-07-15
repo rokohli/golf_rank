@@ -13,6 +13,7 @@ from .models import (
     ActivityEvent,
     RankingConfidence,
     RankingSnapshot,
+    Round,
     TierAssignment,
     User,
     UserCourseRating,
@@ -193,18 +194,42 @@ def _stage_snapshot(session: Session, user_id: int) -> RankingSnapshotOut:
         for assignment in unranked_assignments
     ]
     entries_by_course = {entry["course"]["id"]: entry for entry in entries}
-    for projection in session.scalars(
-        select(UserCourseRating).where(UserCourseRating.user_id == user_id)
-    ).all():
-        entry = entries_by_course.get(projection.course_id)
+    projections_by_course = {
+        projection.course_id: projection
+        for projection in session.scalars(
+            select(UserCourseRating).where(UserCourseRating.user_id == user_id)
+        ).all()
+    }
+    for course_id, projection in projections_by_course.items():
+        entry = entries_by_course.get(course_id)
         if entry is None:
             # The rating-owned round remains as history; only its current
             # personal/community rating projection is removed.
             session.delete(projection)
-            continue
+    for course_id, entry in entries_by_course.items():
+        projection = projections_by_course.get(course_id)
+        if projection is None:
+            rating_round = session.scalar(
+                select(Round)
+                .where(
+                    Round.user_id == user_id,
+                    Round.course_id == course_id,
+                    Round.is_rating_round.is_(True),
+                )
+                .order_by(Round.updated_at.desc(), Round.id.desc())
+                .limit(1)
+            )
+            if rating_round is None:
+                continue
+            projection = UserCourseRating(
+                user_id=user_id,
+                course_id=course_id,
+                round_id=rating_round.id,
+            )
         projection.tier = entry["tier"]
         projection.rating = entry["personal_rating"]
         projection.confidence = entry["confidence"]
+        session.add(projection)
     snapshot = RankingSnapshot(
         user_id=user_id,
         version=version,

@@ -354,6 +354,24 @@ def test_ranking_routes_keep_rating_projections_and_aggregates_in_sync() -> None
     with app.state.session_factory() as session:
         assert session.scalar(select(func.count(Round.id)).where(Round.course_id == 2)) == 1
 
+    reranked = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=ALICE,
+        json={"assignments": [{"course_id": 2, "tier": "green", "position": 2}]},
+    )
+    assert reranked.status_code == 200
+    restored = client.get("/api/v1/me/course-ratings/2", headers=ALICE).json()
+    assert restored["tier"] == "green"
+    assert restored["personal_rating"] == 8.5
+    assert restored["community_rating"] == 8.5
+    assert restored["rating_count"] == 1
+    assert restored["round"]["id"] == course_two["round"]["id"]
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count(Round.id)).where(Round.course_id == 2)) == 1
+        assert session.scalar(
+            select(func.count(UserCourseRating.id)).where(UserCourseRating.course_id == 2)
+        ) == 1
+
 
 def test_rating_revision_preserves_same_tier_order_until_decisive_comparison() -> None:
     client = TestClient(create_app())
