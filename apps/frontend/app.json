@@ -9,7 +9,13 @@
       "expo-secure-store",
       "expo-web-browser",
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow GolfRank to let you choose a guest from your contacts."
+        }
+      ]
     ]
   }
 }

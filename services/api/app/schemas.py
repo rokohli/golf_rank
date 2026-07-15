@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class OnboardingData(BaseModel):
@@ -51,11 +51,80 @@ class CourseOut(BaseModel):
     green_fee: int
     difficulty: str
     is_public: bool
+    community_rating: float | None = None
+    rating_count: int = 0
 
 
-RankingTier = Literal["loved_it", "liked_it", "fine", "no"]
-PlacementTier = Literal["loved_it", "liked_it", "fine", "no", "not_sure"]
+RankingTier = Literal["green", "fairway", "rough", "bunker"]
+PlacementTier = Literal["green", "fairway", "rough", "bunker", "not_sure"]
 ComparisonResult = Literal["course_a", "course_b", "too_close", "not_sure"]
+
+
+class CourseRatingIn(BaseModel):
+    tier: RankingTier
+    played_on: date
+    score: int | None = Field(default=None, ge=40, le=250)
+    comparison_course_id: int | None = Field(default=None, gt=0)
+    comparison_result: ComparisonResult | None = None
+
+    @field_validator("played_on")
+    @classmethod
+    def played_round_cannot_be_in_future(cls, value: date) -> date:
+        if value > date.today():
+            raise ValueError("played_on cannot be in the future")
+        return value
+
+    @model_validator(mode="after")
+    def comparison_fields_are_paired(self) -> "CourseRatingIn":
+        if (self.comparison_course_id is None) != (self.comparison_result is None):
+            raise ValueError(
+                "comparison_course_id and comparison_result must be provided together"
+            )
+        return self
+
+
+class RatingDetailsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str | None = Field(default=None, max_length=5000)
+    favorite_hole: int | None = Field(default=None, ge=1, le=18)
+    friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
+    guest_names: list[str] = Field(default_factory=list, max_length=20)
+    visibility: Literal["private", "friends"] = "private"
+
+    @field_validator("guest_names")
+    @classmethod
+    def validate_guest_names(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not value.strip():
+                raise ValueError("guest names cannot be blank")
+            if len(value.strip()) > 120:
+                raise ValueError("guest names cannot exceed 120 characters")
+        return values
+
+
+class RatingRoundOut(BaseModel):
+    id: int
+    played_on: date
+    score: int | None
+    note: str | None
+    favorite_hole: int | None
+    visibility: Literal["private", "friends"]
+
+
+class RatingCompanionOut(BaseModel):
+    friend_user_id: int | None = None
+    guest_name: str | None = None
+
+
+class CourseRatingStateOut(BaseModel):
+    course: CourseOut
+    personal_rating: float | None = None
+    tier: RankingTier | None = None
+    confidence: float | None = None
+    community_rating: float | None = None
+    rating_count: int = 0
+    round: RatingRoundOut | None = None
+    companions: list[RatingCompanionOut] = Field(default_factory=list)
 
 
 class TierPlacementIn(BaseModel):

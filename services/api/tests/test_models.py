@@ -1,8 +1,22 @@
+from datetime import date
+from pathlib import Path
+
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.db import make_engine, make_session_factory
-from app.models import Base, OnboardingPreference, User
+from app.models import (
+    Base,
+    Course,
+    OnboardingPreference,
+    Round,
+    RoundCompanion,
+    User,
+    UserCourseRating,
+)
 
 
 def test_user_has_one_onboarding_preference() -> None:
@@ -24,3 +38,219 @@ def test_user_has_one_onboarding_preference() -> None:
 
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+def test_current_rating_and_round_memories_persist_with_constraints() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys = ON")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+
+    with session_factory() as session:
+        course = Course(
+            name="Pebble Beach Golf Links",
+            region="Monterey, CA",
+            latitude=36.568,
+            longitude=-121.95,
+            is_public=True,
+            difficulty="challenging",
+            green_fee=625,
+        )
+        other_course = Course(
+            name="Spyglass Hill Golf Course",
+            region="Monterey, CA",
+            latitude=36.583,
+            longitude=-121.959,
+            is_public=True,
+            difficulty="challenging",
+            green_fee=495,
+        )
+        golfer = User(provider_subject="dev:golfer")
+        friend = User(provider_subject="dev:friend")
+        session.add_all([course, other_course, golfer, friend])
+        session.flush()
+
+        round_ = Round(
+            user_id=golfer.id,
+            course_id=course.id,
+            played_on=date(2026, 7, 14),
+            score=82,
+            favorite_hole=7,
+        )
+        same_course_round = Round(
+            user_id=golfer.id,
+            course_id=course.id,
+            played_on=date(2026, 7, 15),
+        )
+        other_round = Round(
+            user_id=friend.id,
+            course_id=other_course.id,
+            played_on=date(2026, 7, 16),
+        )
+        session.add_all([round_, same_course_round, other_round])
+        session.flush()
+
+        rating = UserCourseRating(
+            user_id=golfer.id,
+            course_id=course.id,
+            round_id=round_.id,
+            tier="green",
+            rating=9.2,
+            confidence=0.85,
+        )
+        friend_companion = RoundCompanion(round_id=round_.id, friend_user_id=friend.id)
+        guest_companion = RoundCompanion(round_id=round_.id, guest_name="Sam")
+        session.add_all([rating, friend_companion, guest_companion])
+        session.commit()
+
+        assert session.get(Round, round_.id).favorite_hole == 7
+        assert session.get(Round, round_.id).is_rating_round is False
+        stored_rating = session.get(UserCourseRating, rating.id)
+        assert stored_rating.tier == "green"
+        assert stored_rating.rating == pytest.approx(9.2)
+        assert stored_rating.confidence == pytest.approx(0.85)
+        assert stored_rating.updated_at is not None
+        assert session.get(RoundCompanion, friend_companion.id).friend_user_id == friend.id
+        assert session.get(RoundCompanion, guest_companion.id).guest_name == "Sam"
+        assert "phone" not in {
+            column["name"] for column in inspect(engine).get_columns("round_companions")
+        }
+
+        session.add(
+            UserCourseRating(
+                user_id=golfer.id,
+                course_id=course.id,
+                round_id=same_course_round.id,
+                tier="fairway",
+                rating=7.5,
+                confidence=0.5,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        session.add(
+            UserCourseRating(
+                user_id=golfer.id,
+                course_id=other_course.id,
+                round_id=other_round.id,
+                tier="rough",
+                rating=6.0,
+                confidence=0.4,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        session.add(
+            UserCourseRating(
+                user_id=golfer.id,
+                course_id=course.id,
+                round_id=round_.id,
+                tier="green",
+                rating=9.0,
+                confidence=0.9,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        session.add(RoundCompanion(round_id=round_.id, guest_name="Alex", friend_user_id=friend.id))
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        session.add(RoundCompanion(round_id=round_.id))
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_rating_experience_migration_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database_path = tmp_path / "rating-experience.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    api_root = Path(__file__).parents[1]
+    config = Config(str(api_root / "alembic.ini"))
+    config.set_main_option("script_location", str(api_root / "alembic"))
+
+    command.upgrade(config, "0004_product_domains")
+    engine = make_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO users (id, provider_subject) VALUES (1, 'migration:test')")
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO courses
+                    (id, name, region, latitude, longitude, is_public, difficulty, green_fee)
+                VALUES
+                    (1, 'Course 1', 'CA', 0, 0, 1, 'any', 1),
+                    (2, 'Course 2', 'CA', 0, 0, 1, 'any', 1),
+                    (3, 'Course 3', 'CA', 0, 0, 1, 'any', 1),
+                    (4, 'Course 4', 'CA', 0, 0, 1, 'any', 1)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tier_assignments
+                    (user_id, course_id, tier, ordinal_position)
+                VALUES
+                    (1, 1, 'loved_it', 1),
+                    (1, 2, 'liked_it', 2),
+                    (1, 3, 'fine', 3),
+                    (1, 4, 'no', 4)
+                """
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "0005_rating_experience")
+    engine = make_engine(database_url)
+    inspector = inspect(engine)
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT tier FROM tier_assignments ORDER BY ordinal_position")
+        ).scalars().all() == ["green", "fairway", "rough", "bunker"]
+    round_columns = {column["name"]: column for column in inspector.get_columns("rounds")}
+    assert "favorite_hole" in round_columns
+    assert round_columns["is_rating_round"]["nullable"] is False
+    assert round_columns["is_rating_round"]["default"] is not None
+    assert {"user_course_ratings", "round_companions"}.issubset(inspector.get_table_names())
+    assert "uq_round_id_user_course" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("rounds")
+    }
+    ownership_fk = next(
+        foreign_key
+        for foreign_key in inspector.get_foreign_keys("user_course_ratings")
+        if foreign_key["name"] == "fk_user_course_rating_round_owner"
+    )
+    assert ownership_fk["constrained_columns"] == ["round_id", "user_id", "course_id"]
+    assert ownership_fk["referred_columns"] == ["id", "user_id", "course_id"]
+    assert "ix_user_course_ratings_round_id" not in {
+        index["name"] for index in inspector.get_indexes("user_course_ratings")
+    }
+    assert "phone" not in {
+        column["name"] for column in inspector.get_columns("round_companions")
+    }
+    engine.dispose()
+
+    command.downgrade(config, "0004_product_domains")
+    engine = make_engine(database_url)
+    inspector = inspect(engine)
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT tier FROM tier_assignments ORDER BY ordinal_position")
+        ).scalars().all() == ["loved_it", "liked_it", "fine", "no"]
+    round_column_names = {column["name"] for column in inspector.get_columns("rounds")}
+    assert "favorite_hole" not in round_column_names
+    assert "is_rating_round" not in round_column_names
+    assert {"user_course_ratings", "round_companions"}.isdisjoint(inspector.get_table_names())
+    engine.dispose()

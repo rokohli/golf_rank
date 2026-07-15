@@ -1,13 +1,15 @@
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
+from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
-from .models import Base, Course, OnboardingPreference, Profile, User
+from .domain import course_data
+from .models import Base, Course, OnboardingPreference, Profile, User, UserCourseRating
 from .plans import router as plans_router
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
@@ -26,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
     app.include_router(ranking_router)
+    app.include_router(course_ratings_router)
     app.include_router(rounds_router)
     app.include_router(course_state_router)
     app.include_router(social_router)
@@ -114,8 +117,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         difficulty: str = "any",
         access: str = "any",
         session: Session = Depends(get_session),
-    ) -> list[Course]:
-        statement = select(Course)
+    ) -> list[dict]:
+        statement = (
+            select(
+                Course,
+                func.avg(UserCourseRating.rating).label("community_rating"),
+                func.count(UserCourseRating.id).label("rating_count"),
+            )
+            .outerjoin(UserCourseRating, UserCourseRating.course_id == Course.id)
+            .group_by(Course.id)
+        )
         if q:
             statement = statement.where(Course.name.ilike(f"%{q}%"))
         if region:
@@ -126,14 +137,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             statement = statement.where(Course.difficulty == difficulty)
         if access != "any":
             statement = statement.where(Course.is_public == (access == "public"))
-        return list(session.scalars(statement.order_by(Course.name)).all())
+        return [
+            {
+                **course_data(stored_course),
+                "community_rating": (
+                    round(float(community_rating), 1)
+                    if community_rating is not None
+                    else None
+                ),
+                "rating_count": int(rating_count),
+            }
+            for stored_course, community_rating, rating_count in session.execute(
+                statement.order_by(Course.name)
+            ).all()
+        ]
 
     @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)
-    def course(course_id: int, session: Session = Depends(get_session)) -> Course:
+    def course(course_id: int, session: Session = Depends(get_session)) -> dict:
         stored_course = session.get(Course, course_id)
         if stored_course is None:
             raise HTTPException(404, "Course not found")
-        return stored_course
+        community_rating, rating_count = session.execute(
+            select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id)).where(
+                UserCourseRating.course_id == course_id
+            )
+        ).one()
+        return {
+            **course_data(stored_course),
+            "community_rating": (
+                round(float(community_rating), 1)
+                if community_rating is not None
+                else None
+            ),
+            "rating_count": int(rating_count),
+        }
 
     return app
 

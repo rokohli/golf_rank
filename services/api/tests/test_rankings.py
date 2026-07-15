@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.main import create_app
+from app.models import RankingSnapshot, User
 
 
 HEADERS = {"X-Development-Subject": "dev:ranker"}
@@ -13,9 +15,9 @@ def test_tier_placements_create_an_ordered_ten_point_ranking() -> None:
         headers=HEADERS,
         json={
             "assignments": [
-                {"course_id": 1, "tier": "loved_it", "position": 1},
-                {"course_id": 2, "tier": "loved_it", "position": 2},
-                {"course_id": 3, "tier": "liked_it", "position": 1},
+                {"course_id": 1, "tier": "green", "position": 1},
+                {"course_id": 2, "tier": "green", "position": 2},
+                {"course_id": 3, "tier": "fairway", "position": 1},
             ]
         },
     )
@@ -35,8 +37,8 @@ def test_decisive_comparison_reorders_within_tier_and_versions_snapshot() -> Non
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
         json={"assignments": [
-            {"course_id": 1, "tier": "loved_it"},
-            {"course_id": 2, "tier": "loved_it"},
+            {"course_id": 1, "tier": "green"},
+            {"course_id": 2, "tier": "green"},
         ]},
     )
 
@@ -64,8 +66,8 @@ def test_uncertain_comparison_preserves_order_and_reduces_confidence() -> None:
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
         json={"assignments": [
-            {"course_id": 1, "tier": "fine"},
-            {"course_id": 2, "tier": "fine"},
+            {"course_id": 1, "tier": "rough"},
+            {"course_id": 2, "tier": "rough"},
         ]},
     )
 
@@ -86,8 +88,8 @@ def test_comparison_requires_two_courses_in_the_same_tier() -> None:
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
         json={"assignments": [
-            {"course_id": 1, "tier": "loved_it"},
-            {"course_id": 2, "tier": "liked_it"},
+            {"course_id": 1, "tier": "green"},
+            {"course_id": 2, "tier": "fairway"},
         ]},
     )
 
@@ -105,7 +107,7 @@ def test_ranking_is_private_to_the_current_user() -> None:
     client.put(
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
-        json={"assignments": [{"course_id": 1, "tier": "loved_it"}]},
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
     )
 
     response = client.get(
@@ -124,7 +126,7 @@ def test_not_sure_holds_course_outside_ranking_without_inventing_a_rating() -> N
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
         json={"assignments": [
-            {"course_id": 1, "tier": "loved_it"},
+            {"course_id": 1, "tier": "green"},
             {"course_id": 2, "tier": "not_sure"},
         ]},
     )
@@ -140,17 +142,80 @@ def test_single_course_tier_move_inserts_at_requested_position() -> None:
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
         json={"assignments": [
-            {"course_id": 1, "tier": "loved_it"},
-            {"course_id": 2, "tier": "loved_it"},
-            {"course_id": 3, "tier": "loved_it"},
+            {"course_id": 1, "tier": "green"},
+            {"course_id": 2, "tier": "green"},
+            {"course_id": 3, "tier": "green"},
         ]},
     )
 
     response = client.put(
         "/api/v1/me/rankings/tiers",
         headers=HEADERS,
-        json={"assignments": [{"course_id": 3, "tier": "loved_it", "position": 1}]},
+        json={"assignments": [{"course_id": 3, "tier": "green", "position": 1}]},
     )
 
     assert response.status_code == 200
     assert [entry["course"]["id"] for entry in response.json()["entries"]] == [3, 1, 2]
+
+
+def test_legacy_snapshot_tiers_are_adapted_without_rewriting_history() -> None:
+    app = create_app()
+    with app.state.session_factory() as session:
+        user = User(provider_subject="dev:legacy-ranker")
+        session.add(user)
+        session.flush()
+        legacy_tiers = ("loved_it", "liked_it", "fine", "no")
+        legacy_ranking_data = {
+            "entries": [
+                {
+                    "rank": rank,
+                    "course": {
+                        "id": rank,
+                        "name": f"Legacy Course {rank}",
+                        "region": "Monterey Bay",
+                        "green_fee": 625,
+                        "difficulty": "challenging",
+                        "is_public": True,
+                    },
+                    "tier": tier,
+                    "tier_position": 1,
+                    "personal_rating": rating,
+                    "confidence": 0.35,
+                    "confidence_label": "low",
+                }
+                for rank, (tier, rating) in enumerate(
+                    zip(legacy_tiers, (9.2, 7.7, 6.0, 3.0), strict=True),
+                    start=1,
+                )
+            ],
+            "unranked_courses": [],
+        }
+        session.add(
+            RankingSnapshot(
+                user_id=user.id,
+                version=1,
+                algorithm_version="tier-linear-v1",
+                overall_confidence=0.35,
+                ranking_data=legacy_ranking_data,
+            )
+        )
+        session.commit()
+
+    response = TestClient(app).get(
+        "/api/v1/me/rankings",
+        headers={"X-Development-Subject": "dev:legacy-ranker"},
+    )
+
+    assert response.status_code == 200
+    assert [entry["tier"] for entry in response.json()["entries"]] == [
+        "green",
+        "fairway",
+        "rough",
+        "bunker",
+    ]
+    with app.state.session_factory() as session:
+        stored = session.scalar(select(RankingSnapshot))
+        assert stored is not None
+        assert [entry["tier"] for entry in stored.ranking_data["entries"]] == list(
+            legacy_tiers
+        )

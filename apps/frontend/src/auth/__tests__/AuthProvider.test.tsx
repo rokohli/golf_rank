@@ -114,6 +114,8 @@ describe('AuthProvider', () => {
 
     expect(screen.getByText(/Your Game/)).toBeOnTheScreen()
     expect(screen.getByText('Get Started')).toBeOnTheScreen()
+    expect(screen.getByText('9.5/10')).toBeOnTheScreen()
+    expect(screen.queryByText('4.8')).toBeNull()
     expect(screen.queryByText('Welcome back.')).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Log In' }))

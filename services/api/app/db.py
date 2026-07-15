@@ -1,18 +1,29 @@
 from collections.abc import Generator
 
 from fastapi import Request
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
 def make_engine(database_url: str) -> Engine:
-    if database_url == "sqlite+pysqlite://":
-        return create_engine(
-            database_url,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
+    if database_url.startswith("sqlite"):
+        if database_url == "sqlite+pysqlite://":
+            engine = create_engine(
+                database_url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
+        else:
+            engine = create_engine(database_url)
+
+        @event.listens_for(engine, "connect")
+        def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        return engine
     return create_engine(database_url, pool_pre_ping=True)
 
 
