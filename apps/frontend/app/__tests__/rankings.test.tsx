@@ -66,6 +66,8 @@ describe('rankings refresh', () => {
 
     expect(await screen.findByText('First Course')).toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Refine my rankings' }))
+    expect(screen.getByRole('button', { name: 'Too close' })).toBeOnTheScreen()
+    expect(screen.queryByRole('button', { name: 'Not sure' })).toBeNull()
     fireEvent.press(screen.getByRole('button', { name: 'Choose second course: Second Course' }))
 
     await waitFor(() => expect(mockSaveComparison).toHaveBeenCalledWith({

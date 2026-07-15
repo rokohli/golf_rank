@@ -69,7 +69,7 @@ class CourseOut(BaseModel):
 
 RankingTier = Literal["green", "fairway", "rough", "bunker"]
 PlacementTier = Literal["green", "fairway", "rough", "bunker", "not_sure"]
-ComparisonResult = Literal["course_a", "course_b", "too_close", "not_sure"]
+ComparisonResult = Literal["course_a", "course_b", "too_close"]
 
 
 class CourseRatingIn(BaseModel):

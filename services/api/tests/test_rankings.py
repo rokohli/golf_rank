@@ -74,12 +74,24 @@ def test_uncertain_comparison_preserves_order_and_reduces_confidence() -> None:
     response = client.post(
         "/api/v1/me/rankings/comparisons",
         headers=HEADERS,
-        json={"course_a_id": 1, "course_b_id": 2, "result": "not_sure"},
+        json={"course_a_id": 1, "course_b_id": 2, "result": "too_close"},
     )
 
     assert response.status_code == 200
     assert [entry["course"]["id"] for entry in response.json()["entries"]] == [1, 2]
     assert all(entry["confidence"] == 0.25 for entry in response.json()["entries"])
+
+
+def test_comparison_rejects_removed_not_sure_result() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/v1/me/rankings/comparisons",
+        headers=HEADERS,
+        json={"course_a_id": 1, "course_b_id": 2, "result": "not_sure"},
+    )
+
+    assert response.status_code == 422
 
 
 def test_comparison_requires_two_courses_in_the_same_tier() -> None:

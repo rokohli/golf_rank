@@ -36,7 +36,7 @@ Pressing **Rate** on an unrated course opens a full-screen guided experience:
 
 1. The user places the course in Green, Fairway, Rough, or Bunker.
 2. The user may add a golf score. The play date defaults to today and remains editable. The score is optional, but the dated round is created because rating the course means it was played.
-3. When a suitable course already exists in the selected tier, the user completes one head-to-head comparison. The choices include either course, Too close, and Not sure.
+3. When a suitable course already exists in the selected tier, the user completes one head-to-head comparison. The choices are either course or Too close.
 4. The app saves the tier placement and comparison, derives the personal `/10` rating, and reveals the result.
 5. The user may add private round details: notes, favorite hole, photos, and playing companions.
 6. The user may explicitly choose to share the rating activity and selected details with friends.

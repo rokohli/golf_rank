@@ -57,7 +57,7 @@ export type TierPlacement = {
   position?: number
 }
 
-export type ComparisonResult = 'course_a' | 'course_b' | 'too_close' | 'not_sure'
+export type ComparisonResult = 'course_a' | 'course_b' | 'too_close'
 
 type CourseRatingCore = {
   tier: RatingTier
