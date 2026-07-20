@@ -377,7 +377,7 @@ def test_deleting_rating_round_removes_its_ranking_evidence_and_restages_snapsho
         assert session.scalar(
             select(func.count(ActivityEvent.id)).where(
                 ActivityEvent.actor_user_id == user_id,
-                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_type.in_(("round", "rating_round")),
                 ActivityEvent.subject_id == round_id,
             )
         ) == 0

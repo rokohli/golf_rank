@@ -260,7 +260,7 @@ def _delete_rating_ranking_evidence(
 def _delete_round_activity_event(session: Session, user_id: int, round_id: int) -> None:
     session.execute(
         delete(ActivityEvent).where(
-            ActivityEvent.subject_type == "round",
+            ActivityEvent.subject_type.in_(("round", "rating_round")),
             ActivityEvent.subject_id == round_id,
             ActivityEvent.actor_user_id == user_id,
         )
