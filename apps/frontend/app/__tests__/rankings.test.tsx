@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
 import Rankings from '../rankings'
-import { RankingSnapshot } from '../../src/types'
+import { FriendRanking, RankingSnapshot } from '../../src/types'
 
 const mockGetRanking = jest.fn()
+const mockGetFriendRankings = jest.fn()
 const mockSaveComparison = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
@@ -39,6 +40,7 @@ jest.mock('expo-router', () => {
 })
 
 jest.mock('../../src/api/client', () => ({
+  getFriendRankings: (...args: unknown[]) => mockGetFriendRankings(...args),
   getRanking: (...args: unknown[]) => mockGetRanking(...args),
   saveComparison: (...args: unknown[]) => mockSaveComparison(...args),
 }))
@@ -56,6 +58,7 @@ describe('rankings refresh', () => {
       'Content-Type': 'application/json',
       Authorization: 'Bearer test-token',
     })
+    mockGetFriendRankings.mockResolvedValue([])
   })
 
   it('refines an eligible same-tier pair and applies the returned ranking', async () => {
@@ -97,6 +100,9 @@ describe('rankings refresh', () => {
     expect(screen.getByText(/9\.2/)).toHaveTextContent(/9\.2 \/ 10/)
     expect(mockGetAuthHeaders).toHaveBeenCalledTimes(1)
     expect(mockGetRanking).toHaveBeenCalledWith(expect.objectContaining({ Authorization: 'Bearer test-token' }))
+    expect(screen.getByText(/Best score:/)).toHaveTextContent('Best score: 82')
+    expect(screen.getByText('Played 3 times')).toBeOnTheScreen()
+    expect(screen.queryByText(/All time/)).toBeNull()
   })
 
   it('fetches and updates the ranking whenever the screen regains focus', async () => {
@@ -222,6 +228,33 @@ describe('rankings refresh', () => {
     expect(screen.queryByText('Pebble Beach Golf Links')).toBeNull()
     expect(screen.queryByText('Refine my rankings')).toBeNull()
   })
+
+  it('loads mutual friends rankings when the Friends tab is selected', async () => {
+    mockGetRanking.mockResolvedValue(rankingSnapshot('My Course'))
+    mockGetFriendRankings.mockResolvedValue(friendRanking())
+
+    render(<Rankings />)
+    expect(await screen.findByText('My Course')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByRole('tab', { name: 'FRIENDS' }))
+
+    expect(await screen.findByText('Maya Chen')).toBeOnTheScreen()
+    expect(screen.getByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+    expect(screen.queryByText('My Course')).toBeNull()
+    expect(mockGetFriendRankings).toHaveBeenCalledWith(expect.objectContaining({ Authorization: 'Bearer test-token' }))
+  })
+
+  it('shows a useful empty friends state', async () => {
+    mockGetRanking.mockResolvedValue(rankingSnapshot('My Course'))
+    mockGetFriendRankings.mockResolvedValue([])
+
+    render(<Rankings />)
+    fireEvent.press(screen.getByRole('tab', { name: 'FRIENDS' }))
+
+    expect(await screen.findByText('No friends’ rankings yet')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Find friends' }))
+    expect(mockPush).toHaveBeenCalledWith('/friends')
+  })
 })
 
 async function refocus() {
@@ -252,6 +285,8 @@ function rankingSnapshot(name?: string, personalRating = 8.5): RankingSnapshot {
       personal_rating: personalRating,
       confidence: 0.9,
       confidence_label: 'high',
+      round_count: 3,
+      best_score: 82,
     }] : [],
     unranked_courses: [],
   }
@@ -277,9 +312,24 @@ function refinableSnapshot(firstName: string, secondName: string): RankingSnapsh
       personal_rating: index === 0 ? 10 : 8.5,
       confidence: 0.4,
       confidence_label: 'low' as const,
+      round_count: index + 1,
+      best_score: 80 + index,
     })),
     unranked_courses: [],
   }
+}
+
+function friendRanking(): FriendRanking[] {
+  return [{
+    user: { id: 7, display_name: 'Maya Chen', username: 'mayagolfs', home_region: 'Santa Cruz, CA' },
+    version: 3,
+    updated_at: '2026-07-17T12:00:00Z',
+    entries: [{
+      rank: 1,
+      course: { id: 3, name: 'Pasatiempo Golf Club', region: 'Santa Cruz, CA', green_fee: 350, difficulty: 'challenging', is_public: true },
+      tier: 'green', tier_position: 1, personal_rating: 9.5, confidence: 0.8, confidence_label: 'high', round_count: 2, best_score: 81,
+    }],
+  }]
 }
 
 function deferred<T>() {

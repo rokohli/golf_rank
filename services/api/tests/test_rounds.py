@@ -21,6 +21,28 @@ ALICE = {"X-Development-Subject": "dev:round-alice"}
 BOB = {"X-Development-Subject": "dev:round-bob"}
 
 
+def _profile(client: TestClient, headers: dict[str, str], first_name: str, username: str) -> None:
+    response = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 700,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": first_name,
+                "last_name": "Golfer",
+                "username": username,
+                "home_course_search": "Pebble Beach",
+                "travel_distance": "Any",
+                "preferred_tee_time": "Morning",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+
 def test_round_crud_keeps_notes_private_and_updates_course_state() -> None:
     client = TestClient(create_app())
     created = client.post(
@@ -69,6 +91,114 @@ def test_round_rejects_future_dates_and_unrealistic_scores() -> None:
         json={"course_id": 1, "played_on": "2099-01-01", "score": 12},
     )
     assert response.status_code == 422
+
+
+def test_repeated_course_visits_are_distinct_and_summary_and_filters_are_derived() -> None:
+    client = TestClient(create_app())
+    first = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2025-12-20",
+            "score": 90,
+            "is_favorite": False,
+        },
+    )
+    second = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-02",
+            "score": 80,
+            "is_favorite": True,
+        },
+    )
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    rounds = client.get("/api/v1/me/rounds", headers=ALICE).json()
+    assert [item["score"] for item in rounds] == [80, 90]
+    assert all(item["course"]["id"] == 1 for item in rounds)
+    assert all(item["is_rating_round"] is False for item in rounds)
+    assert client.get(
+        "/api/v1/me/rounds", headers=ALICE, params={"year": 2026}
+    ).json() == [second.json()]
+    assert client.get(
+        "/api/v1/me/rounds", headers=ALICE, params={"favorites_only": True}
+    ).json() == [second.json()]
+
+    summary = client.get("/api/v1/me/rounds/summary", headers=ALICE)
+    assert summary.status_code == 200
+    assert summary.json()["total_rounds"] == 2
+    assert summary.json()["rounds_this_year"] == 1
+    assert summary.json()["average_score"] == 85.0
+    assert summary.json()["best_score"] == 80
+    assert summary.json()["distinct_courses"] == 1
+    assert summary.json()["latest_round"]["id"] == second.json()["id"]
+
+
+def test_round_companions_and_favorite_hole_can_be_created_and_replaced() -> None:
+    client = TestClient(create_app())
+    _profile(client, ALICE, "Alice", "roundalice")
+    _profile(client, BOB, "Bob", "roundbob")
+    bob_id = client.get("/api/v1/users", headers=ALICE, params={"q": "roundbob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=ALICE).status_code == 200
+
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "favorite_hole": 7,
+            "friend_user_ids": [bob_id, bob_id],
+            "guest_names": [" Alex ", "Alex"],
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["favorite_hole"] == 7
+    assert created.json()["companions"] == [
+        {"friend_user_id": bob_id, "display_name": "Bob Golfer", "guest_name": None},
+        {"friend_user_id": None, "display_name": None, "guest_name": "Alex"},
+    ]
+
+    updated = client.patch(
+        f"/api/v1/me/rounds/{created.json()['id']}",
+        headers=ALICE,
+        json={"favorite_hole": None, "friend_user_ids": [], "guest_names": ["Jordan"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["favorite_hole"] is None
+    assert updated.json()["companions"] == [
+        {"friend_user_id": None, "display_name": None, "guest_name": "Jordan"}
+    ]
+
+    partial_companions = client.patch(
+        f"/api/v1/me/rounds/{created.json()['id']}",
+        headers=ALICE,
+        json={"guest_names": []},
+    )
+    assert partial_companions.status_code == 422
+
+
+def test_round_rejects_companion_who_is_not_followed() -> None:
+    client = TestClient(create_app())
+    _profile(client, ALICE, "Alice", "aliceunfollowed")
+    _profile(client, BOB, "Bob", "bobunfollowed")
+    bob_id = client.get("/api/v1/users", headers=ALICE, params={"q": "bobunfollowed"}).json()[0]["id"]
+    response = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "friend_user_ids": [bob_id],
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "All friend_user_ids must be followed users"
 
 
 def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
@@ -247,7 +377,7 @@ def test_deleting_rating_round_removes_its_ranking_evidence_and_restages_snapsho
         assert session.scalar(
             select(func.count(ActivityEvent.id)).where(
                 ActivityEvent.actor_user_id == user_id,
-                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_type.in_(("round", "rating_round")),
                 ActivityEvent.subject_id == round_id,
             )
         ) == 0

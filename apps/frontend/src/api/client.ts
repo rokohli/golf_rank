@@ -8,12 +8,17 @@ import {
   FriendSummary,
   FeedPage,
   Follow,
+  GolfRound,
   OnboardingPreferences,
   RankingComparison,
   RankingSnapshot,
+  FriendRanking,
   RatingCandidate,
   RatingDetailsInput,
   RatingTier,
+  RoundInput,
+  RoundPatch,
+  RoundSummary,
   SavedList,
   TierPlacement,
   UserSummary,
@@ -62,7 +67,7 @@ export async function searchCourses(filters?: OnboardingPreferences | CourseSear
     for (const key of ['q', 'region', 'country', 'admin1', 'city'] as const) {
       if (filters[key]) params.set(key, String(filters[key]))
     }
-    for (const key of ['lat', 'lng', 'radius_miles', 'cursor', 'limit'] as const) {
+    for (const key of ['lat', 'lng', 'radius_miles', 'cursor', 'offset', 'limit'] as const) {
       if (filters[key] !== undefined) params.set(key, String(filters[key]))
     }
   }
@@ -132,9 +137,63 @@ export async function removeCourseFromList(listId: number, courseId: number, hea
   if (!response.ok) throw await responseError(response, 'Unable to remove this saved course. Please try again.')
 }
 
+export async function getRounds(
+  headers: ApiHeaders,
+  filters: { limit?: number; offset?: number; year?: number; favorites_only?: boolean } = {},
+): Promise<GolfRound[]> {
+  const params = new URLSearchParams()
+  for (const key of ['limit', 'offset', 'year'] as const) {
+    if (filters[key] !== undefined) params.set(key, String(filters[key]))
+  }
+  if (filters.favorites_only) params.set('favorites_only', 'true')
+  const query = params.toString()
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds${query ? `?${query}` : ''}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load your rounds. Please try again.')
+  return response.json()
+}
+
+export async function getRound(roundId: number, headers: ApiHeaders): Promise<GolfRound> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds/${roundId}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load this round. Please try again.')
+  return response.json()
+}
+
+export async function getRoundSummary(headers: ApiHeaders): Promise<RoundSummary> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds/summary`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load round statistics. Please try again.')
+  return response.json()
+}
+
+export async function createRound(input: RoundInput, headers: ApiHeaders): Promise<GolfRound> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds`, {
+    method: 'POST', headers, body: JSON.stringify(input),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to log this round. Please try again.')
+  return response.json()
+}
+
+export async function updateRound(roundId: number, input: RoundPatch, headers: ApiHeaders): Promise<GolfRound> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds/${roundId}`, {
+    method: 'PATCH', headers, body: JSON.stringify(input),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to update this round. Please try again.')
+  return response.json()
+}
+
+export async function deleteRound(roundId: number, headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rounds/${roundId}`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to delete this round. Please try again.')
+}
+
 export async function getRanking(headers: ApiHeaders): Promise<RankingSnapshot> {
   const response = await fetch(`${baseUrl}/api/v1/me/rankings`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load your rankings. Please try again.')
+  return response.json()
+}
+
+export async function getFriendRankings(headers: ApiHeaders): Promise<FriendRanking[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/rankings/friends`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load your friends’ rankings. Please try again.')
   return response.json()
 }
 

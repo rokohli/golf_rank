@@ -1,6 +1,4 @@
 import { Feather } from '@expo/vector-icons'
-import * as Contacts from 'expo-contacts'
-import * as SMS from 'expo-sms'
 import { useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -33,16 +31,6 @@ type Guest = { name: string; phone: string | null }
 type Stage = 'tier' | 'round' | 'comparison' | 'reveal'
 type RoundEditor = 'played' | 'score' | 'notes' | 'favorite' | 'people' | null
 
-export type ContactsAdapter = {
-  requestPermission: () => Promise<'granted' | 'denied'>
-  pickContact: () => Promise<Guest | null>
-}
-
-export type SmsAdapter = {
-  isAvailable: () => Promise<boolean>
-  send: (phone: string, message: string) => Promise<void>
-}
-
 export type RatingFlowProps = {
   course: Course
   initialRating: CourseRatingState
@@ -51,9 +39,6 @@ export type RatingFlowProps = {
   saveRating: (input: CourseRatingInput) => Promise<CourseRatingState>
   saveDetails: (input: RatingDetailsInput) => Promise<CourseRatingState>
   onClose: () => void
-  contacts?: ContactsAdapter
-  sms?: SmsAdapter
-  platform?: 'android' | 'ios' | 'web'
   today?: string
 }
 
@@ -77,27 +62,6 @@ function localToday() {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
-const defaultContacts: ContactsAdapter = {
-  async requestPermission() {
-    const response = await Contacts.requestPermissionsAsync()
-    return response.status === 'granted' ? 'granted' : 'denied'
-  },
-  async pickContact() {
-    const contact = await Contacts.presentContactPickerAsync()
-    if (!contact) return null
-    const name = contact.name?.trim() || [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim()
-    if (!name) return null
-    return { name, phone: contact.phoneNumbers?.[0]?.number ?? null }
-  },
-}
-
-const defaultSms: SmsAdapter = {
-  isAvailable: SMS.isAvailableAsync,
-  async send(phone, message) {
-    await SMS.sendSMSAsync(phone, message)
-  },
-}
-
 export function RatingFlow({
   course,
   initialRating,
@@ -106,9 +70,6 @@ export function RatingFlow({
   saveRating,
   saveDetails,
   onClose,
-  contacts = defaultContacts,
-  sms = defaultSms,
-  platform = Platform.OS as 'android' | 'ios' | 'web',
   today = localToday(),
 }: RatingFlowProps) {
   const initialFriendIds = initialRating.companions.flatMap((item) => item.friend_user_id == null ? [] : [item.friend_user_id])
@@ -136,7 +97,8 @@ export function RatingFlow({
   const [note, setNote] = useState(initialRating.round?.note ?? '')
   const [favoriteHole, setFavoriteHole] = useState(initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole))
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
-  const [guests, setGuests] = useState<Guest[]>(initialGuests)
+  const [friendQuery, setFriendQuery] = useState('')
+  const [guests] = useState<Guest[]>(initialGuests)
   const [shareWithFriends, setShareWithFriends] = useState(initialRating.round?.visibility === 'friends')
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
@@ -145,6 +107,12 @@ export function RatingFlow({
   const savingRef = useRef(false)
 
   const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
+  const visibleFriends = useMemo(() => {
+    const normalized = friendQuery.trim().toLocaleLowerCase()
+    if (normalized) return friends.filter((friend) => `${friend.display_name} ${friend.username ?? ''}`.toLocaleLowerCase().includes(normalized)).slice(0, 6)
+    const selected = friends.filter((friend) => friendIds.includes(friend.id))
+    return [...selected, ...friends].filter((friend, index, items) => items.findIndex((item) => item.id === friend.id) === index).slice(0, 4)
+  }, [friendIds, friendQuery, friends])
   const detailsChanged = JSON.stringify(detailsBaseline) !== JSON.stringify(currentDetails)
   const playedOn = parseUsDate(playedOnInput)
   const coreUnchanged = coreBaseline.tier === tier
@@ -234,34 +202,6 @@ export function RatingFlow({
     setBusy(false)
   }
 
-  async function addGuest() {
-    setGuestMessage(null)
-    try {
-      if (platform === 'android' && await contacts.requestPermission() !== 'granted') {
-        setGuestMessage('Contacts permission was denied. You can continue without adding a guest.')
-        return
-      }
-      const contact = await contacts.pickContact()
-      if (contact) setGuests((current) => current.some((guest) => guest.name === contact.name) ? current : [...current, contact])
-    } catch {
-      setGuestMessage('Unable to open contacts on this device.')
-    }
-  }
-
-  async function sendInvite(guest: Guest) {
-    if (!guest.phone) return
-    setGuestMessage(null)
-    try {
-      if (!await sms.isAvailable()) {
-        setGuestMessage('Text messaging is unavailable on this device.')
-        return
-      }
-      await sms.send(guest.phone, `Join me on GolfRank to rate ${course.name}.`)
-    } catch {
-      setGuestMessage('Unable to open the text message composer.')
-    }
-  }
-
   const title = useMemo(() => {
     if (stage === 'tier') return 'Where does it sit?'
     if (stage === 'round') return 'About the round'
@@ -290,7 +230,7 @@ export function RatingFlow({
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView behavior={platform === 'ios' ? 'padding' : undefined} style={styles.safe}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.safe}>
         <View style={styles.header}>
           <Pressable accessibilityLabel="Go back" accessibilityRole="button" hitSlop={8} onPress={goBack} style={styles.iconButton}>
             <Feather name="arrow-left" size={21} color={colors.ink} />
@@ -339,17 +279,16 @@ export function RatingFlow({
                 <RoundRow expanded={roundEditor === 'score'} icon="file-text" label="Score" onPress={() => toggleEditor('score')} />
                 {roundEditor === 'score' ? <InlineField accessibilityLabel="Golf score" keyboardType="number-pad" value={score} onChangeText={setScore} placeholder="e.g. 82" /> : null}
                 <RoundRow expanded={roundEditor === 'notes'} icon="edit-3" label="Notes" onPress={() => toggleEditor('notes')} />
-                {roundEditor === 'notes' ? <InlineField accessibilityLabel="Notes (optional)" multiline value={note} onChangeText={setNote} placeholder="What stood out?" /> : null}
+                {roundEditor === 'notes' ? <InlineField accessibilityLabel="Round notes" multiline value={note} onChangeText={setNote} placeholder="What stood out?" /> : null}
                 <RoundRow expanded={roundEditor === 'favorite'} icon="flag" label="Favorite hole" onPress={() => toggleEditor('favorite')} />
-                {roundEditor === 'favorite' ? <InlineField accessibilityLabel="Favorite hole (optional)" keyboardType="number-pad" value={favoriteHole} onChangeText={setFavoriteHole} placeholder="1–18" /> : null}
-                <RoundRow expanded={roundEditor === 'people'} icon="users" label="Who joined" onPress={() => toggleEditor('people')} />
+                {roundEditor === 'favorite' ? <InlineField accessibilityLabel="Round favorite hole" keyboardType="number-pad" value={favoriteHole} onChangeText={setFavoriteHole} placeholder="1–18" /> : null}
+                <RoundRow expanded={roundEditor === 'people'} icon="users" label="Friends" onPress={() => toggleEditor('people')} />
                 {roundEditor === 'people' ? <View style={styles.peopleEditor}>
-                  {friends.length ? <View style={styles.friendWrap}>{friends.map((friend) => {
+                  {friends.length > 4 ? <View style={styles.friendSearch}><Feather name="search" size={14} color={colors.muted} /><TextInput accessibilityLabel="Search friends" onChangeText={setFriendQuery} placeholder="Search your friends" placeholderTextColor={colors.muted} style={styles.friendSearchInput} value={friendQuery} /></View> : null}
+                  {friends.length ? <View style={styles.friendWrap}>{visibleFriends.map((friend) => {
                     const selected = friendIds.includes(friend.id)
                     return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
                   })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
-                  <Pressable accessibilityLabel="Add guest" accessibilityRole="button" onPress={addGuest} style={styles.smallTextControl}><Text style={styles.addGuest}>+ Add guest</Text></Pressable>
-                  {guests.map((guest) => <View key={guest.name} style={styles.guestRow}><Text style={styles.guestName}>{guest.name}</Text>{guest.phone ? <Pressable accessibilityLabel={`Send invite to ${guest.name}`} accessibilityRole="button" onPress={() => sendInvite(guest)} style={styles.smallTextControl}><Text style={styles.addGuest}>Send invite</Text></Pressable> : null}</View>)}
                   <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with friends</Text><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
                 </View> : null}
                 <RoundRow icon="camera" label="Photos" onPress={() => setGuestMessage('Photo upload is coming soon.')} />
@@ -500,15 +439,13 @@ const styles = StyleSheet.create({
   inlineField: { backgroundColor: '#FFFFFF', borderColor: '#D8D3C7', borderRadius: 4, borderWidth: StyleSheet.hairlineWidth, color: colors.ink, fontSize: 15, minHeight: 46, paddingHorizontal: 13, paddingVertical: 11 },
   multiline: { minHeight: 92, textAlignVertical: 'top' },
   peopleEditor: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, padding: 14 },
+  friendSearch: { alignItems: 'center', borderColor: colors.line, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 11 },
+  friendSearchInput: { color: colors.ink, flex: 1, fontSize: 11, paddingVertical: 7 },
   friendWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   friendChip: { borderColor: '#C9CBC5', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 8 },
   friendChipSelected: { backgroundColor: colors.pine, borderColor: colors.pine },
   friendChipText: { color: colors.ink, fontSize: 11, fontWeight: '700' },
   friendChipTextSelected: { color: '#FFFFFF' },
-  smallTextControl: { alignItems: 'center', alignSelf: 'flex-start', justifyContent: 'center', minHeight: 40 },
-  addGuest: { color: colors.pine, fontSize: 12, fontWeight: '800' },
-  guestRow: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 42 },
-  guestName: { color: colors.ink, fontSize: 13 },
   switchRow: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8 },
   shareLabel: { color: colors.ink, fontSize: 12, fontWeight: '700' },
   help: { color: colors.muted, fontSize: 11, lineHeight: 16 },

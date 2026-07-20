@@ -11,14 +11,24 @@ from .models import (
     Comparison,
     Course,
     ActivityEvent,
+    Follow,
+    OnboardingPreference,
+    Profile,
     RankingConfidence,
     RankingSnapshot,
     Round,
     TierAssignment,
     User,
+    UserBlock,
     UserCourseRating,
 )
-from .schemas import ComparisonIn, RankingSnapshotOut, TierPlacementsIn
+from .schemas import (
+    ComparisonIn,
+    FriendRankingOut,
+    FriendRankingUserOut,
+    RankingSnapshotOut,
+    TierPlacementsIn,
+)
 
 
 router = APIRouter(prefix="/api/v1/me/rankings", tags=["rankings"])
@@ -46,6 +56,26 @@ def _adapt_snapshot_entries(entries: list[dict]) -> list[dict]:
     ]
 
 
+def _with_round_stats(session: Session, user_id: int, entries: list[dict]) -> list[dict]:
+    course_ids = [entry["course"]["id"] for entry in entries]
+    if not course_ids:
+        return entries
+    rows = session.execute(
+        select(Round.course_id, func.count(Round.id), func.min(Round.score))
+        .where(Round.user_id == user_id, Round.course_id.in_(course_ids))
+        .group_by(Round.course_id)
+    ).all()
+    stats = {course_id: (int(count), int(best) if best is not None else None) for course_id, count, best in rows}
+    return [
+        {
+            **entry,
+            "round_count": stats.get(entry["course"]["id"], (0, None))[0],
+            "best_score": stats.get(entry["course"]["id"], (0, None))[1],
+        }
+        for entry in entries
+    ]
+
+
 def _stored_user(session: Session, user: CurrentUser, *, create: bool) -> User | None:
     stored = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
     if stored is None and create:
@@ -53,6 +83,31 @@ def _stored_user(session: Session, user: CurrentUser, *, create: bool) -> User |
         session.add(stored)
         session.flush()
     return stored
+
+
+def _blocked_ids(session: Session, user_id: int) -> set[int]:
+    blocked = session.scalars(
+        select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)
+    ).all()
+    blockers = session.scalars(
+        select(UserBlock.blocker_id).where(UserBlock.blocked_id == user_id)
+    ).all()
+    return set(blocked) | set(blockers)
+
+
+def _friend_identity(session: Session, user: User) -> FriendRankingUserOut:
+    preferences = session.get(OnboardingPreference, user.id)
+    profile = session.get(Profile, user.id)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    display_name = " ".join(
+        value for value in (onboarding.get("first_name"), onboarding.get("last_name")) if value
+    ).strip()
+    return FriendRankingUserOut(
+        id=user.id,
+        display_name=display_name or f"Golfer {user.id}",
+        username=onboarding.get("username"),
+        home_region=profile.home_region if profile else None,
+    )
 
 
 def _lock_user_for_ranking_update(session: Session, user_id: int) -> None:
@@ -232,6 +287,7 @@ def _stage_snapshot(
         projection.rating = entry["personal_rating"]
         projection.confidence = entry["confidence"]
         session.add(projection)
+    entries = _with_round_stats(session, user_id, entries)
     snapshot = RankingSnapshot(
         user_id=user_id,
         version=version,
@@ -291,7 +347,9 @@ def get_ranking(
             entries=[],
             unranked_courses=[],
         )
-    entries = _adapt_snapshot_entries(latest.ranking_data["entries"])
+    entries = _with_round_stats(
+        session, stored.id, _adapt_snapshot_entries(latest.ranking_data["entries"])
+    )
     return RankingSnapshotOut(
         version=latest.version,
         algorithm_version=latest.algorithm_version,
@@ -300,6 +358,47 @@ def get_ranking(
         unranked_courses=latest.ranking_data.get("unranked_courses", []),
         created_at=latest.created_at,
     )
+
+
+@router.get("/friends", response_model=list[FriendRankingOut])
+def get_friend_rankings(
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[FriendRankingOut]:
+    stored = _stored_user(session, user, create=False)
+    if stored is None:
+        return []
+
+    following = set(session.scalars(
+        select(Follow.followed_id).where(Follow.follower_id == stored.id)
+    ).all())
+    followers = set(session.scalars(
+        select(Follow.follower_id).where(Follow.followed_id == stored.id)
+    ).all())
+    friend_ids = sorted((following & followers) - _blocked_ids(session, stored.id))
+    output: list[FriendRankingOut] = []
+    for friend_id in friend_ids:
+        friend = session.get(User, friend_id)
+        if friend is None:
+            continue
+        latest = session.scalar(
+            select(RankingSnapshot)
+            .where(RankingSnapshot.user_id == friend_id)
+            .order_by(RankingSnapshot.version.desc())
+            .limit(1)
+        )
+        entries = [] if latest is None else _with_round_stats(
+            session,
+            friend_id,
+            _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
+        )
+        output.append(FriendRankingOut(
+            user=_friend_identity(session, friend),
+            version=latest.version if latest else 0,
+            entries=entries,
+            updated_at=latest.created_at if latest else None,
+        ))
+    return output
 
 
 @router.put("/tiers", response_model=RankingSnapshotOut)

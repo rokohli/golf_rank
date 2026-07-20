@@ -1,6 +1,6 @@
 import * as Location from 'expo-location'
 
-export const CALIFORNIA_FALLBACK_REGION = 'All California'
+export const DEFAULT_COURSE_REGION = 'All regions'
 
 export type CurrentRegion = {
   label: string

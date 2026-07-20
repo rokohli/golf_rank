@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -13,10 +13,14 @@ from .models import (
     ActivityEvent,
     Comparison,
     Course,
+    Follow,
+    OnboardingPreference,
     RankingConfidence,
     Round,
+    RoundCompanion,
     RoundNote,
     TierAssignment,
+    User,
     UserCourseState,
 )
 from .schemas import CourseOut
@@ -28,11 +32,17 @@ Visibility = Literal["private", "friends", "public"]
 
 
 class RoundIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     course_id: int = Field(gt=0)
     played_on: date
     score: int | None = Field(default=None, ge=40, le=250)
     note: str | None = Field(default=None, max_length=5000)
+    favorite_hole: int | None = Field(default=None, ge=1, le=18)
+    friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
+    guest_names: list[str] = Field(default_factory=list, max_length=20)
     visibility: Visibility = "friends"
+    is_favorite: bool = False
 
     @field_validator("played_on")
     @classmethod
@@ -41,12 +51,26 @@ class RoundIn(BaseModel):
             raise ValueError("played_on cannot be in the future")
         return value
 
+    @field_validator("guest_names")
+    @classmethod
+    def normalize_guest_names(cls, values: list[str]) -> list[str]:
+        names = list(dict.fromkeys(value.strip() for value in values))
+        if any(not name or len(name) > 120 for name in names):
+            raise ValueError("guest names must be between 1 and 120 characters")
+        return names
+
 
 class RoundPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     played_on: date | None = None
     score: int | None = Field(default=None, ge=40, le=250)
     note: str | None = Field(default=None, max_length=5000)
+    favorite_hole: int | None = Field(default=None, ge=1, le=18)
+    friend_user_ids: list[int] | None = Field(default=None, max_length=40)
+    guest_names: list[str] | None = Field(default=None, max_length=20)
     visibility: Visibility | None = None
+    is_favorite: bool | None = None
 
     @field_validator("played_on")
     @classmethod
@@ -55,6 +79,29 @@ class RoundPatch(BaseModel):
             raise ValueError("played_on cannot be in the future")
         return value
 
+    @field_validator("guest_names")
+    @classmethod
+    def normalize_guest_names(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        names = list(dict.fromkeys(value.strip() for value in values))
+        if any(not name or len(name) > 120 for name in names):
+            raise ValueError("guest names must be between 1 and 120 characters")
+        return names
+
+    @model_validator(mode="after")
+    def companion_lists_are_updated_together(self) -> "RoundPatch":
+        supplied = self.model_fields_set
+        if ("friend_user_ids" in supplied) != ("guest_names" in supplied):
+            raise ValueError("friend_user_ids and guest_names must be supplied together")
+        return self
+
+
+class RoundCompanionOut(BaseModel):
+    friend_user_id: int | None
+    display_name: str | None
+    guest_name: str | None
+
 
 class RoundOut(BaseModel):
     id: int
@@ -62,9 +109,22 @@ class RoundOut(BaseModel):
     played_on: date
     score: int | None
     note: str | None
+    favorite_hole: int | None
+    companions: list[RoundCompanionOut]
     visibility: Visibility
+    is_favorite: bool
+    is_rating_round: bool
     created_at: datetime
     updated_at: datetime
+
+
+class RoundSummaryOut(BaseModel):
+    total_rounds: int
+    rounds_this_year: int
+    average_score: float | None
+    best_score: int | None
+    distinct_courses: int
+    latest_round: RoundOut | None
 
 
 class CourseStateOut(BaseModel):
@@ -78,15 +138,68 @@ def _round_out(session: Session, round_: Round) -> RoundOut:
     course = session.get(Course, round_.course_id)
     note = session.get(RoundNote, round_.id)
     assert course is not None
+    companions = session.scalars(
+        select(RoundCompanion)
+        .where(RoundCompanion.round_id == round_.id)
+        .order_by(RoundCompanion.id)
+    ).all()
+    companion_output: list[RoundCompanionOut] = []
+    for companion in companions:
+        display_name = None
+        if companion.friend_user_id is not None:
+            preferences = session.get(OnboardingPreference, companion.friend_user_id)
+            onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+            display_name = " ".join(
+                item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
+            ).strip() or f"Golfer {companion.friend_user_id}"
+        companion_output.append(RoundCompanionOut(
+            friend_user_id=companion.friend_user_id,
+            display_name=display_name,
+            guest_name=companion.guest_name,
+        ))
     return RoundOut(
         id=round_.id,
         course=course_data(course),
         played_on=round_.played_on,
         score=round_.score,
         note=note.body if note else None,
+        favorite_hole=round_.favorite_hole,
+        companions=companion_output,
         visibility=round_.visibility,
+        is_favorite=round_.is_favorite,
+        is_rating_round=round_.is_rating_round,
         created_at=round_.created_at,
         updated_at=round_.updated_at,
+    )
+
+
+def _validate_friend_ids(session: Session, user_id: int, friend_user_ids: list[int]) -> list[int]:
+    friend_ids = list(dict.fromkeys(friend_user_ids))
+    if not friend_ids:
+        return []
+    user_ids = set(session.scalars(select(User.id).where(User.id.in_(friend_ids))).all())
+    followed_ids = set(session.scalars(
+        select(Follow.followed_id).where(
+            Follow.follower_id == user_id,
+            Follow.followed_id.in_(friend_ids),
+        )
+    ).all())
+    if user_ids != set(friend_ids) or followed_ids != set(friend_ids):
+        raise HTTPException(422, "All friend_user_ids must be followed users")
+    return friend_ids
+
+
+def _replace_companions(
+    session: Session,
+    round_id: int,
+    friend_user_ids: list[int],
+    guest_names: list[str],
+) -> None:
+    session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_id))
+    session.flush()
+    session.add_all(
+        [RoundCompanion(round_id=round_id, friend_user_id=friend_id) for friend_id in friend_user_ids]
+        + [RoundCompanion(round_id=round_id, guest_name=name) for name in guest_names]
     )
 
 
@@ -147,7 +260,7 @@ def _delete_rating_ranking_evidence(
 def _delete_round_activity_event(session: Session, user_id: int, round_id: int) -> None:
     session.execute(
         delete(ActivityEvent).where(
-            ActivityEvent.subject_type == "round",
+            ActivityEvent.subject_type.in_(("round", "rating_round")),
             ActivityEvent.subject_id == round_id,
             ActivityEvent.actor_user_id == user_id,
         )
@@ -167,12 +280,16 @@ def create_round(
         course_id=payload.course_id,
         played_on=payload.played_on,
         score=payload.score,
+        favorite_hole=payload.favorite_hole,
+        is_favorite=payload.is_favorite,
         visibility=payload.visibility,
     )
     session.add(round_)
     session.flush()
     if payload.note:
         session.add(RoundNote(round_id=round_.id, body=payload.note))
+    friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
+    _replace_companions(session, round_.id, friend_ids, payload.guest_names)
     _refresh_course_state(session, user.id, payload.course_id)
     session.add(
         ActivityEvent(
@@ -192,20 +309,71 @@ def create_round(
 def list_rounds(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    year: int | None = Query(default=None, ge=1900, le=2200),
+    favorites_only: bool = False,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> list[RoundOut]:
     user = stored_user(session, current)
     if user is None:
         return []
+    statement = select(Round).where(Round.user_id == user.id)
+    if year is not None:
+        statement = statement.where(func.extract("year", Round.played_on) == year)
+    if favorites_only:
+        statement = statement.where(Round.is_favorite.is_(True))
     rounds = session.scalars(
-        select(Round)
-        .where(Round.user_id == user.id)
+        statement
         .order_by(Round.played_on.desc(), Round.id.desc())
         .offset(offset)
         .limit(limit)
     ).all()
     return [_round_out(session, item) for item in rounds]
+
+
+@router.get("/summary", response_model=RoundSummaryOut)
+def round_summary(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> RoundSummaryOut:
+    user = stored_user(session, current)
+    if user is None:
+        return RoundSummaryOut(
+            total_rounds=0,
+            rounds_this_year=0,
+            average_score=None,
+            best_score=None,
+            distinct_courses=0,
+            latest_round=None,
+        )
+    total, average, best, distinct = session.execute(
+        select(
+            func.count(Round.id),
+            func.avg(Round.score),
+            func.min(Round.score),
+            func.count(func.distinct(Round.course_id)),
+        ).where(Round.user_id == user.id)
+    ).one()
+    this_year = session.scalar(
+        select(func.count(Round.id)).where(
+            Round.user_id == user.id,
+            func.extract("year", Round.played_on) == date.today().year,
+        )
+    ) or 0
+    latest = session.scalar(
+        select(Round)
+        .where(Round.user_id == user.id)
+        .order_by(Round.played_on.desc(), Round.id.desc())
+        .limit(1)
+    )
+    return RoundSummaryOut(
+        total_rounds=int(total),
+        rounds_this_year=int(this_year),
+        average_score=round(float(average), 1) if average is not None else None,
+        best_score=int(best) if best is not None else None,
+        distinct_courses=int(distinct),
+        latest_round=_round_out(session, latest) if latest else None,
+    )
 
 
 @router.get("/{round_id}", response_model=RoundOut)
@@ -242,6 +410,10 @@ def update_round(
         round_.played_on = payload.played_on
     if "score" in payload.model_fields_set:
         round_.score = payload.score
+    if "favorite_hole" in payload.model_fields_set:
+        round_.favorite_hole = payload.favorite_hole
+    if payload.is_favorite is not None:
+        round_.is_favorite = payload.is_favorite
     if payload.visibility is not None:
         round_.visibility = payload.visibility
     if "note" in payload.model_fields_set:
@@ -254,6 +426,9 @@ def update_round(
             session.add(note)
         elif note is not None:
             session.delete(note)
+    if payload.friend_user_ids is not None and payload.guest_names is not None:
+        friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
+        _replace_companions(session, round_.id, friend_ids, payload.guest_names)
     event = session.scalar(
         select(ActivityEvent).where(
             ActivityEvent.subject_type == "round",
@@ -290,6 +465,7 @@ def delete_round(
         _lock_user_for_ranking_update(session, user.id)
     _delete_round_activity_event(session, user.id, round_.id)
     session.execute(delete(RoundNote).where(RoundNote.round_id == round_.id))
+    session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_.id))
     if is_rating_round:
         _delete_rating_ranking_evidence(session, user.id, course_id)
     session.delete(round_)

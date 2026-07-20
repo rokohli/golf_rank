@@ -100,7 +100,6 @@ export default function Friends() {
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadFollows(true)} tintColor={colors.pine} />}>
       <ScreenHeader title="Following" onBack={() => router.back()} action={action} />
-      <Text style={styles.intro}>Following is one-way. When you follow each other, GolfRank labels the connection as Friends and shares friends-visible activity.</Text>
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 
       {searching ? <View style={styles.searchSection}>

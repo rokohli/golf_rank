@@ -29,6 +29,8 @@ class OnboardingData(BaseModel):
     preferred_tee_time: str = Field(max_length=120)
     transportation: Literal["Walking", "Cart", "Either"] | None = None
     notifications: bool | None = None
+    profile_visibility: Literal["public", "friends", "private"] = "public"
+    default_round_visibility: Literal["private", "friends", "public"] = "friends"
 
 
 class OnboardingPreferencesIn(BaseModel):
@@ -65,6 +67,7 @@ class CourseOut(BaseModel):
     access: str | None = None
     community_rating: float | None = None
     rating_count: int = 0
+    distance_miles: float | None = None
 
 
 RankingTier = Literal["green", "fairway", "rough", "bunker"]
@@ -163,6 +166,8 @@ class RankedCourseOut(BaseModel):
     personal_rating: float = Field(ge=1, le=10)
     confidence: float = Field(ge=0, le=1)
     confidence_label: Literal["low", "medium", "high"]
+    round_count: int = 0
+    best_score: int | None = None
 
 
 class RankingSnapshotOut(BaseModel):
@@ -172,3 +177,17 @@ class RankingSnapshotOut(BaseModel):
     entries: list[RankedCourseOut]
     unranked_courses: list[CourseOut] = Field(default_factory=list)
     created_at: datetime | None = None
+
+
+class FriendRankingUserOut(BaseModel):
+    id: int
+    display_name: str
+    username: str | None = None
+    home_region: str | None = None
+
+
+class FriendRankingOut(BaseModel):
+    user: FriendRankingUserOut
+    version: int
+    entries: list[RankedCourseOut]
+    updated_at: datetime | None = None
