@@ -125,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lng: float | None = None,
         radius_miles: float | None = None,
         cursor: int | None = None,
+        offset: int = 0,
         limit: int = 50,
         max_green_fee: int | None = None,
         difficulty: str = "any",
@@ -137,6 +138,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, "radius_miles requires lat and lng")
         if not 1 <= limit <= 100:
             raise HTTPException(422, "limit must be between 1 and 100")
+        if offset < 0:
+            raise HTTPException(422, "offset must be non-negative")
         statement = (
             select(
                 Course,
@@ -157,27 +160,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 Course.region.ilike(needle),
             ))
         if region:
-            statement = statement.where(or_(Course.region.ilike(f"%{region}%"), Course.city.ilike(f"%{region}%")))
+            statement = statement.where(or_(
+                Course.region.ilike(f"%{region}%"),
+                Course.city.ilike(f"%{region}%"),
+                Course.admin1_code.ilike(region),
+                Course.admin1_name.ilike(f"%{region}%"),
+            ))
         if country:
             statement = statement.where(Course.country_code == country.upper())
         if admin1:
             statement = statement.where(or_(Course.admin1_code == admin1.upper(), Course.admin1_name.ilike(admin1)))
         if city:
             statement = statement.where(Course.city.ilike(city))
-        if cursor is not None:
+        if cursor is not None and lat is None:
             statement = statement.where(Course.id > cursor)
         if max_green_fee is not None:
             statement = statement.where(Course.green_fee <= max_green_fee)
         if difficulty != "any":
-            statement = statement.where(Course.difficulty == difficulty)
+            # Provider catalogs do not yet have complete difficulty metadata.
+            # Keep unknown courses discoverable while still excluding a known mismatch.
+            statement = statement.where(or_(Course.difficulty == difficulty, Course.difficulty.is_(None)))
         if access != "any":
             statement = statement.where(Course.is_public == (access == "public"))
         rows = session.execute(
-            statement.order_by(Course.id) if lat is not None else statement.order_by(Course.id).limit(limit)
+            statement.order_by(Course.id) if lat is not None else statement.order_by(Course.id).offset(offset).limit(limit)
         ).all()
+        distances: dict[int, float] = {}
         if lat is not None and lng is not None:
             maximum = radius_miles if radius_miles is not None else 50
-            rows = [row for row in rows if miles_between(lat, lng, row[0]) <= maximum][:limit]
+            measured = [
+                (row, miles_between(lat, lng, row[0]))
+                for row in rows
+                if row[0].latitude is not None and row[0].longitude is not None
+            ]
+            measured = [item for item in measured if item[1] <= maximum]
+            measured.sort(key=lambda item: (item[1], item[0][0].id))
+            page = measured[offset:offset + limit]
+            rows = [item[0] for item in page]
+            distances = {item[0][0].id: item[1] for item in page}
         logger.info(
             "course_search result_count=%s q=%r country=%r admin1=%r city=%r region=%r "
             "radius_miles=%r access=%r difficulty=%r max_green_fee=%r",
@@ -193,6 +213,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     else None
                 ),
                 "rating_count": int(rating_count),
+                "distance_miles": (
+                    round(distances[stored_course.id], 1)
+                    if stored_course.id in distances
+                    else None
+                ),
             }
             for stored_course, community_rating, rating_count in rows
         ]

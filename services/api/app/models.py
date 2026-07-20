@@ -174,6 +174,9 @@ class Round(Base):
     played_on: Mapped[date] = mapped_column(Date, index=True)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     favorite_hole: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_favorite: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False, index=True
+    )
     is_rating_round: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )

@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons'
 import { usePathname, useRouter } from 'expo-router'
 import { ReactElement, ReactNode } from 'react'
-import { ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { DemoCourse } from '../data/demo'
 import { colors, radii } from '../ui/theme'
@@ -78,11 +78,11 @@ export function CourseCard({ course, compact = false, onPress, badge }: { course
   )
 }
 
-export function DemoCourseRow({ course, index, onPress, trailing }: { course: DemoCourse; index?: number; onPress?: () => void; trailing?: ReactNode }) {
+export function DemoCourseRow({ course, index, onPress, trailing, showRating = true, showReviewCount = true }: { course: DemoCourse; index?: number; onPress?: () => void; trailing?: ReactNode; showRating?: boolean; showReviewCount?: boolean }) {
   return <Pressable onPress={onPress} style={({ pressed }) => [styles.courseRow, pressed && styles.pressed]}>
     {index ? <Text style={styles.courseRowIndex}>{index}</Text> : null}
     <View style={styles.courseRowImage}><CourseVisual course={course} height={52} /></View>
-    <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.courseRowTitle}>{course.name}</Text><Text numberOfLines={1} style={styles.meta}>{course.location}</Text><Text accessibilityLabel={course.rating ? `Community rating ${course.rating} out of 10, ${course.reviews} ratings` : `No community rating yet, ${course.reviews} ratings`} style={styles.rating}>{course.rating ? course.rating : '—'}/10  <Text style={styles.meta}>{course.reviews}</Text></Text></View>
+    <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.courseRowTitle}>{course.name}</Text><Text numberOfLines={1} style={styles.meta}>{course.location}</Text>{showRating ? <Text accessibilityLabel={course.rating ? `Community rating ${course.rating} out of 10` : 'No community rating yet'} style={styles.rating}>{course.rating ? course.rating : '—'}/10{showReviewCount && course.reviews ? <Text style={styles.meta}>  {course.reviews}</Text> : null}</Text> : null}</View>
     {trailing ?? <Feather name="chevron-right" size={16} color={colors.muted} />}
   </Pressable>
 }
@@ -116,8 +116,10 @@ export function IconButton({ icon, label, onPress }: { icon: keyof typeof Feathe
   return <Pressable accessibilityLabel={label} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}><Feather name={icon} size={18} color={colors.ink} /></Pressable>
 }
 
-export function Avatar({ initials, color = colors.pine, size = 42 }: { initials: string; color?: string; size?: number }) {
-  return <View style={[styles.avatar, { backgroundColor: color, height: size, width: size, borderRadius: size / 2 }]}><Text style={styles.avatarText}>{initials}</Text></View>
+export function Avatar({ initials, color = colors.pine, imageUrl, size = 42 }: { initials: string; color?: string; imageUrl?: string | null; size?: number }) {
+  const shape = { borderRadius: size / 2, height: size, width: size }
+  if (imageUrl) return <Image accessibilityLabel={`${initials} profile photo`} source={{ uri: imageUrl }} style={shape} />
+  return <View style={[styles.avatar, shape, { backgroundColor: color }]}><Text style={styles.avatarText}>{initials}</Text></View>
 }
 
 const styles = StyleSheet.create({

@@ -1,37 +1,149 @@
 import { Feather } from '@expo/vector-icons'
-import { Stack, useRouter } from 'expo-router'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Stack, useFocusEffect, useRouter } from 'expo-router'
+import { useCallback, useState } from 'react'
+import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
-import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle, StatCard } from '../src/components/ProductUI'
+import { getProfile, getRoundSummary } from '../src/api/client'
+import { useAuthGate } from '../src/auth/AuthProvider'
+import { useAuthHeaders } from '../src/auth/useAuthToken'
+import { Avatar, BottomNav, CourseVisual, ProductScreen } from '../src/components/ProductUI'
 import { demoCourses } from '../src/data/demo'
+import { OnboardingPreferences, RoundSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
 export default function Profile() {
   const router = useRouter()
+  const { profileImageUrl } = useAuthGate()
+  const { getAuthHeaders } = useAuthHeaders()
+  const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
+  const [summary, setSummary] = useState<RoundSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshing(true)
+    else setLoading(true)
+    setError(null)
+    try {
+      const headers = await getAuthHeaders()
+      const [nextProfile, nextSummary] = await Promise.all([getProfile(headers), getRoundSummary(headers)])
+      setProfile(nextProfile)
+      setSummary(nextSummary)
+    } catch (reason) {
+      setError(message(reason, 'Unable to load your profile.'))
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [getAuthHeaders])
+
+  useFocusEffect(useCallback(() => { void load() }, [load]))
+
+  const first = profile?.onboarding_data?.first_name?.trim() ?? ''
+  const last = profile?.onboarding_data?.last_name?.trim() ?? ''
+  const name = `${first} ${last}`.trim() || 'Golfer'
+  const username = profile?.onboarding_data?.username?.trim() ?? ''
+  const latestRound = summary?.latest_round
+
   return <>
     <Stack.Screen options={{ headerShown: false }} />
-    <ProductScreen>
+    <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
       <View style={styles.hero}>
-        <CourseVisual course={demoCourses[0]} height={184} />
-        <View style={styles.settings}><IconButton icon="settings" label="Profile settings" /></View>
-        <View style={styles.avatarWrap}><Avatar initials="RK" size={86} color="#B1805D" /></View>
+        <CourseVisual course={demoCourses[0]} height={176} />
+        <Pressable accessibilityLabel="Profile settings" accessibilityRole="button" hitSlop={10} onPress={() => router.push('/settings' as never)} style={({ pressed }) => [styles.settings, pressed && styles.pressed]}>
+          <Feather name="settings" size={22} color="#FFFFFF" />
+        </Pressable>
+        <View style={styles.avatarWrap}><Avatar color={colors.pine} imageUrl={profileImageUrl} initials={initials(name)} size={64} /></View>
       </View>
-      <View style={styles.identity}><Text style={styles.name}>Rohan Kohli</Text><Text style={styles.handle}>@rohank</Text></View>
-      <View style={styles.stats}><StatCard label="Rounds" value="24" /><StatCard label="Courses" value="18" /><StatCard label="Avg score" value="84.1" /><StatCard label="Top rating" value="9.4/10" /></View>
-      <View style={styles.actions}><Pressable onPress={() => router.push('/friends')} style={styles.action}><Feather name="users" size={18} color={colors.pine} /><Text style={styles.actionText}>Friends</Text></Pressable><Pressable onPress={() => router.push('/saved')} style={styles.action}><Feather name="bookmark" size={18} color={colors.pine} /><Text style={styles.actionText}>Saved</Text></Pressable><Pressable onPress={() => router.push('/stats')} style={styles.action}><Feather name="activity" size={18} color={colors.pine} /><Text style={styles.actionText}>Stats</Text></Pressable></View>
-      <SectionTitle title="Achievements" />
-      <View style={styles.achievements}>{[['award','First round'],['map','Course explorer'],['star','Top 10%']].map(([icon, label]) => <View key={label} style={styles.achievement}><View style={styles.medal}><Feather name={icon as never} size={21} color={colors.pine} /></View><Text style={styles.achievementTitle}>{label}</Text></View>)}</View>
-      <SectionTitle title="Recent activity" />
-      <Pressable onPress={() => router.push('/round/torrey-may')} style={styles.recent}><View style={{ width: 100 }}><CourseVisual course={demoCourses[3]} height={70} /></View><View style={{ flex: 1 }}><Text style={styles.recentTitle}>Torrey Pines (South)</Text><Text style={styles.handle}>May 12, 2024</Text></View><Text style={styles.recentScore}>82</Text></Pressable>
+
+      <View style={styles.identity}>
+        <Text style={styles.name}>{name}</Text>
+        {username ? <Text style={styles.handle}>@{username}</Text> : null}
+        {profile?.home_region ? <View style={styles.regionRow}><Feather name="map-pin" size={12} color={colors.muted} /><Text style={styles.region}>{profile.home_region}</Text></View> : null}
+        <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/profile/edit' as never)}><Text style={styles.editLink}>Edit profile</Text></Pressable>
+      </View>
+
+      {loading ? <ActivityIndicator accessibilityLabel="Loading profile" color={colors.pine} /> : null}
+      {error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
+
+      <View style={styles.stats}>
+        <ProfileStat label="Rounds" value={summary?.total_rounds ?? '—'} />
+        <ProfileStat label="Courses" value={summary?.distinct_courses ?? '—'} />
+        <ProfileStat label="Avg score" value={formatAverage(summary?.average_score)} />
+        <ProfileStat label="Best" value={summary?.best_score ?? '—'} last />
+      </View>
+
+      <View style={styles.actions}>
+        <ProfileAction icon="users" label="Friends" onPress={() => router.push('/friends')} />
+        <ProfileAction icon="bookmark" label="Saved" onPress={() => router.push('/saved')} />
+        <ProfileAction icon="clock" label="Rounds" onPress={() => router.push('/rounds')} />
+      </View>
+
+      <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Recent round</Text></View>
+      {latestRound ? <>
+        <Pressable accessibilityLabel={`Open ${latestRound.course.name} round`} accessibilityRole="button" onPress={() => router.push(`/round/${latestRound.id}` as never)} style={({ pressed }) => [styles.recent, pressed && styles.pressed]}>
+          <View style={styles.recentImage}><CourseVisual course={demoCourses[0]} height={62} /></View>
+          <View style={styles.recentCopy}>
+            <Text numberOfLines={1} style={styles.recentTitle}>{latestRound.course.name}</Text>
+            <Text numberOfLines={1} style={styles.recentMeta}>{formatDate(latestRound.played_on)} · {latestRound.course.region}</Text>
+          </View>
+          <Text accessibilityLabel={latestRound.score == null ? 'No score recorded' : `Score ${latestRound.score}`} style={styles.recentScore}>{latestRound.score ?? '—'}</Text>
+          {latestRound.is_favorite ? <Feather accessibilityLabel="Favorite round" name="star" size={18} color={colors.gold} /> : null}
+        </Pressable>
+        <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/rounds')}><Text style={styles.viewAll}>View all rounds</Text></Pressable>
+      </> : !loading && !error ? <View style={styles.empty}><Text style={styles.emptyText}>Your most recent round will appear here.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/round/new' as never)}><Text style={styles.logLink}>Log a round</Text></Pressable></View> : null}
     </ProductScreen>
     <BottomNav />
   </>
 }
 
+function ProfileStat({ label, last = false, value }: { label: string; last?: boolean; value: number | string }) {
+  return <View style={[styles.stat, last && styles.statLast]}><Text style={styles.statValue}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>
+}
+
+function ProfileAction({ icon, label, onPress }: { icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.pressed]}><Feather name={icon} size={20} color={colors.pine} /><Text style={styles.actionText}>{label}</Text></Pressable>
+}
+
+function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
+function formatAverage(value: number | null | undefined) { return value == null ? '—' : value.toFixed(1) }
+function formatDate(value: string) { return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) }
+function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
+
 const styles = StyleSheet.create({
-  hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' }, settings: { position: 'absolute', right: 15, top: 14 }, avatarWrap: { bottom: -43, left: 0, position: 'absolute', right: 0, alignItems: 'center' },
-  identity: { alignItems: 'center', marginTop: 30 }, name: { color: colors.ink, fontSize: 23, fontWeight: '800' }, handle: { color: colors.muted, fontSize: 11, marginTop: 4 },
-  stats: { flexDirection: 'row', gap: 6 }, actions: { flexDirection: 'row', gap: 9 }, action: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 12, borderWidth: 1, flex: 1, gap: 5, padding: 12 }, actionText: { color: colors.ink, fontSize: 11, fontWeight: '800' },
-  achievements: { flexDirection: 'row', gap: 9 }, achievement: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, flex: 1, gap: 8, padding: 12 }, medal: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: 30, height: 46, justifyContent: 'center', width: 46 }, achievementTitle: { color: colors.ink, fontSize: 9, fontWeight: '800', textAlign: 'center' },
-  recent: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, flexDirection: 'row', gap: 12, overflow: 'hidden', paddingRight: 14 }, recentTitle: { color: colors.ink, fontSize: 12, fontWeight: '800' }, recentScore: { color: colors.pine, fontSize: 22, fontWeight: '600' },
+  hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' },
+  settings: { alignItems: 'center', height: 44, justifyContent: 'center', position: 'absolute', right: 10, top: 8, width: 44 },
+  avatarWrap: { alignItems: 'center', bottom: -32, left: 0, position: 'absolute', right: 0 },
+  identity: { alignItems: 'center', gap: 4, marginTop: 22 },
+  name: { color: colors.ink, fontFamily: 'Georgia', fontSize: 23 },
+  handle: { color: colors.muted, fontSize: 11 },
+  regionRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
+  region: { color: colors.muted, fontSize: 10 },
+  editLink: { color: colors.pine, fontSize: 11, fontWeight: '800', marginTop: 5 },
+  stats: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingVertical: 12 },
+  stat: { alignItems: 'center', borderRightColor: colors.line, borderRightWidth: StyleSheet.hairlineWidth, flex: 1 },
+  statLast: { borderRightWidth: 0 },
+  statValue: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 },
+  statLabel: { color: colors.muted, fontSize: 8, marginTop: 3, textTransform: 'uppercase' },
+  actions: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 14, paddingBottom: 14 },
+  action: { alignItems: 'center', gap: 6, minWidth: 72, paddingVertical: 5 },
+  actionText: { color: colors.pine, fontSize: 10, fontWeight: '700' },
+  sectionHeader: { paddingTop: 2 },
+  sectionTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 },
+  recent: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingBottom: 13 },
+  recentImage: { borderRadius: 8, overflow: 'hidden', width: 82 },
+  recentCopy: { flex: 1, gap: 4 },
+  recentTitle: { color: colors.ink, fontSize: 12, fontWeight: '800' },
+  recentMeta: { color: colors.muted, fontSize: 9 },
+  recentScore: { color: colors.ink, fontFamily: 'Georgia', fontSize: 19, minWidth: 24, textAlign: 'right' },
+  viewAll: { color: colors.pine, fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  state: { alignItems: 'center', gap: 12, paddingVertical: 20 },
+  error: { color: colors.error, fontSize: 11, textAlign: 'center' },
+  retry: { borderColor: colors.pine, borderRadius: 18, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 8 },
+  retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
+  empty: { alignItems: 'center', gap: 8, padding: 22 },
+  emptyText: { color: colors.muted, fontSize: 11 },
+  logLink: { color: colors.pine, fontSize: 11, fontWeight: '800' },
+  pressed: { opacity: 0.65 },
 })

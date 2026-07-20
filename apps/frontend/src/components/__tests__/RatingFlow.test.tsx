@@ -3,15 +3,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { RatingFlow, RatingFlowProps } from '../RatingFlow'
 import { CourseRatingState } from '../../types'
 
-jest.mock('expo-contacts', () => ({
-  presentContactPickerAsync: jest.fn(),
-  requestPermissionsAsync: jest.fn(),
-}))
-jest.mock('expo-sms', () => ({
-  isAvailableAsync: jest.fn(),
-  sendSMSAsync: jest.fn(),
-}))
-
 const course = {
   id: 1,
   name: 'Pebble Beach Golf Links',
@@ -186,8 +177,8 @@ describe('RatingFlow', () => {
     expect(screen.getByText('Jul 10, 2026')).toBeOnTheScreen()
     expect(screen.queryByText('Fast greens')).toBeNull()
     fireEvent.press(screen.getByRole('button', { name: 'Notes' }))
-    expect(screen.getByLabelText('Notes (optional)')).toHaveDisplayValue('Fast greens')
-    fireEvent.changeText(screen.getByLabelText('Notes (optional)'), 'Perfect sunset round')
+    expect(screen.getByLabelText('Round notes')).toHaveDisplayValue('Fast greens')
+    fireEvent.changeText(screen.getByLabelText('Round notes'), 'Perfect sunset round')
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
     await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({ note: 'Perfect sunset round' })))
@@ -200,7 +191,7 @@ describe('RatingFlow', () => {
     render(<RatingFlow {...inputProps} />)
     await chooseTierAndOpenRound()
     fireEvent.press(screen.getByRole('button', { name: 'Notes' }))
-    fireEvent.changeText(screen.getByLabelText('Notes (optional)'), 'Windy back nine')
+    fireEvent.changeText(screen.getByLabelText('Round notes'), 'Windy back nine')
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByText('Spyglass Hill')
     fireEvent.press(screen.getByRole('button', { name: 'Pebble Beach Golf Links' }))
@@ -217,38 +208,26 @@ describe('RatingFlow', () => {
 
     fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
     expect(screen.getByText('Photo upload is coming soon.')).toBeOnTheScreen()
-    fireEvent.press(screen.getByRole('button', { name: 'Who joined' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
     fireEvent.press(screen.getByRole('button', { name: 'Select Morgan Golfer' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({ friend_user_ids: [22] })))
   })
 
-  it('handles Android contacts permission denial without opening the picker', async () => {
-    const contacts = { requestPermission: jest.fn().mockResolvedValue('denied' as const), pickContact: jest.fn() }
-    render(<RatingFlow {...props({ initialRating: existingRating, contacts, platform: 'android' })} />)
+  it('shows a compact friend list and searches additional friends without guest controls', async () => {
+    const friends = [
+      { id: 22, display_name: 'Morgan Golfer', username: 'morgan' },
+      { id: 23, display_name: 'Maya Patel', username: 'maya' },
+      { id: 24, display_name: 'Chris Lee', username: 'chris' },
+      { id: 25, display_name: 'Jordan Kim', username: 'jordan' },
+      { id: 26, display_name: 'Sam Park', username: 'sam' },
+    ]
+    render(<RatingFlow {...props({ initialRating: { ...existingRating, companions: [] }, friends })} />)
     await openExistingRound()
-    fireEvent.press(screen.getByRole('button', { name: 'Who joined' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Add guest' }))
-
-    expect(await screen.findByText(/Contacts permission was denied/)).toBeOnTheScreen()
-    expect(contacts.pickContact).not.toHaveBeenCalled()
-  })
-
-  it('opens SMS only after the explicit Send invite action', async () => {
-    const contacts = {
-      requestPermission: jest.fn().mockResolvedValue('granted' as const),
-      pickContact: jest.fn().mockResolvedValue({ name: 'Alex Guest', phone: '+15551234567' }),
-    }
-    const sms = { isAvailable: jest.fn().mockResolvedValue(true), send: jest.fn().mockResolvedValue(undefined) }
-    render(<RatingFlow {...props({ initialRating: existingRating, contacts, sms, platform: 'ios' })} />)
-    await openExistingRound()
-    fireEvent.press(screen.getByRole('button', { name: 'Who joined' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Add guest' }))
-
-    expect(await screen.findByText('Alex Guest')).toBeOnTheScreen()
-    expect(sms.isAvailable).not.toHaveBeenCalled()
-    expect(sms.send).not.toHaveBeenCalled()
-    fireEvent.press(screen.getByRole('button', { name: 'Send invite to Alex Guest' }))
-    await waitFor(() => expect(sms.send).toHaveBeenCalledWith('+15551234567', expect.stringContaining('Pebble Beach Golf Links')))
+    fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
+    expect(screen.queryByRole('button', { name: 'Select Sam Park' })).toBeNull()
+    fireEvent.changeText(screen.getByLabelText('Search friends'), 'Sam')
+    fireEvent.press(screen.getByRole('button', { name: 'Select Sam Park' }))
+    expect(screen.queryByRole('button', { name: 'Add guest' })).toBeNull()
   })
 })

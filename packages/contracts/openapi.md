@@ -11,7 +11,7 @@ Development-only authorization: `X-Development-Subject: dev:<subject>`.
 Request body:
 
 ```json
-{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"pebble","home_course_search":"Pebble Beach Golf Links","played_course_ids":["pebble"],"favorite_wins":["pebble"],"dream_course_ids":["bandon"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true}}
+{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"pebble","home_course_search":"Pebble Beach Golf Links","played_course_ids":["pebble"],"favorite_wins":["pebble"],"dream_course_ids":["bandon"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true,"profile_visibility":"public","default_round_visibility":"friends"}}
 ```
 
 Returns the validated preference object. `onboarding_data` is optional for backward compatibility and stores the complete onboarding snapshot when supplied. Invalid fields return `422`; missing development identity returns `401`.
@@ -22,7 +22,7 @@ Returns the authenticated user's persisted onboarding preferences. Returns `404`
 
 ## `GET /api/v1/courses`
 
-Optional query parameters: `q`, legacy free-form `region`, normalized `country`, `admin1`, `city`, `lat`, `lng`, `radius_miles`, stable numeric `cursor`, `limit`, `max_green_fee`, `difficulty`, and `access` (`public`, `private`, or `any`). `lat` and `lng` must be supplied together; radius defaults to 50 miles when coordinates are supplied. No authentication is required. Returns active canonical catalog records in stable ID order with nullable commercial metadata and the community aggregate:
+Optional query parameters: `q`, free-form `region`, normalized `country`, `admin1`, `city`, `lat`, `lng`, `radius_miles`, stable numeric `cursor`, `offset`, `limit`, `max_green_fee`, `difficulty`, and `access` (`public`, `private`, or `any`). `lat` and `lng` must be supplied together; radius defaults to 50 miles when coordinates are supplied. Location searches are ordered nearest-first and return `distance_miles`; `offset` paginates that distance order. Non-location searches retain stable ID/cursor ordering. No authentication is required. Returns active canonical catalog records with nullable commercial metadata and the community aggregate:
 
 ```json
 [
@@ -44,14 +44,15 @@ Optional query parameters: `q`, legacy free-form `region`, normalized `country`,
     "hole_count": 18,
     "access": "public",
     "community_rating": 9.2,
-    "rating_count": 1
+    "rating_count": 1,
+    "distance_miles": 3.4
   }
 ]
 ```
 
 `community_rating` is the one-decimal average of current personal ratings and is `null` when nobody has rated the course. `rating_count` is the number of current personal ratings and is `0` when unrated.
 
-`green_fee`, `difficulty`, `access`, and `is_public` may be `null` when the provider does not supply trustworthy values. Clients must display an unavailable state rather than invent defaults.
+`green_fee`, `difficulty`, `access`, and `is_public` may be `null` when the provider does not supply trustworthy values. Clients must display an unavailable state rather than invent defaults. A difficulty filter keeps courses with unknown provider difficulty discoverable while excluding courses with a known conflicting difficulty.
 
 ## `GET /api/v1/course-regions`
 
@@ -96,6 +97,17 @@ Friends-visible events require a mutual follow; public events require the viewer
 ## `GET /api/v1/courses/{course_id}`
 
 No authentication is required. Returns the same course shape, including `community_rating` and `rating_count`, for one course. A missing course returns `404`.
+
+## Round history
+
+Every visit is a separate round, including repeated visits to the same course. Logging or editing a standalone round does not change the user's course rating or ranking. Rating through the course-rating flow continues to own one identifiable rating round.
+
+- `POST /api/v1/me/rounds` logs a visit with `course_id`, `played_on`, nullable `score`, nullable `note`, nullable `favorite_hole`, `friend_user_ids`, `guest_names`, `visibility`, and `is_favorite`.
+- `GET /api/v1/me/rounds` returns newest rounds first. It supports `limit`, `offset`, optional `year`, and `favorites_only`.
+- `GET /api/v1/me/rounds/summary` returns total rounds, rounds in the current calendar year, scored-round average, best score, distinct-course count, and latest round.
+- `GET`, `PATCH`, and `DELETE /api/v1/me/rounds/{round_id}` read, update, or remove a user-owned round. Companion lists must be updated together. A rating-owned round cannot be made public; deleting it also removes its course-rating/ranking evidence.
+
+Round responses include the standard course object plus `favorite_hole`, resolved companions, `is_favorite`, and `is_rating_round`. Notes remain visible only through the owner's round endpoints and are not copied into feed event data.
 
 ## Rating tiers
 
@@ -227,6 +239,10 @@ Replaces the detail set attached to an existing rating round:
 All fields have defaults, so omitted fields are replaced with `null`, empty lists, or `private` rather than retained. Rating details are private by default at the product level; sharing with friends must be selected explicitly. Unknown fields are rejected. In particular, phone numbers are neither accepted nor stored: contact selection and SMS invitations stay on the client, and the API receives guest display names only. The note-photo control is currently a client-side "Coming soon" placeholder; photo upload is not part of this API contract.
 
 Returns `200` with the complete rating-state shape documented for GET, including the updated round and companions. Returns `404` when the course, rating, rating-owned round, or stored user does not exist; invalid detail data or friend IDs return `422`.
+
+## `GET /api/v1/me/rankings`
+
+Returns the authenticated user's current ordered ranking. Each entry includes its course, tier, personal rating and confidence fields, plus backend-derived `round_count` and nullable `best_score`. Round metadata is recomputed from current stored rounds when the ranking is read, so it remains accurate even for older ranking snapshots.
 
 ## Error response bodies
 

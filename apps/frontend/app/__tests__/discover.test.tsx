@@ -4,6 +4,7 @@ import Discover from '../discover'
 
 const mockSearchCourses = jest.fn()
 const mockResolveCurrentRegion = jest.fn()
+const mockGetProfile = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test-token' })
 
 jest.mock('@expo/vector-icons', () => {
@@ -19,6 +20,7 @@ jest.mock('expo-router', () => ({
 
 jest.mock('../../src/api/client', () => ({
   getCourseRegions: jest.fn().mockResolvedValue([]),
+  getProfile: (...args: unknown[]) => mockGetProfile(...args),
   searchCourses: (...args: unknown[]) => mockSearchCourses(...args),
   submitCourseCandidate: jest.fn(),
 }))
@@ -28,7 +30,7 @@ jest.mock('../../src/auth/useAuthToken', () => ({
 }))
 
 jest.mock('../../src/location/currentRegion', () => ({
-  CALIFORNIA_FALLBACK_REGION: 'All California',
+  DEFAULT_COURSE_REGION: 'All regions',
   resolveCurrentLocation: () => mockResolveCurrentRegion(),
 }))
 
@@ -46,6 +48,7 @@ describe('Discover location search', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockGetAuthHeaders.mockResolvedValue({ Authorization: 'Bearer test-token' })
+    mockGetProfile.mockResolvedValue({ home_region: 'Monterey, CA', max_green_fee: 700, difficulty: 'any', access: 'any' })
     mockSearchCourses.mockImplementation(async (filters: { region?: string; lat?: number }) => {
       if (filters.region === 'Monterey, CA') return [courses[0]]
       if (filters.lat !== undefined) return [courses[1]]
@@ -57,7 +60,7 @@ describe('Discover location search', () => {
   it('requests current location only after search is activated and uses it as the editable region', async () => {
     render(<Discover />)
 
-    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ country: 'US', admin1: 'CA' })))
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ region: 'Monterey, CA' })))
 
     expect(screen.queryByLabelText('Region')).toBeNull()
     expect(mockResolveCurrentRegion).not.toHaveBeenCalled()
@@ -76,27 +79,35 @@ describe('Discover location search', () => {
     await waitFor(() => expect(screen.queryByText('Torrey Pines South')).toBeNull())
   })
 
-  it('falls back to all California when location permission or lookup is unavailable', async () => {
+  it('falls back to the onboarding region when location permission or lookup is unavailable', async () => {
     mockResolveCurrentRegion.mockResolvedValue(null)
     render(<Discover />)
 
     fireEvent(screen.getByLabelText('Search courses'), 'focus')
 
-    expect(await screen.findByDisplayValue('All California')).toBeOnTheScreen()
-    expect(await screen.findByRole('alert')).toHaveTextContent('Location is unavailable. Showing all California courses.')
+    expect(await screen.findByDisplayValue('Monterey, CA')).toBeOnTheScreen()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Location is unavailable. Showing courses for Monterey, CA.')
     expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
-    expect(await screen.findByText('Torrey Pines South')).toBeOnTheScreen()
+    expect(screen.queryByText('Torrey Pines South')).toBeNull()
   })
 
   it('lets the user retry current-location detection', async () => {
     mockResolveCurrentRegion.mockResolvedValueOnce(null).mockResolvedValueOnce({ label: 'Monterey, CA', latitude: 36.6, longitude: -121.9 })
     render(<Discover />)
     fireEvent(screen.getByLabelText('Search courses'), 'focus')
-    expect(await screen.findByDisplayValue('All California')).toBeOnTheScreen()
+    expect(await screen.findByDisplayValue('Monterey, CA')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: 'Use current location' }))
 
     await waitFor(() => expect(mockResolveCurrentRegion).toHaveBeenCalledTimes(2))
     expect(await screen.findByDisplayValue('Monterey, CA')).toBeOnTheScreen()
+  })
+
+  it('does not render the redundant Filters section action or rating counts', async () => {
+    render(<Discover />)
+
+    expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.queryByText('Filters')).toBeNull()
+    expect(screen.queryByText('10')).toBeNull()
   })
 })

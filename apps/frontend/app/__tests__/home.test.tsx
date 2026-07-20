@@ -53,7 +53,7 @@ describe('Home social feed', () => {
 
   it('renders real activity and activates the reaction control', async () => {
     render(<Home />)
-    expect(await screen.findByText('Maya Golfer')).toBeOnTheScreen()
+    expect(await screen.findByText('Maya Golfer rated')).toBeOnTheScreen()
     expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
     expect(screen.getByText('9.4/10')).toBeOnTheScreen()
 

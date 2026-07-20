@@ -6,6 +6,8 @@ import { AuthProvider } from '../AuthProvider'
 const mockStartSSOFlow = jest.fn()
 const mockSetActive = jest.fn()
 const mockSignInCreate = jest.fn()
+const mockAttemptFirstFactor = jest.fn()
+const mockResetPassword = jest.fn()
 const mockSignUpCreate = jest.fn()
 const mockPrepareEmailAddressVerification = jest.fn()
 const mockAttemptEmailAddressVerification = jest.fn()
@@ -25,7 +27,9 @@ jest.mock('@clerk/expo/legacy', () => ({
     isLoaded: true,
     setActive: mockSetActive,
     signIn: {
+      attemptFirstFactor: mockAttemptFirstFactor,
       create: mockSignInCreate,
+      resetPassword: mockResetPassword,
     },
   }),
   useSignUp: () => ({
@@ -311,6 +315,52 @@ describe('AuthProvider', () => {
         strategy: 'password',
       })
       expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_123' })
+    })
+  })
+
+  it('resets a Clerk password with an emailed verification code and signs in', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockSignInCreate.mockResolvedValue({ status: 'needs_first_factor' })
+    mockAttemptFirstFactor.mockResolvedValue({ status: 'needs_new_password' })
+    mockResetPassword.mockResolvedValue({ createdSessionId: 'sess_reset', status: 'complete' })
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+    fireEvent.changeText(screen.getByLabelText('Email or Username'), 'rohan@example.com')
+    fireEvent.press(screen.getByRole('button', { name: 'Forgot password?' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Send Reset Code' }))
+
+    await waitFor(() => {
+      expect(mockSignInCreate).toHaveBeenCalledWith({
+        identifier: 'rohan@example.com',
+        strategy: 'reset_password_email_code',
+      })
+    })
+
+    fireEvent.changeText(screen.getByLabelText('Reset code'), '123456')
+    fireEvent.press(screen.getByRole('button', { name: 'Verify Code' }))
+
+    await waitFor(() => {
+      expect(mockAttemptFirstFactor).toHaveBeenCalledWith({
+        code: '123456',
+        strategy: 'reset_password_email_code',
+      })
+    })
+
+    fireEvent.changeText(screen.getByLabelText('New password'), 'New password 1')
+    fireEvent.changeText(screen.getByLabelText('Confirm new password'), 'New password 1')
+    fireEvent.press(screen.getByRole('button', { name: 'Update Password' }))
+
+    await waitFor(() => {
+      expect(mockResetPassword).toHaveBeenCalledWith({ password: 'New password 1' })
+      expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_reset' })
     })
   })
 

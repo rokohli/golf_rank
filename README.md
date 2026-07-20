@@ -25,9 +25,10 @@ The MVP catalog imports OpenGolfAPI data under ODbL 1.0. Preview and apply an id
 cd services/api
 python -m app.catalog_import --state CA --dry-run
 python -m app.catalog_import --state CA
+python -m app.catalog_import --onboarding-regions
 ```
 
-The job fetches all pages, validates required identity/location fields, upserts by `(source, source_course_id)`, reports errors, and soft-retires provider records omitted from later complete imports. GolfRank must display `Course catalog data © OpenGolfAPI, ODbL 1.0` wherever this catalog is presented.
+The onboarding-regions mode derives the required state catalogs from users' saved home regions; `--state` remains available for explicit expansion and may be repeated. The job fetches all pages, validates required identity/location fields, upserts by `(source, source_course_id)`, reports errors, and soft-retires provider records omitted from later complete imports. GolfRank must display `Course catalog data © OpenGolfAPI, ODbL 1.0` wherever this catalog is presented.
 
 ## Mobile client
 

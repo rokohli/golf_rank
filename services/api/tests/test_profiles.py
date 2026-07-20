@@ -29,6 +29,8 @@ def test_onboarding_upserts_current_user_preferences() -> None:
                 "preferred_tee_time": "Weekend mornings",
                 "transportation": "Cart",
                 "notifications": True,
+                "profile_visibility": "friends",
+                "default_round_visibility": "private",
             },
         },
     )
@@ -36,6 +38,8 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     assert response.status_code == 200
     assert response.json()["home_region"] == "Monterey, CA"
     assert response.json()["onboarding_data"]["played_course_ids"] == ["pebble"]
+    assert response.json()["onboarding_data"]["profile_visibility"] == "friends"
+    assert response.json()["onboarding_data"]["default_round_visibility"] == "private"
 
     profile = client.get(
         "/api/v1/me/profile", headers={"X-Development-Subject": "dev:alice"}

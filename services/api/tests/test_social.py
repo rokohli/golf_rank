@@ -7,7 +7,7 @@ from app.main import create_app
 from app.models import ActivityEvent, User
 
 
-def _profile(client: TestClient, subject: str, first_name: str, username: str) -> dict[str, str]:
+def _profile(client: TestClient, subject: str, first_name: str, username: str, visibility: str = "public") -> dict[str, str]:
     headers = {"X-Development-Subject": subject}
     response = client.put(
         "/api/v1/me/onboarding-preferences",
@@ -24,6 +24,7 @@ def _profile(client: TestClient, subject: str, first_name: str, username: str) -
                 "home_course_search": "Pebble Beach",
                 "travel_distance": "Any",
                 "preferred_tee_time": "Morning",
+                "profile_visibility": visibility,
             },
         },
     )
@@ -68,6 +69,25 @@ def test_user_search_does_not_expose_provider_subjects() -> None:
     result = client.get("/api/v1/users", headers=alice, params={"q": "bob"})
     assert result.status_code == 200
     assert "provider_subject" not in result.json()[0]
+
+
+def test_user_search_enforces_profile_visibility() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:privacy-alice", "Alice", "privacyalice")
+    bob = _profile(client, "dev:privacy-bob", "Bob", "privacybob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "privacyalice"}).json()[0]["id"]
+
+    client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+    client.put(f"/api/v1/me/follows/{alice_id}", headers=bob)
+    _profile(client, "dev:privacy-bob", "Bob", "privacybob", "friends")
+    assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json()[0]["id"] == bob_id
+
+    client.delete(f"/api/v1/me/follows/{alice_id}", headers=bob)
+    assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json() == []
+
+    _profile(client, "dev:privacy-bob", "Bob", "privacybob", "private")
+    assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json() == []
 
 
 def test_feed_reactions_are_idempotent_and_private_events_are_not_reactable() -> None:

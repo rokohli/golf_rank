@@ -9,7 +9,7 @@ Implemented on `agent/discover-current-location`: real cursor-paginated feed, fo
 - The social experience is functional end to end: Home renders the authenticated, cursor-paginated feed; Following supports search, follow/unfollow, mutual-Friends state, block, and mute; reactions are persisted idempotently; and visibility is enforced by the API.
 - Course-page ratings and re-ratings create feed activity. Refinement comparisons only update rankings and do not create social activity.
 - Discover uses the canonical API catalog with current-location search, changeable region, distance/access/fee/difficulty filters, pagination, explicit loading/error/empty states, and missing-course submissions. It never silently substitutes demo catalog data.
-- California is the launch catalog. The explicit importer currently yields 1,144 valid OpenGolfAPI records; one provider record without coordinates is rejected and reported rather than silently imported.
+- Catalog expansion now follows the states requested in users' onboarding regions. California was the first imported state; the explicit importer can derive additional states from saved profiles or accept repeated `--state` flags.
 
 ## Recommended catalog strategy
 
@@ -19,7 +19,7 @@ Google Places now supports `golf_course` filtering in Nearby/Text Search, so it 
 
 Implemented source strategy:
 
-1. Import OpenGolfAPI by state through the explicit idempotent CLI. California is first; expand state by state after checking completeness and duplicate quality.
+1. Import OpenGolfAPI by state through the explicit idempotent CLI. Use `--onboarding-regions` to expand according to user demand while checking completeness and duplicate quality state by state.
 2. Treat incomplete commercial metadata as nullable and reject malformed identity/location records with an auditable import summary.
 3. Use user-submitted missing-course candidates for coverage gaps. Google Places can later be an ephemeral lookup/reconciliation aid, but not the durable source catalog; store only fields its applicable terms permit.
 

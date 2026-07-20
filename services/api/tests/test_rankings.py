@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.main import create_app
-from app.models import RankingSnapshot, User
+from app.models import Follow, OnboardingPreference, Profile, RankingSnapshot, User, UserBlock
 
 
 HEADERS = {"X-Development-Subject": "dev:ranker"}
@@ -29,6 +29,115 @@ def test_tier_placements_create_an_ordered_ten_point_ranking() -> None:
     assert [entry["personal_rating"] for entry in body["entries"]] == [10.0, 8.5, 7.7]
     assert all(1 <= entry["personal_rating"] <= 10 for entry in body["entries"])
     assert all("stars" not in entry for entry in body["entries"])
+
+
+def test_ranking_entries_include_current_round_count_and_best_score() -> None:
+    client = TestClient(create_app())
+    for played_on, score in (("2026-07-01", 88), ("2026-07-02", 82)):
+        assert client.post(
+            "/api/v1/me/rounds",
+            headers=HEADERS,
+            json={"course_id": 1, "played_on": played_on, "score": score},
+        ).status_code == 201
+    assert client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=HEADERS,
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
+    ).status_code == 200
+
+    entry = client.get("/api/v1/me/rankings", headers=HEADERS).json()["entries"][0]
+
+    assert entry["round_count"] == 2
+    assert entry["best_score"] == 82
+
+
+def test_friends_rankings_return_mutual_friends_with_their_round_stats() -> None:
+    app = create_app()
+    client = TestClient(app)
+    alice_headers = {"X-Development-Subject": "dev:alice-ranker"}
+    bob_headers = {"X-Development-Subject": "dev:bob-ranker"}
+    assert client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=alice_headers,
+        json={"assignments": [{"course_id": 2, "tier": "fairway"}]},
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=bob_headers,
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
+    ).status_code == 200
+    for played_on, score in (("2026-07-01", 86), ("2026-07-02", 79)):
+        assert client.post(
+            "/api/v1/me/rounds",
+            headers=bob_headers,
+            json={"course_id": 1, "played_on": played_on, "score": score},
+        ).status_code == 201
+
+    with app.state.session_factory() as session:
+        alice = session.scalar(select(User).where(User.provider_subject == "dev:alice-ranker"))
+        bob = session.scalar(select(User).where(User.provider_subject == "dev:bob-ranker"))
+        assert alice is not None and bob is not None
+        session.add_all([
+            Follow(follower_id=alice.id, followed_id=bob.id),
+            Follow(follower_id=bob.id, followed_id=alice.id),
+            Profile(user_id=bob.id, home_region="Monterey, CA"),
+            OnboardingPreference(
+                user_id=bob.id,
+                max_green_fee=300,
+                difficulty="any",
+                access="any",
+                onboarding_data={"first_name": "Bob", "last_name": "Jones", "username": "bobgolfs"},
+            ),
+        ])
+        session.commit()
+
+    response = client.get("/api/v1/me/rankings/friends", headers=alice_headers)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    friend = response.json()[0]
+    assert friend["user"] == {
+        "id": friend["user"]["id"],
+        "display_name": "Bob Jones",
+        "username": "bobgolfs",
+        "home_region": "Monterey, CA",
+    }
+    assert friend["entries"][0]["round_count"] == 2
+    assert friend["entries"][0]["best_score"] == 79
+
+
+def test_friends_rankings_exclude_one_way_follows_and_blocks() -> None:
+    app = create_app()
+    client = TestClient(app)
+    alice_headers = {"X-Development-Subject": "dev:alice-private"}
+    bob_headers = {"X-Development-Subject": "dev:bob-private"}
+    for headers in (alice_headers, bob_headers):
+        assert client.put(
+            "/api/v1/me/rankings/tiers",
+            headers=headers,
+            json={"assignments": [{"course_id": 1, "tier": "green"}]},
+        ).status_code == 200
+
+    with app.state.session_factory() as session:
+        alice = session.scalar(select(User).where(User.provider_subject == "dev:alice-private"))
+        bob = session.scalar(select(User).where(User.provider_subject == "dev:bob-private"))
+        assert alice is not None and bob is not None
+        session.add(Follow(follower_id=alice.id, followed_id=bob.id))
+        session.commit()
+
+    assert client.get("/api/v1/me/rankings/friends", headers=alice_headers).json() == []
+
+    with app.state.session_factory() as session:
+        alice = session.scalar(select(User).where(User.provider_subject == "dev:alice-private"))
+        bob = session.scalar(select(User).where(User.provider_subject == "dev:bob-private"))
+        assert alice is not None and bob is not None
+        session.add_all([
+            Follow(follower_id=bob.id, followed_id=alice.id),
+            UserBlock(blocker_id=bob.id, blocked_id=alice.id),
+        ])
+        session.commit()
+
+    assert client.get("/api/v1/me/rankings/friends", headers=alice_headers).json() == []
 
 
 def test_decisive_comparison_reorders_within_tier_and_versions_snapshot() -> None:

@@ -104,10 +104,19 @@ describe('course detail ratings', () => {
     expect(screen.getByRole('button', { name: 'Rated' })).toBeOnTheScreen()
     expect(screen.getByText('check-circle')).toBeOnTheScreen()
     expect(screen.getByRole('button', { name: 'Save' })).toBeOnTheScreen()
-    expect(screen.getByRole('button', { name: 'Share' })).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Log round' })).toBeOnTheScreen()
+    expect(screen.queryByText(/Your #/)).toBeNull()
     expect(screen.queryByText('Review')).toBeNull()
     expect(screen.queryByText('Played')).toBeNull()
     expect(screen.queryByText(/★/)).toBeNull()
+  })
+
+  it('starts a separate round log from the course page', async () => {
+    render(<CourseDetail />)
+
+    fireEvent.press(await screen.findByRole('button', { name: 'Log round' }))
+
+    expect(mockPush).toHaveBeenLastCalledWith('/round/new?courseId=7')
   })
 
   it('navigates to rate, refreshes on focus, and keeps Rated functional for editing', async () => {

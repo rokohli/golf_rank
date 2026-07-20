@@ -21,6 +21,8 @@ export type OnboardingPreferences = {
     preferred_tee_time: string
     transportation: 'Walking' | 'Cart' | 'Either' | null
     notifications: boolean | null
+    profile_visibility?: 'public' | 'friends' | 'private'
+    default_round_visibility?: 'private' | 'friends' | 'public'
   }
 }
 
@@ -45,6 +47,7 @@ export type Course = {
   access?: string | null
   community_rating?: number | null
   rating_count?: number
+  distance_miles?: number | null
 }
 
 export type RatingTier = 'green' | 'fairway' | 'rough' | 'bunker'
@@ -155,6 +158,7 @@ export type CourseSearchFilters = {
   radius_miles?: number
   cursor?: number
   limit?: number
+  offset?: number
   max_green_fee?: number
   difficulty?: 'beginner' | 'intermediate' | 'challenging' | 'any'
   access?: 'public' | 'private' | 'any'
@@ -184,6 +188,52 @@ export type SavedList = {
   created_at: string
 }
 
+export type RoundVisibility = 'private' | 'friends' | 'public'
+
+export type RoundCompanion = {
+  friend_user_id: number | null
+  display_name: string | null
+  guest_name: string | null
+}
+
+export type GolfRound = {
+  id: number
+  course: Course
+  played_on: string
+  score: number | null
+  note: string | null
+  favorite_hole: number | null
+  companions: RoundCompanion[]
+  visibility: RoundVisibility
+  is_favorite: boolean
+  is_rating_round: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type RoundInput = {
+  course_id: number
+  played_on: string
+  score: number | null
+  note: string | null
+  favorite_hole: number | null
+  friend_user_ids: number[]
+  guest_names: string[]
+  visibility: RoundVisibility
+  is_favorite: boolean
+}
+
+export type RoundPatch = Omit<RoundInput, 'course_id'>
+
+export type RoundSummary = {
+  total_rounds: number
+  rounds_this_year: number
+  average_score: number | null
+  best_score: number | null
+  distinct_courses: number
+  latest_round: GolfRound | null
+}
+
 export type RankingComparison = {
   course_a_id: number
   course_b_id: number
@@ -198,6 +248,8 @@ export type RankedCourse = {
   personal_rating: number
   confidence: number
   confidence_label: 'low' | 'medium' | 'high'
+  round_count: number
+  best_score: number | null
 }
 
 export type RankingSnapshot = {
@@ -207,4 +259,11 @@ export type RankingSnapshot = {
   entries: RankedCourse[]
   unranked_courses: Course[]
   created_at?: string | null
+}
+
+export type FriendRanking = {
+  user: FriendSummary & { home_region: string | null }
+  version: number
+  entries: RankedCourse[]
+  updated_at: string | null
 }

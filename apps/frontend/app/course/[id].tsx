@@ -5,8 +5,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import { createSavedList, getCourse, getCourseRating, getSavedLists, removeCourseFromList, saveCourseToList } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
-import { Avatar, CourseVisual, IconButton, Pill, PrimaryButton, ProductScreen, SectionTitle } from '../../src/components/ProductUI'
-import { DemoCourse, demoCourses, friends } from '../../src/data/demo'
+import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
+import { DemoCourse, demoCourses } from '../../src/data/demo'
 import { Course, CourseRatingState, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
@@ -193,6 +193,7 @@ export default function CourseDetail() {
   const hasKnownRatingState = rating != null
   const defaultSavedList = savedLists?.find((list) => list.is_default) ?? savedLists?.[0]
   const isSaved = Boolean(defaultSavedList?.courses.some((item) => item.course.id === numericCourseId))
+  const details = publicCourse ? courseDetails(publicCourse) : []
 
   return <>
     <Stack.Screen options={{ headerShown: false }} />
@@ -201,7 +202,7 @@ export default function CourseDetail() {
         <CourseVisual course={course} height={260} />
         <View style={styles.back}><IconButton icon="arrow-left" label="Go back" onPress={() => router.back()} /></View>
       </View>
-      <View style={styles.titleRow}><View style={{ flex: 1 }}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text></View>{course.personalRank ? <Pill label={`Your #${course.personalRank}`} /> : null}</View>
+      <View style={styles.titleRow}><View style={{ flex: 1 }}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text></View></View>
 
       <View style={styles.ratingSummary}>
         <View style={styles.ratingBlock}>
@@ -227,15 +228,10 @@ export default function CourseDetail() {
       <View style={styles.actions}>
         {numericCourseId && hasKnownRatingState ? <CourseAction icon={hasPersonalRating ? 'check-circle' : 'edit-3'} label={hasPersonalRating ? 'Rated' : 'Rate'} onPress={() => router.push(`/rate/${numericCourseId}` as never)} /> : null}
         {numericCourseId ? <CourseAction disabled={saveLoading} icon={isSaved ? 'check-circle' : 'bookmark'} label={saveLoading ? 'Saving' : isSaved ? 'Saved' : 'Save'} onPress={() => void toggleSaved()} /> : null}
-        <CourseAction icon="share" label="Share" />
+        {numericCourseId ? <CourseAction icon="flag" label="Log round" onPress={() => router.push(`/round/new?courseId=${numericCourseId}` as never)} /> : null}
       </View>
       {saveError ? <Text accessibilityRole="alert" style={styles.saveError}>{saveError}</Text> : null}
-      <View style={styles.facts}><View><Text style={styles.factValue}>18</Text><Text style={styles.factLabel}>Holes</Text></View><View><Text style={styles.factValue}>135</Text><Text style={styles.factLabel}>Slope</Text></View><View><Text style={styles.factValue}>{course.price}</Text><Text style={styles.factLabel}>Price</Text></View></View>
-      <SectionTitle title="Overview" />
-      <Text style={styles.body}>A memorable routing shaped by its landscape, with strategic approaches and a finish that rewards thoughtful play. Ranked highly by golfers whose taste aligns with yours.</Text>
-      <SectionTitle title="Friends who played" action="See all" onPress={() => router.push('/friends')} />
-      <View style={styles.friendRow}>{friends.slice(0,4).map((friend) => <Avatar key={friend.name} initials={friend.initials} color={friend.accent} size={42} />)}<View style={styles.more}><Text style={styles.moreText}>+24</Text></View></View>
-      <PrimaryButton label="View tee-time options" icon="calendar" />
+      {details.length ? <View style={styles.details}>{details.map((detail) => <View key={detail.label} style={styles.detail}><Text style={styles.detailLabel}>{detail.label}</Text><Text style={styles.detailValue}>{detail.value}</Text></View>)}</View> : null}
     </ProductScreen>
   </>
 }
@@ -250,8 +246,7 @@ const styles = StyleSheet.create({
   ratingSummary: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, flexDirection: 'row', padding: 14 }, ratingBlock: { flex: 1, minHeight: 82 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' }, ratingValue: { color: colors.ink, fontSize: 25, fontWeight: '800', marginTop: 5 }, ratingScale: { color: colors.muted, fontSize: 12, fontWeight: '600' }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 2 }, notRated: { color: colors.muted, fontSize: 13, fontWeight: '700', marginTop: 13 }, personalLoader: { alignSelf: 'flex-start', marginTop: 14 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 }, unavailable: { color: colors.muted, fontSize: 11, textAlign: 'center' },
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 5, minWidth: 64 }, actionIcon: { alignItems: 'center', borderColor: colors.line, borderRadius: 23, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 }, actionLabel: { color: colors.muted, fontSize: 10 },
   actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },
-  facts: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, flexDirection: 'row', justifyContent: 'space-around', padding: 14 }, factValue: { color: colors.ink, fontSize: 16, fontWeight: '800', textAlign: 'center' }, factLabel: { color: colors.muted, fontSize: 9, marginTop: 3, textAlign: 'center' },
-  body: { color: colors.muted, fontSize: 13, lineHeight: 20 }, friendRow: { flexDirection: 'row', gap: 8 }, more: { alignItems: 'center', backgroundColor: '#E7E9E4', borderRadius: 22, height: 42, justifyContent: 'center', width: 42 }, moreText: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  details: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, detail: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }, detailLabel: { color: colors.muted, fontSize: 10, textTransform: 'uppercase' }, detailValue: { color: colors.ink, fontSize: 12, fontWeight: '700' },
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })
 
@@ -267,6 +262,20 @@ function toDemoCourse(course: Course): DemoCourse {
     reviews: String(course.rating_count ?? 0),
     price: course.green_fee > 500 ? '$$$$' : '$$$',
   }
+}
+
+function courseDetails(course: Course): { label: string; value: string }[] {
+  const details: { label: string; value: string }[] = []
+  if (course.hole_count != null) details.push({ label: 'Holes', value: String(course.hole_count) })
+  const access = course.access ?? (course.is_public == null ? null : course.is_public ? 'Public' : 'Private')
+  if (access) details.push({ label: 'Access', value: titleCase(access) })
+  if (course.difficulty) details.push({ label: 'Difficulty', value: titleCase(course.difficulty) })
+  if (course.green_fee != null) details.push({ label: 'Green fee', value: `$${course.green_fee}` })
+  return details
+}
+
+function titleCase(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function parseRatingCount(value: string): number {

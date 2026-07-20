@@ -96,6 +96,12 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
     return followed_ids, followed_ids & reverse_ids
 
 
+def _profile_visibility(session: Session, user_id: int) -> str:
+    preferences = session.get(OnboardingPreference, user_id)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    return onboarding.get("profile_visibility", "public")
+
+
 def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
     return (
         event.actor_user_id == viewer_id
@@ -138,10 +144,14 @@ def search_users(
 ) -> list[UserSummaryOut]:
     current_record = require_user(session, current)
     excluded = _blocked_ids(session, current_record.id) | {current_record.id}
+    _, mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
     results: list[UserSummaryOut] = []
     for user in users:
+        visibility = _profile_visibility(session, user.id)
+        if visibility == "private" or (visibility == "friends" and user.id not in mutual_ids):
+            continue
         summary = _summary(session, user)
         haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
         if needle in haystack:

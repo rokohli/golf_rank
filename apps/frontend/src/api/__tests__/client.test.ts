@@ -1,14 +1,20 @@
 import {
   createSavedList,
+  createRound,
+  deleteRound,
   getCourse,
   getCourseRegions,
   getFeed,
   getFollows,
   getCourseRating,
   getFriends,
+  getFriendRankings,
   getProfile,
   getRanking,
   getRatingCandidate,
+  getRound,
+  getRounds,
+  getRoundSummary,
   getSavedLists,
   removeCourseFromList,
   saveComparison,
@@ -20,6 +26,7 @@ import {
   searchUsers,
   searchCourses,
   setActivityReaction,
+  updateRound,
 } from '../client'
 
 describe('api client', () => {
@@ -100,6 +107,35 @@ describe('api client', () => {
     })
   })
 
+  it('lists, summarizes, creates, updates, and deletes round history', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 42 }),
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+    const input = {
+      course_id: 7, played_on: '2026-07-17', score: 84, note: null,
+      favorite_hole: 7, friend_user_ids: [], guest_names: [], visibility: 'friends' as const,
+      is_favorite: true,
+    }
+    const patch = { ...input }
+    delete (patch as Partial<typeof input>).course_id
+
+    await getRounds(headers, { limit: 20, offset: 20, year: 2026, favorites_only: true })
+    await getRoundSummary(headers)
+    await getRound(42, headers)
+    await createRound(input, headers)
+    await updateRound(42, patch, headers)
+    await deleteRound(42, headers)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8000/api/v1/me/rounds?limit=20&offset=20&year=2026&favorites_only=true', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/rounds/summary', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/me/rounds/42', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/me/rounds', { method: 'POST', headers, body: JSON.stringify(input) })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/me/rounds/42', { method: 'PATCH', headers, body: JSON.stringify(patch) })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/me/rounds/42', { method: 'DELETE', headers })
+  })
+
   it('surfaces API authentication errors during onboarding', async () => {
     jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: false,
@@ -127,6 +163,18 @@ describe('api client', () => {
     await getRanking(headers)
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/rankings', { headers })
+  })
+
+  it('loads mutual friends rankings', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+
+    await getFriendRankings(headers)
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/rankings/friends', { headers })
   })
 
   it('sends tier placements and pairwise comparison outcomes', async () => {

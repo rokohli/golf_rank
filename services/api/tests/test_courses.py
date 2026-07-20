@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.models import Course
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -14,15 +15,30 @@ def test_course_search_filters_by_region_fee_and_access() -> None:
     assert [course["name"] for course in response.json()] == ["Pebble Beach Golf Links"]
 
 
-def test_course_search_filters_by_difficulty() -> None:
-    client = TestClient(create_app())
+def test_course_search_keeps_unknown_difficulty_courses_discoverable() -> None:
+    app = create_app()
+    with app.state.session_factory() as session:
+        session.add(Course(
+            name="Provider Course",
+            region="Monterey, CA",
+            latitude=36.7,
+            longitude=-121.8,
+            difficulty=None,
+            source="provider",
+            source_course_id="provider-course",
+            country_code="US",
+            admin1_code="CA",
+            city="Monterey",
+        ))
+        session.commit()
+    client = TestClient(app)
     response = client.get(
         "/api/v1/courses",
         params={"region": "Monterey, CA", "difficulty": "beginner"},
     )
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert [course["name"] for course in response.json()] == ["Provider Course"]
 
 
 def test_course_detail_resolves_a_course_by_id() -> None:
@@ -52,9 +68,30 @@ def test_course_search_combines_normalized_region_radius_and_stable_cursor() -> 
     )
     assert nearby.status_code == 200
     assert len(nearby.json()) == 1
+    assert nearby.json()[0]["name"] == "Pebble Beach Golf Links"
+    assert nearby.json()[0]["distance_miles"] == 0.0
     first_id = nearby.json()[0]["id"]
     next_page = client.get("/api/v1/courses", params={"admin1": "CA", "cursor": first_id, "limit": 10})
     assert all(course["id"] > first_id for course in next_page.json())
+
+
+def test_location_search_sorts_by_distance_and_supports_offset_pagination() -> None:
+    client = TestClient(create_app())
+    response = client.get(
+        "/api/v1/courses",
+        params={"lat": 36.568, "lng": -121.949, "radius_miles": 100, "limit": 2},
+    )
+
+    assert response.status_code == 200
+    distances = [course["distance_miles"] for course in response.json()]
+    assert distances == sorted(distances)
+    next_page = client.get(
+        "/api/v1/courses",
+        params={"lat": 36.568, "lng": -121.949, "radius_miles": 100, "limit": 2, "offset": 2},
+    )
+    assert {course["id"] for course in response.json()}.isdisjoint(
+        {course["id"] for course in next_page.json()}
+    )
 
 
 def test_course_regions_and_missing_course_submission() -> None:

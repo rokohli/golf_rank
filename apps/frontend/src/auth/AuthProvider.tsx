@@ -1,4 +1,4 @@
-import { ClerkProvider, Show, useSSO, useUser } from '@clerk/expo'
+import { ClerkProvider, Show, useAuth, useSSO, useUser } from '@clerk/expo'
 import { useSignIn, useSignUp } from '@clerk/expo/legacy'
 import { tokenCache } from '@clerk/expo/token-cache'
 import { Feather, Ionicons } from '@expo/vector-icons'
@@ -17,12 +17,18 @@ const ssoRedirectPath = 'sso-callback'
 WebBrowser.maybeCompleteAuthSession()
 
 type AuthGateActions = {
+  profileImageUrl: string | null
   returnToGetStarted: () => boolean
+  signOut: () => Promise<void>
+  updateProfileImage: (file: string) => Promise<void>
   updateUserProfile: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
 }
 
 const AuthGateContext = createContext<AuthGateActions>({
+  profileImageUrl: null,
   returnToGetStarted: () => false,
+  signOut: async () => undefined,
+  updateProfileImage: async () => undefined,
   updateUserProfile: async () => undefined,
 })
 
@@ -39,10 +45,15 @@ const compactAuth = screenHeight < 780
 
 function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [loadingAction, setLoadingAction] = useState<'sign-in' | 'sign-up' | 'email-sign-in' | 'email-sign-up' | 'verify-email' | null>(null)
+  const [loadingAction, setLoadingAction] = useState<
+    'sign-in' | 'sign-up' | 'email-sign-in' | 'email-sign-up' | 'verify-email' | 'request-reset' | 'verify-reset' | 'update-password' | null
+  >(null)
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>(initialMode)
+  const [resetStep, setResetStep] = useState<'request' | 'verify' | 'new-password' | null>(null)
   const [emailAddress, setEmailAddress] = useState('')
   const [password, setPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
   const [verificationPending, setVerificationPending] = useState(false)
@@ -53,6 +64,17 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
 
   const formDisabled = loadingAction !== null || !emailAddress.trim() || password.length < 1
   const signUpDisabled = formDisabled
+  const resetMode = resetStep !== null
+  const authTitle = resetMode ? 'Reset your password' : mode === 'sign-in' ? 'Welcome back.' : 'Create Account'
+  const authSubtitle = resetStep === 'request'
+    ? 'Enter your email and we will send a verification code.'
+    : resetStep === 'verify'
+      ? `Enter the verification code sent for ${emailAddress.trim()}.`
+      : resetStep === 'new-password'
+        ? 'Choose a new password for your account.'
+        : mode === 'sign-in'
+          ? 'Sign in to continue your golf journey.'
+          : 'Join Fairway and start tracking, ranking, and discovering amazing courses.'
 
   const authenticate = async (action: 'sign-in' | 'sign-up', strategy: 'oauth_google' | 'oauth_apple') => {
     setErrorMessage(null)
@@ -170,8 +192,94 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     }
   }
 
+  const requestPasswordReset = async () => {
+    if (!signInState.isLoaded) return
+    setErrorMessage(null)
+    setLoadingAction('request-reset')
+
+    try {
+      await signInState.signIn.create({
+        identifier: emailAddress.trim(),
+        strategy: 'reset_password_email_code',
+      })
+      setVerificationCode('')
+      setResetStep('verify')
+    } catch (reason) {
+      setErrorMessage(authErrorMessage(reason, 'Unable to send a password reset code. Please try again.'))
+    } finally {
+      setLoadingAction(null)
+    }
+  }
+
+  const verifyPasswordResetCode = async () => {
+    if (!signInState.isLoaded) return
+    setErrorMessage(null)
+    setLoadingAction('verify-reset')
+
+    try {
+      const result = await signInState.signIn.attemptFirstFactor({
+        code: verificationCode.trim(),
+        strategy: 'reset_password_email_code',
+      })
+
+      if (result.status === 'needs_new_password') {
+        setResetStep('new-password')
+        return
+      }
+
+      setErrorMessage('Clerk could not verify that reset code. Please request a new code and try again.')
+    } catch (reason) {
+      setErrorMessage(authErrorMessage(reason, 'Unable to verify that reset code. Please try again.'))
+    } finally {
+      setLoadingAction(null)
+    }
+  }
+
+  const updatePassword = async () => {
+    if (!signInState.isLoaded) return
+    if (newPassword !== confirmPassword) {
+      setErrorMessage('Passwords do not match.')
+      return
+    }
+
+    setErrorMessage(null)
+    setLoadingAction('update-password')
+
+    try {
+      const result = await signInState.signIn.resetPassword({ password: newPassword })
+      if (result.status === 'complete' && result.createdSessionId) {
+        await signInState.setActive({ session: result.createdSessionId })
+        return
+      }
+
+      setErrorMessage('Clerk needs another verification step before the password reset can finish.')
+    } catch (reason) {
+      setErrorMessage(authErrorMessage(reason, 'Unable to update your password. Please try again.'))
+    } finally {
+      setLoadingAction(null)
+    }
+  }
+
+  function startPasswordReset() {
+    setErrorMessage(null)
+    setPassword('')
+    setVerificationCode('')
+    setNewPassword('')
+    setConfirmPassword('')
+    setResetStep('request')
+  }
+
+  function leavePasswordReset() {
+    setErrorMessage(null)
+    setVerificationCode('')
+    setNewPassword('')
+    setConfirmPassword('')
+    setResetStep(null)
+  }
+
   function switchMode(nextMode: 'sign-in' | 'sign-up') {
     setMode(nextMode)
+    setResetStep(null)
     setEmailFormVisible(false)
     setVerificationPending(false)
     setErrorMessage(null)
@@ -181,40 +289,120 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     <View style={authStyles.formStack}>
       <View style={authStyles.headingBlock}>
         <Text selectable style={mode === 'sign-in' ? authStyles.signInTitle : authStyles.signUpTitle}>
-          {mode === 'sign-in' ? 'Welcome back.' : 'Create Account'}
+          {authTitle}
         </Text>
         <Text selectable style={authStyles.authSubtitle}>
-          {mode === 'sign-in'
-            ? 'Sign in to continue your golf journey.'
-            : 'Join Fairway and start tracking, ranking, and discovering amazing courses.'}
+          {authSubtitle}
         </Text>
       </View>
 
-      <View style={authStyles.socialStack}>
-        <SocialButton
-          disabled={loadingAction !== null}
-          icon={<Ionicons name="logo-apple" size={19} color="#FFFFFF" />}
-          label={loadingAction === 'sign-in' || loadingAction === 'sign-up' ? 'Opening Clerk...' : 'Continue with Apple'}
-          onPress={() => authenticate(mode, 'oauth_apple')}
-          tone="dark"
-        />
-        <SocialButton
-          disabled={loadingAction !== null}
-          icon={<Text style={authStyles.googleMark}>G</Text>}
-          label="Continue with Google"
-          onPress={() => authenticate(mode, 'oauth_google')}
-          tone="light"
-        />
-        <SocialButton
-          disabled={loadingAction !== null}
-          icon={<Feather name="mail" size={21} color="#1C2420" />}
-          label="Continue with Email"
-          onPress={() => setEmailFormVisible(true)}
-          tone="light"
-        />
-      </View>
+      {!resetMode ? (
+        <View style={authStyles.socialStack}>
+          <SocialButton
+            disabled={loadingAction !== null}
+            icon={<Ionicons name="logo-apple" size={19} color="#FFFFFF" />}
+            label={loadingAction === 'sign-in' || loadingAction === 'sign-up' ? 'Opening Clerk...' : 'Continue with Apple'}
+            onPress={() => authenticate(mode, 'oauth_apple')}
+            tone="dark"
+          />
+          <SocialButton
+            disabled={loadingAction !== null}
+            icon={<Text style={authStyles.googleMark}>G</Text>}
+            label="Continue with Google"
+            onPress={() => authenticate(mode, 'oauth_google')}
+            tone="light"
+          />
+          <SocialButton
+            disabled={loadingAction !== null}
+            icon={<Feather name="mail" size={21} color="#1C2420" />}
+            label="Continue with Email"
+            onPress={() => setEmailFormVisible(true)}
+            tone="light"
+          />
+        </View>
+      ) : null}
 
-      {emailFormVisible ? (
+      {resetMode ? (
+        <View style={authStyles.verifyStack}>
+          {resetStep === 'request' ? (
+            <>
+              <AuthField
+                autoCapitalize="none"
+                autoComplete="email"
+                autoFocus
+                icon={<Feather name="mail" size={21} color="#6C746F" />}
+                inputMode="email"
+                keyboardType="email-address"
+                label="Email address"
+                onChangeText={setEmailAddress}
+                placeholder="Enter your email"
+                textContentType="emailAddress"
+                value={emailAddress}
+              />
+              <PrimaryAuthButton
+                disabled={loadingAction !== null || !emailAddress.trim()}
+                label={loadingAction === 'request-reset' ? 'Sending Code...' : 'Send Reset Code'}
+                onPress={requestPasswordReset}
+              />
+            </>
+          ) : null}
+
+          {resetStep === 'verify' ? (
+            <>
+              <AuthField
+                autoCapitalize="none"
+                autoFocus
+                icon={<Feather name="hash" size={20} color="#6C746F" />}
+                inputMode="numeric"
+                keyboardType="number-pad"
+                label="Reset code"
+                onChangeText={setVerificationCode}
+                placeholder="123456"
+                value={verificationCode}
+              />
+              <PrimaryAuthButton
+                disabled={loadingAction !== null || !verificationCode.trim()}
+                label={loadingAction === 'verify-reset' ? 'Verifying...' : 'Verify Code'}
+                onPress={verifyPasswordResetCode}
+              />
+            </>
+          ) : null}
+
+          {resetStep === 'new-password' ? (
+            <>
+              <AuthField
+                autoCapitalize="none"
+                autoComplete="new-password"
+                autoFocus
+                icon={<Feather name="lock" size={20} color="#6C746F" />}
+                label="New password"
+                onChangeText={setNewPassword}
+                placeholder="Enter a new password"
+                secureTextEntry
+                textContentType="newPassword"
+                value={newPassword}
+              />
+              <PasswordChecklist password={newPassword} />
+              <AuthField
+                autoCapitalize="none"
+                autoComplete="new-password"
+                icon={<Feather name="lock" size={20} color="#6C746F" />}
+                label="Confirm new password"
+                onChangeText={setConfirmPassword}
+                placeholder="Enter your new password again"
+                secureTextEntry
+                textContentType="newPassword"
+                value={confirmPassword}
+              />
+              <PrimaryAuthButton
+                disabled={loadingAction !== null || !newPassword || !confirmPassword}
+                label={loadingAction === 'update-password' ? 'Updating Password...' : 'Update Password'}
+                onPress={updatePassword}
+              />
+            </>
+          ) : null}
+        </View>
+      ) : emailFormVisible ? (
         <>
           <Divider />
 
@@ -254,7 +442,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
           />
 
           {mode === 'sign-in' ? (
-            <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setErrorMessage('Password reset will be added once Clerk reset flow is configured.')}>
+            <Pressable accessibilityRole="button" hitSlop={8} onPress={startPasswordReset}>
               <Text style={authStyles.forgotText}>Forgot password?</Text>
             </Pressable>
           ) : (
@@ -302,14 +490,18 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
 
       <View style={authStyles.modeFooter}>
         <Text style={authStyles.modeFooterMuted}>
-          {mode === 'sign-in' ? "Don't have an account? " : 'Already have an account? '}
+          {resetMode ? 'Remember your password? ' : mode === 'sign-in' ? "Don't have an account? " : 'Already have an account? '}
         </Text>
-        <Pressable accessibilityRole="button" hitSlop={8} onPress={() => switchMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')}>
-          <Text style={authStyles.modeFooterLink}>{mode === 'sign-in' ? 'Sign Up' : 'Sign In'}</Text>
+        <Pressable
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={resetMode ? leavePasswordReset : () => switchMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')}
+        >
+          <Text style={authStyles.modeFooterLink}>{resetMode ? 'Back to Sign In' : mode === 'sign-in' ? 'Sign Up' : 'Sign In'}</Text>
         </Pressable>
       </View>
 
-      {mode === 'sign-in' ? <GolfScene /> : null}
+      {mode === 'sign-in' && !resetMode ? <GolfScene /> : null}
 
       {errorMessage ? (
         <Text accessibilityRole="alert" style={authStyles.errorText}>
@@ -916,12 +1108,19 @@ const authStyles = StyleSheet.create({
 })
 
 function ClerkUserControls({ children }: { children: ReactNode }) {
+  const { signOut } = useAuth()
   const { user } = useUser()
 
   return (
     <AuthGateContext.Provider
       value={{
+        profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
+        signOut,
+        updateProfileImage: async (file) => {
+          if (!user) throw new Error('Your account is not ready yet. Please try again.')
+          await user.setProfileImage({ file })
+        },
         updateUserProfile: async ({ firstName, lastName, username }) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
           await user.update({ firstName, lastName, username })
