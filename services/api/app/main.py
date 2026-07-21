@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -11,7 +12,7 @@ from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import course_data
-from .models import Base, Course, OnboardingPreference, Profile, User, UserCourseRating
+from .models import Base, Course, CourseImage, OnboardingPreference, Profile, User, UserCourseRating
 from .plans import router as plans_router
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
@@ -232,6 +233,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 UserCourseRating.course_id == course_id
             )
         ).one()
+        images = session.scalars(
+            select(CourseImage)
+            .where(CourseImage.course_id == course_id)
+            .order_by(CourseImage.position, CourseImage.id)
+        ).all()
         return {
             **course_data(stored_course),
             "community_rating": (
@@ -240,9 +246,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else None
             ),
             "rating_count": int(rating_count),
+            "images": [
+                {
+                    "id": image.id,
+                    "url": image.external_url or storage_image_url(settings.course_image_base_url, image.storage_key),
+                    "alt_text": image.alt_text,
+                    "source_name": image.source_name,
+                    "source_url": image.source_url,
+                    "position": image.position,
+                    "is_hero": image.is_hero,
+                }
+                for image in images
+            ],
         }
 
     return app
+
+
+def storage_image_url(base_url: str | None, storage_key: str | None) -> str | None:
+    if not base_url or not storage_key:
+        return None
+    return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"
 
 
 app = create_app()

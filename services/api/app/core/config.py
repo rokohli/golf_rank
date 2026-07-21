@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     clerk_issuer: str | None = None
     clerk_jwks_url: str | None = None
     clerk_audience: str | None = None
+    course_image_base_url: str | None = None
 
     def validate_security(self) -> None:
         if self.app_env != "development" and self.allow_development_identity:

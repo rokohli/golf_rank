@@ -71,9 +71,34 @@ class Course(Base):
     course_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", server_default="active", index=True)
     hole_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    par: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slope_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tee_time_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     access: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CourseImage(Base):
+    __tablename__ = "course_images"
+    __table_args__ = (
+        CheckConstraint(
+            "(storage_key IS NOT NULL AND external_url IS NULL) OR "
+            "(storage_key IS NULL AND external_url IS NOT NULL)",
+            name="ck_course_image_one_locator",
+        ),
+        UniqueConstraint("course_id", "position", name="uq_course_image_position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    alt_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    is_hero: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class CourseReconciliation(Base):

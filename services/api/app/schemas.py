@@ -45,6 +45,16 @@ class ProfileOut(OnboardingPreferencesIn):
     pass
 
 
+class CourseImageOut(BaseModel):
+    id: int
+    url: str | None = None
+    alt_text: str | None = None
+    source_name: str | None = None
+    source_url: str | None = None
+    position: int
+    is_hero: bool
+
+
 class CourseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -64,6 +74,10 @@ class CourseOut(BaseModel):
     course_name: str | None = None
     status: str = "active"
     hole_count: int | None = None
+    par: int | None = None
+    slope_rating: int | None = None
+    tee_time_url: str | None = None
+    images: list[CourseImageOut] = Field(default_factory=list)
     access: str | None = None
     community_rating: float | None = None
     rating_count: int = 0

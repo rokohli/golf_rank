@@ -6,12 +6,13 @@ import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, S
 import { DemoCourse } from '../data/demo'
 import { colors, radii } from '../ui/theme'
 
-export function ProductScreen({ children, scroll = true, refreshControl }: { children: ReactNode; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
+export function ProductScreen({ children, edgeToEdge = false, scroll = true, refreshControl }: { children: ReactNode; edgeToEdge?: boolean; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
   const content = scroll ? (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" refreshControl={refreshControl} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+    <ScrollView contentInsetAdjustmentBehavior={edgeToEdge ? 'never' : 'automatic'} refreshControl={refreshControl} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
       {children}
     </ScrollView>
   ) : <View style={styles.content}>{children}</View>
+  if (edgeToEdge) return <View style={styles.safe}>{content}</View>
   return <SafeAreaView style={styles.safe}>{content}</SafeAreaView>
 }
 
@@ -50,9 +51,9 @@ export function BottomNav() {
   )
 }
 
-export function CourseVisual({ course, height = 116, children }: { course: DemoCourse; height?: number; children?: ReactNode }) {
+export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: DemoCourse; height?: number; squareTop?: boolean; children?: ReactNode }) {
   return (
-    <ImageBackground source={course.image} resizeMode="cover" style={[styles.courseVisual, { height }]}>
+    <ImageBackground source={course.image} resizeMode="cover" style={[styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]}>
       <View style={styles.photoWash} />
       {children}
     </ImageBackground>
@@ -135,6 +136,7 @@ const styles = StyleSheet.create({
   navLabel: { color: colors.muted, fontSize: 10, fontWeight: '600' },
   navLabelActive: { color: colors.pine, fontWeight: '800' },
   courseVisual: { borderRadius: 10, overflow: 'hidden', position: 'relative' },
+  courseVisualSquareTop: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
   photoWash: { backgroundColor: 'rgba(8, 25, 17, 0.05)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
   card: { backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden' },
   compactCard: { flex: 1, minWidth: 148 },

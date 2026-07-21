@@ -118,6 +118,7 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
             "city": city,
             "status": "active",
             "hole_count": record.get("holes"),
+            "par": record.get("par"),
             "access": access,
             "source_updated_at": now,
             "last_verified_at": now,

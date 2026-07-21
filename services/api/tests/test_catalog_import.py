@@ -19,6 +19,7 @@ def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records(
         "state": "CA",
         "city": "Los Angeles",
         "type": None,
+        "par": 71,
     }]
     with session_factory() as session:
         first = import_courses(session, records, state="CA")
@@ -29,6 +30,8 @@ def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records(
         assert stored is not None
         assert stored.green_fee is None
         assert stored.access is None
+        assert stored.par == 71
+        assert stored.tee_time_url is None
 
         retired = import_courses(session, [], state="CA")
         assert retired.retired == 1

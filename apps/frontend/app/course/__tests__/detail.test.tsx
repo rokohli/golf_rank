@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { Linking, Share } from 'react-native'
 
 import CourseDetail from '../[id]'
 import { CourseRatingState } from '../../../src/types'
@@ -15,6 +16,8 @@ const mockGetAuthHeaders = jest.fn().mockResolvedValue({
 })
 const mockPush = jest.fn()
 const mockRouter = { back: jest.fn(), push: mockPush }
+const mockShare = jest.spyOn(Share, 'share')
+const mockOpenUrl = jest.spyOn(Linking, 'openURL')
 let mockCourseId = '7'
 let mockFocusEffect: (() => void | (() => void)) | undefined
 let mockFocusCleanup: (() => void) | undefined
@@ -56,6 +59,10 @@ jest.mock('../../../src/auth/useAuthToken', () => ({
   useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 34, left: 0, right: 0, top: 59 }),
+}))
+
 const course = {
   id: 7,
   name: 'Test Links',
@@ -63,6 +70,10 @@ const course = {
   green_fee: 175,
   difficulty: 'challenging',
   is_public: true,
+  hole_count: 18,
+  par: 70,
+  slope_rating: 141,
+  tee_time_url: 'https://example.com/tee-times',
   community_rating: 8.7,
   rating_count: 24,
 }
@@ -90,6 +101,8 @@ describe('course detail ratings', () => {
     mockGetCourseRating.mockResolvedValue(rating(null))
     mockGetSavedLists.mockResolvedValue([])
     mockRemoveCourseFromList.mockResolvedValue(undefined)
+    mockShare.mockResolvedValue({ action: 'sharedAction' } as never)
+    mockOpenUrl.mockResolvedValue(undefined)
   })
 
   it('shows distinct community and personal /10 values with only the supported actions', async () => {
@@ -102,13 +115,75 @@ describe('course detail ratings', () => {
     expect(screen.getByText('24 ratings')).toBeOnTheScreen()
     expect(await screen.findByLabelText('Your rating 9.2 out of 10')).toBeOnTheScreen()
     expect(screen.getByRole('button', { name: 'Rated' })).toBeOnTheScreen()
-    expect(screen.getByText('check-circle')).toBeOnTheScreen()
+    expect(screen.getAllByText('Rated')).toHaveLength(1)
+    expect(screen.getAllByText('check-circle').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Save' })).toBeOnTheScreen()
     expect(screen.getByRole('button', { name: 'Log round' })).toBeOnTheScreen()
     expect(screen.queryByText(/Your #/)).toBeNull()
     expect(screen.queryByText('Review')).toBeNull()
     expect(screen.queryByText('Played')).toBeNull()
     expect(screen.queryByText(/★/)).toBeNull()
+  })
+
+  it('renders course facts and keeps share and tee times functional', async () => {
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('Test Links')).toBeOnTheScreen()
+    expect(screen.getByText('18')).toBeOnTheScreen()
+    expect(screen.getByText('70')).toBeOnTheScreen()
+    expect(screen.getByText('$$$')).toBeOnTheScreen()
+    expect(screen.getByText('141')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Share course' }))
+    await waitFor(() => expect(mockShare).toHaveBeenCalledWith({ message: 'Test Links\nMonterey, CA' }))
+
+    fireEvent.press(screen.getByRole('button', { name: 'View tee times' }))
+    expect(mockOpenUrl).toHaveBeenCalledWith('https://example.com/tee-times')
+  })
+
+  it('shows honest social empty states and real personal round details', async () => {
+    const personal = rating(9.2)
+    personal.round = {
+      id: 42,
+      played_on: '2026-07-18',
+      score: 79,
+      note: 'Fast greens.',
+      favorite_hole: 16,
+      visibility: 'friends',
+    }
+    mockGetCourseRating.mockResolvedValue(personal)
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('No course photos yet.')).toBeOnTheScreen()
+    expect(screen.queryByText('Public shared photos')).toBeNull()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
+    expect(screen.getByText('Fast greens.')).toBeOnTheScreen()
+    expect(screen.getByText('Hole 16')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
+    expect(screen.getByText('Friends’ thoughts aren’t available yet.')).toBeOnTheScreen()
+  })
+
+  it('renders attributed course images returned by the API', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      images: [{
+        id: 8,
+        url: 'https://images.example/test-links.jpg',
+        alt_text: 'Test Links eighteenth green',
+        source_name: 'Course photographer',
+        source_url: 'https://images.example/license',
+        position: 0,
+        is_hero: true,
+      }],
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByLabelText('Test Links eighteenth green')).toBeOnTheScreen()
+    expect(screen.getByText('Photos: Course photographer')).toBeOnTheScreen()
   })
 
   it('starts a separate round log from the course page', async () => {

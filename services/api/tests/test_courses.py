@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.main import create_app
-from app.models import Course
+from app.models import Course, CourseImage
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -42,13 +43,61 @@ def test_course_search_keeps_unknown_difficulty_courses_discoverable() -> None:
 
 
 def test_course_detail_resolves_a_course_by_id() -> None:
-    client = TestClient(create_app())
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/pebble-hero.jpg",
+                alt_text="Pebble Beach coastline",
+                source_name="Example photographer",
+                source_url="https://images.example/license",
+                position=0,
+                is_hero=True,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                storage_key="courses/pebble/second.jpg",
+                alt_text="Pebble Beach green",
+                position=1,
+            ),
+        ])
+        session.commit()
+    client = TestClient(app)
     course_id = client.get("/api/v1/courses", params={"q": "Spyglass"}).json()[0]["id"]
 
     response = client.get(f"/api/v1/courses/{course_id}")
 
     assert response.status_code == 200
     assert response.json()["name"] == "Spyglass Hill Golf Course"
+
+    pebble_id = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]["id"]
+    pebble_response = client.get(f"/api/v1/courses/{pebble_id}")
+    assert pebble_response.status_code == 200
+    assert pebble_response.json()["par"] == 72
+    assert pebble_response.json()["slope_rating"] == 145
+    assert pebble_response.json()["tee_time_url"].startswith("https://www.pebblebeach.com/")
+    assert pebble_response.json()["images"] == [
+        {
+            "id": 1,
+            "url": "https://images.example/pebble-hero.jpg",
+            "alt_text": "Pebble Beach coastline",
+            "source_name": "Example photographer",
+            "source_url": "https://images.example/license",
+            "position": 0,
+            "is_hero": True,
+        },
+        {
+            "id": 2,
+            "url": "https://cdn.example/assets/courses/pebble/second.jpg",
+            "alt_text": "Pebble Beach green",
+            "source_name": None,
+            "source_url": None,
+            "position": 1,
+            "is_hero": False,
+        },
+    ]
 
 
 def test_course_detail_returns_not_found_for_unknown_id() -> None:

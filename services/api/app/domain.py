@@ -48,5 +48,8 @@ def course_data(course: Course) -> dict:
         "course_name": course.course_name,
         "status": course.status,
         "hole_count": course.hole_count,
+        "par": course.par,
+        "slope_rating": course.slope_rating,
+        "tee_time_url": course.tee_time_url,
         "access": course.access,
     }

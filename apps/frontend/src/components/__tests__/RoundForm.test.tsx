@@ -36,8 +36,10 @@ describe('RoundForm', () => {
 
     fireEvent.changeText(screen.getByLabelText('Played date'), '07/17/2026')
     fireEvent.changeText(screen.getByLabelText('Score'), '84')
+    fireEvent.press(screen.getByRole('button', { name: 'Favorite hole & notes' }))
     fireEvent.changeText(screen.getByLabelText('Favorite hole'), '7')
     fireEvent.changeText(screen.getByLabelText('Round notes'), 'Fast greens')
+    fireEvent.press(screen.getByRole('button', { name: 'Played with' }))
     fireEvent.changeText(screen.getByLabelText('Search friends'), 'Sam')
     fireEvent.press(screen.getByRole('button', { name: 'Add Sam Park' }))
     fireEvent(screen.getByLabelText('Favorite round'), 'valueChange', true)
@@ -69,9 +71,9 @@ describe('RoundForm', () => {
     />)
 
     expect(screen.getByText('Score')).toBeOnTheScreen()
-    expect(screen.getByText('Favorite hole')).toBeOnTheScreen()
-    expect(screen.getByText('Notes')).toBeOnTheScreen()
-    expect(screen.getAllByText('Friends').length).toBeGreaterThan(0)
+    expect(screen.getByText('Favorite hole & notes')).toBeOnTheScreen()
+    expect(screen.getByText('Played with')).toBeOnTheScreen()
+    expect(screen.getByText('Visibility')).toBeOnTheScreen()
     expect(screen.queryByText(/optional/)).toBeNull()
     expect(screen.queryByLabelText('Search courses')).toBeNull()
     expect(screen.queryByLabelText('Guest names')).toBeNull()
@@ -87,6 +89,8 @@ describe('RoundForm', () => {
       submitLabel="Log round"
     />)
 
-    expect(screen.getByRole('button', { name: 'Private' }).props.accessibilityState).toEqual(expect.objectContaining({ selected: true }))
+    fireEvent.press(screen.getByRole('button', { name: 'Visibility' }))
+    const selectedPrivate = screen.getAllByRole('button', { name: 'Private' }).find((button) => button.props.accessibilityState?.selected)
+    expect(selectedPrivate?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }))
   })
 })

@@ -15,6 +15,8 @@ type Props = {
   submitLabel: string
 }
 
+type DetailSection = 'people' | 'notes' | 'visibility'
+
 export function RoundForm({ initialRound, initialCourse = null, defaultVisibility = 'friends', friends, searchCourses, onSubmit, submitLabel }: Props) {
   const [course, setCourse] = useState<Course | null>(initialRound?.course ?? initialCourse)
   const [courseQuery, setCourseQuery] = useState(initialRound?.course.name ?? initialCourse?.name ?? '')
@@ -28,6 +30,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const [friendQuery, setFriendQuery] = useState('')
   const [visibility, setVisibility] = useState<RoundVisibility>(initialRound?.visibility ?? defaultVisibility)
   const [favorite, setFavorite] = useState(initialRound?.is_favorite ?? false)
+  const [openSection, setOpenSection] = useState<DetailSection | null>(null)
   const [searching, setSearching] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,9 +45,12 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     const selected = friends.filter((friend) => friendIds.includes(friend.id))
     return [...selected, ...friends].filter((friend, index, items) => items.findIndex((item) => item.id === friend.id) === index).slice(0, 4)
   }, [friendIds, friendQuery, friends])
-  const valid = Boolean(course && parsedDate && parsedDate <= localToday()
-    && (scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 40 && scoreNumber <= 250))
-    && (favoriteHoleNumber === null || (Number.isInteger(favoriteHoleNumber) && favoriteHoleNumber >= 1 && favoriteHoleNumber <= 18)))
+  const courseDateValid = Boolean(course && parsedDate && parsedDate <= localToday())
+  const scoreValid = scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 40 && scoreNumber <= 250)
+  const favoriteHoleValid = favoriteHoleNumber === null || (Number.isInteger(favoriteHoleNumber) && favoriteHoleNumber >= 1 && favoriteHoleNumber <= 18)
+  const valid = courseDateValid && scoreValid && favoriteHoleValid
+  const peopleCount = friendIds.length + guests.length
+  const detailsSummary = favoriteHoleNumber ? `Hole ${favoriteHoleNumber} added` : note.trim() ? 'Notes added' : 'Add details'
 
   async function runCourseSearch() {
     const query = courseQuery.trim()
@@ -83,38 +89,56 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     }
   }
 
+  function toggleSection(section: DetailSection) { setOpenSection((current) => current === section ? null : section) }
+
   return <View style={styles.form}>
-    <FieldLabel text="Course" />
-    {initialRound ? <View style={styles.fixedCourse}><Text style={styles.resultName}>{course?.name}</Text><Text style={styles.help}>{course?.region}</Text></View> : <>
-      <View style={styles.searchRow}>
-        <TextInput accessibilityLabel="Course" onChangeText={(value) => { setCourseQuery(value); if (value !== course?.name) setCourse(null) }} placeholder="Search courses" placeholderTextColor={colors.muted} style={[styles.input, { flex: 1 }]} value={courseQuery} />
-        <Pressable accessibilityRole="button" accessibilityLabel="Search courses" onPress={() => void runCourseSearch()} style={styles.searchButton}>{searching ? <ActivityIndicator color="#FFF" size="small" /> : <Feather name="search" color="#FFF" size={17} />}</Pressable>
+    <Text style={styles.sectionLabel}>Essentials</Text>
+    {initialRound ? <SelectedCourse course={course} /> : <>
+      <View style={styles.courseSearch}>
+        <Feather name="search" color={colors.pineDark} size={20} />
+        <TextInput accessibilityLabel="Course" onChangeText={(value) => { setCourseQuery(value); if (value !== course?.name) setCourse(null) }} onSubmitEditing={() => void runCourseSearch()} placeholder="Search for a course" placeholderTextColor={colors.muted} returnKeyType="search" style={styles.courseSearchInput} value={courseQuery} />
+        <Pressable accessibilityRole="button" accessibilityLabel="Search courses" onPress={() => void runCourseSearch()} style={styles.searchButton}>{searching ? <ActivityIndicator color={colors.pine} size="small" /> : <Feather name="arrow-right" color={colors.pine} size={18} />}</Pressable>
       </View>
       {courseResults.length ? <View style={styles.results}>{courseResults.slice(0, 8).map((result) => <Pressable accessibilityRole="button" accessibilityLabel={`Select ${result.name}`} key={result.id} onPress={() => { setCourse(result); setCourseQuery(result.name); setCourseResults([]) }} style={styles.result}><Text style={styles.resultName}>{result.name}</Text><Text style={styles.help}>{result.region}</Text></Pressable>)}</View> : null}
+      {course ? <SelectedCourse course={course} /> : null}
     </>}
-    {course ? <Text style={styles.selected}>Selected: {course.name} · {course.region}</Text> : <Text style={styles.help}>Choose a course before saving.</Text>}
 
     <View style={styles.twoColumns}>
-      <View style={{ flex: 1 }}><FieldLabel text="Date" /><TextInput accessibilityLabel="Played date" autoCapitalize="none" keyboardType="numbers-and-punctuation" onChangeText={setPlayedOn} placeholder="MM/DD/YYYY" placeholderTextColor={colors.muted} style={styles.input} value={playedOn} /></View>
-      <View style={{ flex: 1 }}><FieldLabel text={initialRound ? 'Score' : 'Score (optional)'} /><TextInput accessibilityLabel="Score" keyboardType="number-pad" onChangeText={setScore} placeholder="84" placeholderTextColor={colors.muted} style={styles.input} value={score} /></View>
+      <View style={styles.essentialField}><FieldLabel text="Date" /><TextInput accessibilityLabel="Played date" autoCapitalize="none" keyboardType="numbers-and-punctuation" onChangeText={setPlayedOn} placeholder="MM/DD/YYYY" placeholderTextColor={colors.muted} style={styles.lineInput} value={playedOn} /></View>
+      <View style={styles.essentialField}><FieldLabel text="Score" /><TextInput accessibilityLabel="Score" keyboardType="number-pad" onChangeText={setScore} placeholder="84" placeholderTextColor={colors.muted} style={styles.lineInput} value={score} /></View>
     </View>
-    <FieldLabel text={initialRound ? 'Favorite hole' : 'Favorite hole (optional)'} /><TextInput accessibilityLabel="Favorite hole" keyboardType="number-pad" onChangeText={setFavoriteHole} placeholder="1–18" placeholderTextColor={colors.muted} style={styles.input} value={favoriteHole} />
-    <FieldLabel text={initialRound ? 'Notes' : 'Notes (optional)'} /><TextInput accessibilityLabel="Round notes" multiline onChangeText={setNote} placeholder="What stood out?" placeholderTextColor={colors.muted} style={[styles.input, styles.notes]} value={note} />
 
-    <FieldLabel text="Friends" />
-    {friends.length > 4 ? <View style={styles.friendSearch}><Feather name="search" color={colors.muted} size={14} /><TextInput accessibilityLabel="Search friends" onChangeText={setFriendQuery} placeholder="Search your friends" placeholderTextColor={colors.muted} style={styles.friendSearchInput} value={friendQuery} /></View> : null}
-    {friends.length ? <View style={styles.chips}>{visibleFriends.map((friend) => { const active = friendIds.includes(friend.id); return <Pressable accessibilityRole="button" accessibilityLabel={`${active ? 'Remove' : 'Add'} ${friend.display_name}`} key={friend.id} onPress={() => setFriendIds((current) => active ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.chip, active && styles.chipActive]}><Text numberOfLines={1} style={[styles.chipText, active && styles.chipTextActive]}>{friend.display_name}</Text></Pressable> })}</View> : <Text style={styles.help}>Follow golfers to add them to a round.</Text>}
+    <Text style={[styles.sectionLabel, styles.detailsLabel]}>Round details</Text>
+    <View style={styles.detailsList}>
+      <DetailRow expanded={openSection === 'people'} label="Played with" onPress={() => toggleSection('people')} value={peopleCount ? `${peopleCount} selected` : 'Add players'} />
+      {openSection === 'people' ? <View style={styles.detailEditor}>
+        {friends.length > 4 ? <View style={styles.friendSearch}><Feather name="search" color={colors.muted} size={14} /><TextInput accessibilityLabel="Search friends" onChangeText={setFriendQuery} placeholder="Search your friends" placeholderTextColor={colors.muted} style={styles.friendSearchInput} value={friendQuery} /></View> : null}
+        {friends.length ? <View style={styles.chips}>{visibleFriends.map((friend) => { const active = friendIds.includes(friend.id); return <Pressable accessibilityRole="button" accessibilityLabel={`${active ? 'Remove' : 'Add'} ${friend.display_name}`} key={friend.id} onPress={() => setFriendIds((current) => active ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.chip, active && styles.chipActive]}><Text numberOfLines={1} style={[styles.chipText, active && styles.chipTextActive]}>{friend.display_name}</Text></Pressable> })}</View> : <Text style={styles.help}>Follow golfers to add them to a round.</Text>}
+      </View> : null}
 
-    <FieldLabel text="Who can see this?" /><View style={styles.visibility}>{(['private', 'friends', 'public'] as RoundVisibility[]).map((value) => { const disabled = initialRound?.is_rating_round && value === 'public'; return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected: visibility === value }} disabled={disabled} key={value} onPress={() => setVisibility(value)} style={[styles.visibilityChoice, visibility === value && styles.visibilityActive, disabled && styles.disabled]}><Text style={[styles.visibilityText, visibility === value && styles.visibilityTextActive]}>{capitalize(value)}</Text></Pressable> })}</View>
-    <View style={styles.favoriteRow}><View><Text style={styles.label}>Favorite round</Text><Text style={styles.help}>Show this round in your Favorites filter.</Text></View><Switch accessibilityLabel="Favorite round" onValueChange={setFavorite} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={favorite ? colors.pine : '#FFF'} value={favorite} /></View>
+      <DetailRow expanded={openSection === 'notes'} label="Favorite hole & notes" onPress={() => toggleSection('notes')} value={detailsSummary} />
+      {openSection === 'notes' ? <View style={styles.detailEditor}>
+        <FieldLabel text="Favorite hole" /><TextInput accessibilityLabel="Favorite hole" keyboardType="number-pad" onChangeText={setFavoriteHole} placeholder="1–18" placeholderTextColor={colors.muted} style={styles.input} value={favoriteHole} />
+        <FieldLabel text="Notes" /><TextInput accessibilityLabel="Round notes" multiline onChangeText={setNote} placeholder="What stood out?" placeholderTextColor={colors.muted} style={[styles.input, styles.notes]} value={note} />
+      </View> : null}
 
-    {!valid ? <Text style={styles.validation}>Select a course, use a past date, and enter scores from 40–250 or holes from 1–18.</Text> : null}
+      <DetailRow expanded={openSection === 'visibility'} icon="users" label="Visibility" onPress={() => toggleSection('visibility')} value={capitalize(visibility)} />
+      {openSection === 'visibility' ? <View style={styles.detailEditor}><View style={styles.visibility}>{(['private', 'friends', 'public'] as RoundVisibility[]).map((value) => { const disabled = initialRound?.is_rating_round && value === 'public'; return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected: visibility === value }} disabled={disabled} key={value} onPress={() => setVisibility(value)} style={[styles.visibilityChoice, visibility === value && styles.visibilityActive, disabled && styles.disabled]}><Text style={[styles.visibilityText, visibility === value && styles.visibilityTextActive]}>{capitalize(value)}</Text></Pressable> })}</View></View> : null}
+
+      <View style={styles.favoriteRow}><View style={styles.favoriteLabel}><Text style={styles.detailLabel}>Favorite round</Text><Feather name="star" color={colors.muted} size={19} /></View><Switch accessibilityLabel="Favorite round" onValueChange={setFavorite} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={favorite ? colors.pine : '#FFF'} value={favorite} /></View>
+    </View>
+
+    {!courseDateValid ? <Text style={styles.requirement}>Course and a past date are required.</Text> : <Text style={styles.requirement}>Course and date are required.</Text>}
+    {!scoreValid ? <Text accessibilityRole="alert" style={styles.validation}>Score must be between 40 and 250.</Text> : null}
+    {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.validation}>Favorite hole must be between 1 and 18.</Text> : null}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => void submit()} style={[styles.submit, (!valid || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitText}>{submitLabel}</Text>}</Pressable>
   </View>
 }
 
 function FieldLabel({ text }: { text: string }) { return <Text style={styles.label}>{text}</Text> }
+function SelectedCourse({ course }: { course: Course | null }) { return course ? <View style={styles.selectedCourse}><View style={{ flex: 1, gap: 3 }}><Text style={styles.selectedCourseName}>{course.name}</Text><Text style={styles.selectedCourseRegion}>{course.region}</Text></View><Feather name="check" color={colors.pine} size={22} /></View> : null }
+function DetailRow({ expanded, icon, label, onPress, value }: { expanded: boolean; icon?: keyof typeof Feather.glyphMap; label: string; onPress: () => void; value: string }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ expanded }} onPress={onPress} style={({ pressed }) => [styles.detailRow, pressed && styles.pressed]}><Text style={styles.detailLabel}>{label}</Text><View style={styles.detailValue}><Text numberOfLines={1} style={styles.detailValueText}>{value}</Text>{icon ? <Feather name={icon} color={colors.muted} size={17} /> : null}<Feather name={expanded ? 'chevron-down' : 'chevron-right'} color={colors.ink} size={18} /></View></Pressable> }
 function capitalize(value: string) { return value.charAt(0).toUpperCase() + value.slice(1) }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
 function listNames(value: string) { return listUnique(value.split(',').map((item) => item.trim()).filter(Boolean)) }
@@ -124,5 +148,50 @@ export function formatDateInput(value: string) { const [year, month, day] = valu
 export function parseDateInput(value: string) { const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim()); if (!match) return null; const [, month, day, year] = match; const candidate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`; const date = new Date(`${candidate}T12:00:00`); return date.getFullYear() === Number(year) && date.getMonth() + 1 === Number(month) && date.getDate() === Number(day) ? candidate : null }
 
 const styles = StyleSheet.create({
-  form: { gap: 10 }, label: { color: colors.ink, fontSize: 11, fontWeight: '800', marginTop: 4 }, input: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 11, borderWidth: 1, color: colors.ink, fontSize: 13, minHeight: 46, paddingHorizontal: 13, paddingVertical: 10 }, notes: { minHeight: 96, textAlignVertical: 'top' }, fixedCourse: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 11, borderWidth: 1, gap: 2, padding: 12 }, searchRow: { flexDirection: 'row', gap: 8 }, searchButton: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: 11, justifyContent: 'center', width: 48 }, results: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 11, borderWidth: 1, overflow: 'hidden' }, result: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 2, padding: 11 }, resultName: { color: colors.ink, fontSize: 12, fontWeight: '800' }, selected: { color: colors.pine, fontSize: 10, fontWeight: '700' }, help: { color: colors.muted, fontSize: 10, lineHeight: 14 }, twoColumns: { flexDirection: 'row', gap: 10 }, friendSearch: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 11 }, friendSearchInput: { color: colors.ink, flex: 1, fontSize: 11, paddingVertical: 7 }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 }, chip: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 16, borderWidth: 1, maxWidth: 150, paddingHorizontal: 10, paddingVertical: 7 }, chipActive: { backgroundColor: colors.pine, borderColor: colors.pine }, chipText: { color: colors.muted, fontSize: 10, fontWeight: '700' }, chipTextActive: { color: '#FFF' }, visibility: { flexDirection: 'row', gap: 7 }, visibilityChoice: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 18, borderWidth: 1, flex: 1, paddingVertical: 9 }, visibilityActive: { backgroundColor: colors.pine, borderColor: colors.pine }, visibilityText: { color: colors.muted, fontSize: 10, fontWeight: '800' }, visibilityTextActive: { color: '#FFF' }, favoriteRow: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 11, borderWidth: 1, flexDirection: 'row', justifyContent: 'space-between', padding: 12 }, validation: { color: colors.error, fontSize: 10 }, error: { color: colors.error, fontSize: 11, textAlign: 'center' }, submit: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: 24, justifyContent: 'center', minHeight: 48, marginTop: 8 }, submitText: { color: '#FFF', fontSize: 13, fontWeight: '800' }, disabled: { opacity: 0.45 },
+  form: { gap: 14 },
+  sectionLabel: { color: colors.muted, fontSize: 10, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase' },
+  detailsLabel: { marginTop: 14 },
+  label: { color: colors.ink, fontSize: 11, fontWeight: '700' },
+  courseSearch: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 12, borderWidth: 1, flexDirection: 'row', gap: 10, minHeight: 54, paddingHorizontal: 14 },
+  courseSearchInput: { color: colors.ink, flex: 1, fontSize: 14, minHeight: 52, paddingVertical: 12 },
+  searchButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
+  results: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 8, borderWidth: 1, overflow: 'hidden' },
+  result: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 2, padding: 12 },
+  resultName: { color: colors.ink, fontSize: 12, fontWeight: '800' },
+  selectedCourse: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, paddingHorizontal: 2, paddingVertical: 12 },
+  selectedCourseName: { color: colors.pineDark, fontSize: 15, fontWeight: '800' },
+  selectedCourseRegion: { color: colors.muted, fontSize: 11 },
+  twoColumns: { flexDirection: 'row', gap: 28 },
+  essentialField: { flex: 1, gap: 4 },
+  lineInput: { borderBottomColor: colors.muted, borderBottomWidth: StyleSheet.hairlineWidth, color: colors.pineDark, fontSize: 15, minHeight: 42, paddingHorizontal: 0, paddingVertical: 8 },
+  detailsList: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth },
+  detailRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 58, paddingHorizontal: 2 },
+  detailLabel: { color: colors.pineDark, fontSize: 14, fontWeight: '700' },
+  detailValue: { alignItems: 'center', flexDirection: 'row', gap: 8, marginLeft: 12 },
+  detailValueText: { color: colors.muted, fontSize: 12, maxWidth: 106 },
+  detailEditor: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 2, paddingVertical: 14 },
+  input: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 13, minHeight: 44, paddingHorizontal: 13, paddingVertical: 10 },
+  notes: { minHeight: 88, textAlignVertical: 'top' },
+  friendSearch: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 11 },
+  friendSearchInput: { color: colors.ink, flex: 1, fontSize: 11, paddingVertical: 7 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chip: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 16, borderWidth: 1, maxWidth: 150, paddingHorizontal: 10, paddingVertical: 7 },
+  chipActive: { backgroundColor: colors.pine, borderColor: colors.pine },
+  chipText: { color: colors.muted, fontSize: 10, fontWeight: '700' },
+  chipTextActive: { color: '#FFF' },
+  visibility: { flexDirection: 'row', gap: 7 },
+  visibilityChoice: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 18, borderWidth: 1, flex: 1, paddingVertical: 9 },
+  visibilityActive: { backgroundColor: colors.pine, borderColor: colors.pine },
+  visibilityText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
+  visibilityTextActive: { color: '#FFF' },
+  favoriteRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 58, paddingHorizontal: 2 },
+  favoriteLabel: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  help: { color: colors.muted, fontSize: 10, lineHeight: 14 },
+  requirement: { color: colors.muted, fontSize: 10, marginTop: 8 },
+  validation: { color: colors.error, fontSize: 10 },
+  error: { color: colors.error, fontSize: 11, textAlign: 'center' },
+  submit: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: 12, justifyContent: 'center', minHeight: 50 },
+  submitText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
+  disabled: { opacity: 0.45 },
+  pressed: { opacity: 0.65 },
 })
