@@ -27,10 +27,10 @@ export default function CourseDetail() {
   const demoCourse = useMemo(() => demoCourses.find((item) => item.id === id) ?? null, [id])
   const isNumericRoute = Boolean(id && /^\d+$/.test(id))
   const numericCourseId = isNumericRoute ? Number(id) : id ? seededDemoCourseIds[id] ?? null : null
-  const [course, setCourse] = useState<DemoCourse | null>(demoCourse)
+  const [course, setCourse] = useState<DemoCourse | null>(demoCourse && !numericCourseId ? demoCourse : null)
   const [publicCourse, setPublicCourse] = useState<Course | null>(null)
   const [courseError, setCourseError] = useState<string | null>(null)
-  const [courseLoading, setCourseLoading] = useState(isNumericRoute)
+  const [courseLoading, setCourseLoading] = useState(Boolean(numericCourseId))
   const [rating, setRating] = useState<CourseRatingState | null>(null)
   const [ratingError, setRatingError] = useState<string | null>(null)
   const [ratingLoading, setRatingLoading] = useState(Boolean(numericCourseId))
@@ -50,14 +50,14 @@ export default function CourseDetail() {
   }, [])
 
   const loadCourse = useCallback(async () => {
-    if (demoCourse) {
+    if (demoCourse && !numericCourseId) {
       setCourse(demoCourse)
       setPublicCourse(null)
       setCourseError(null)
       setCourseLoading(false)
       return
     }
-    if (!id || !/^\d+$/.test(id)) {
+    if (!numericCourseId) {
       setCourse(null)
       setPublicCourse(null)
       setCourseError('Course not found.')
@@ -70,7 +70,7 @@ export default function CourseDetail() {
     setCourseError(null)
     setCourseLoading(true)
     try {
-      const nextCourse = await getCourse(Number(id))
+      const nextCourse = await getCourse(numericCourseId)
       if (!mounted.current) return
       setPublicCourse(nextCourse)
       setCourse(toDemoCourse(nextCourse))
@@ -79,7 +79,7 @@ export default function CourseDetail() {
     } finally {
       if (mounted.current) setCourseLoading(false)
     }
-  }, [demoCourse, id])
+  }, [demoCourse, numericCourseId])
 
   useEffect(() => {
     void loadCourse()

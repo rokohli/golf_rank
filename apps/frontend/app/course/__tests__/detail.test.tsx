@@ -297,6 +297,7 @@ describe('course detail ratings', () => {
 
   it('maps seeded demo courses and hides Rate for demo-only courses', async () => {
     mockCourseId = 'pasatiempo'
+    mockGetCourse.mockResolvedValueOnce({ ...course, id: 3, name: 'Pasatiempo Golf Club', par: 70, slope_rating: 141 })
     mockGetCourseRating.mockResolvedValue(rating(null))
     const { unmount } = render(<CourseDetail />)
 
@@ -310,6 +311,26 @@ describe('course detail ratings', () => {
     expect(await screen.findByText('Bandon Dunes')).toBeOnTheScreen()
     expect(screen.queryByRole('button', { name: 'Rate' })).toBeNull()
     expect(screen.getByText('Personal rating is unavailable for this demo-only course.')).toBeOnTheScreen()
+  })
+
+  it('hydrates a seeded course slug with canonical course facts', async () => {
+    mockCourseId = 'pebble'
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      id: 1,
+      name: 'Pebble Beach Golf Links',
+      hole_count: 18,
+      par: 72,
+      slope_rating: 145,
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.getByText('18')).toBeOnTheScreen()
+    expect(screen.getByText('72')).toBeOnTheScreen()
+    expect(screen.getByText('145')).toBeOnTheScreen()
+    expect(mockGetCourse).toHaveBeenCalledWith(1)
   })
 
   it('offers retry when the public course fails to load', async () => {
