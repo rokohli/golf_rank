@@ -81,21 +81,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    courses = sa.table(
-        "courses",
-        sa.column("source", sa.String()),
-        sa.column("source_course_id", sa.String()),
-        sa.column("par", sa.Integer()),
-        sa.column("slope_rating", sa.Integer()),
-        sa.column("tee_time_url", sa.String()),
-    )
-    connection = op.get_bind()
-    for values in LEGACY_SEEDS.values():
-        connection.execute(
-            courses.update()
-            .where(
-                courses.c.source == "seed",
-                courses.c.source_course_id == values["source_course_id"],
-            )
-            .values(par=None, slope_rating=None, tee_time_url=None)
-        )
+    # These columns already exist at 0010, and the upgrade does not retain enough
+    # provenance to distinguish rows it backfilled from rows enriched by 0010.
+    # Keep the compatible data rather than clearing facts from pre-existing rows.
+    pass

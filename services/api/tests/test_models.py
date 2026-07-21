@@ -272,10 +272,13 @@ def test_legacy_seed_course_facts_are_backfilled(tmp_path: Path, monkeypatch: py
             """
             INSERT INTO courses
                 (id, name, region, latitude, longitude, source, source_course_id,
-                 country_code, status)
+                 country_code, status, par, slope_rating, tee_time_url)
             VALUES
                 (1, 'Pebble Beach Golf Links', 'Monterey, CA', 36.568, -121.949,
-                 'seed', NULL, 'US', 'active')
+                 'seed', NULL, 'US', 'active', NULL, NULL, NULL),
+                (2, 'Spyglass Hill Golf Course', 'Monterey, CA', 36.585, -121.942,
+                 'seed', 'spyglass', 'US', 'active', 72, 145,
+                 'https://www.pebblebeach.com/plan-my-trip/preview-availability/')
             """
         ))
     engine.dispose()
@@ -295,4 +298,24 @@ def test_legacy_seed_course_facts_are_backfilled(tmp_path: Path, monkeypatch: py
     assert row.par == 72
     assert row.slope_rating == 145
     assert row.tee_time_url.startswith("https://www.pebblebeach.com/")
+    engine.dispose()
+
+    command.downgrade(config, "0010_course_detail_enrichment")
+    engine = make_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            """
+            SELECT source_course_id, par, slope_rating, tee_time_url
+            FROM courses WHERE id IN (1, 2) ORDER BY id
+            """
+        )).all()
+
+    assert rows[0].source_course_id == "pebble"
+    assert rows[0].par == 72
+    assert rows[0].slope_rating == 145
+    assert rows[0].tee_time_url.startswith("https://www.pebblebeach.com/")
+    assert rows[1].source_course_id == "spyglass"
+    assert rows[1].par == 72
+    assert rows[1].slope_rating == 145
+    assert rows[1].tee_time_url.startswith("https://www.pebblebeach.com/")
     engine.dispose()
