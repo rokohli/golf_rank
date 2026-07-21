@@ -253,7 +253,7 @@ export default function CourseDetail() {
 
       {!numericCourseId ? <Text style={styles.unavailable}>Personal rating is unavailable for this demo-only course.</Text> : null}
       <View style={styles.actions}>
-        {numericCourseId && hasKnownRatingState ? <CourseAction icon={hasPersonalRating ? 'check-circle' : 'edit-3'} label={hasPersonalRating ? 'Rated' : 'Rate'} onPress={() => router.push(`/rate/${numericCourseId}` as never)} /> : null}
+        {numericCourseId && hasKnownRatingState ? <CourseAction icon={hasPersonalRating ? 'check-circle' : 'bar-chart-2'} label={hasPersonalRating ? 'Rated' : 'Rate'} onPress={() => router.push(`/rate/${numericCourseId}` as never)} /> : null}
         {numericCourseId ? <CourseAction disabled={saveLoading} icon={isSaved ? 'check-circle' : 'bookmark'} label={saveLoading ? 'Saving' : isSaved ? 'Saved' : 'Save'} onPress={() => void toggleSaved()} /> : null}
         {numericCourseId ? <CourseAction icon="edit-3" label="Log round" onPress={() => router.push(`/round/new?courseId=${numericCourseId}` as never)} /> : null}
       </View>

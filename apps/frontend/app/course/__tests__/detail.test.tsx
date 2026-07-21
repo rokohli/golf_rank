@@ -207,6 +207,13 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('SLOPE')).toBeNull()
   })
 
+  it('uses distinct icons for rating and logging a round', async () => {
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('bar-chart-2')).toBeOnTheScreen()
+    expect(screen.getAllByText('edit-3')).toHaveLength(2)
+  })
+
   it('starts a separate round log from the course page', async () => {
     render(<CourseDetail />)
 
