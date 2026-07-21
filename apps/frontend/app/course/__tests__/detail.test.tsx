@@ -186,6 +186,27 @@ describe('course detail ratings', () => {
     expect(screen.getByText('Photos: Course photographer')).toBeOnTheScreen()
   })
 
+  it('shows only known backend facts and does not invent course access', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      difficulty: null,
+      green_fee: null,
+      hole_count: 18,
+      is_public: null,
+      access: null,
+      par: null,
+      slope_rating: null,
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('Access unavailable')).toBeOnTheScreen()
+    expect(screen.getByText('18')).toBeOnTheScreen()
+    expect(screen.queryByText('PAR')).toBeNull()
+    expect(screen.queryByText('GREEN FEE')).toBeNull()
+    expect(screen.queryByText('SLOPE')).toBeNull()
+  })
+
   it('starts a separate round log from the course page', async () => {
     render(<CourseDetail />)
 

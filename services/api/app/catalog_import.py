@@ -14,6 +14,7 @@ from .models import Course, Profile
 
 SOURCE = "opengolfapi"
 API_BASE_URL = "https://api.opengolfapi.org/v1"
+PRESERVE_WHEN_MISSING = {"access", "difficulty", "green_fee", "hole_count", "is_public", "par"}
 STATE_NAMES = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
     "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
@@ -132,6 +133,8 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
             report.updated += 1
             if not dry_run:
                 for key, value in values.items():
+                    if key in PRESERVE_WHEN_MISSING and value is None:
+                        continue
                     setattr(course, key, value)
     for source_id, course in existing.items():
         if source_id not in seen_ids and course.status != "retired":

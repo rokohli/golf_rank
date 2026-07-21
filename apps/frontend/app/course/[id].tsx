@@ -229,7 +229,7 @@ export default function CourseDetail() {
         <View style={[styles.back, { top: insets.top + 12 }]}><HeroButton icon="arrow-left" label="Go back" onPress={() => router.back()} /></View>
         <View style={[styles.heroActions, { top: insets.top + 12 }]}><HeroButton disabled={!numericCourseId || saveLoading} icon="bookmark" label={isSaved ? 'Remove saved course' : 'Save course'} onPress={() => void toggleSaved()} /><HeroButton icon="share" label="Share course" onPress={() => void shareCourse()} /></View>
       </View>
-      <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.access} course</Text><View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View></View>
+      <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}</View>
 
       <View style={styles.ratingSummary}>
         <View style={styles.ratingBlock}>
@@ -310,15 +310,21 @@ function toDemoCourse(course: Course): DemoCourse {
 }
 
 function courseFacts(course: DemoCourse, publicCourse: Course | null) {
-  const access = publicCourse?.access ?? (publicCourse?.is_public == null ? 'Public' : publicCourse.is_public ? 'Public' : 'Private')
+  const accessLabel = publicCourse
+    ? publicCourse.access
+      ? `${titleCase(publicCourse.access)} course`
+      : publicCourse.is_public == null
+        ? 'Access unavailable'
+        : publicCourse.is_public ? 'Public course' : 'Private course'
+    : 'Public course'
+  const items: { label: string; value: string; secondary?: string }[] = []
+  if (publicCourse?.hole_count != null) items.push({ label: 'Holes', value: String(publicCourse.hole_count) })
+  if (publicCourse?.par != null) items.push({ label: 'Par', value: String(publicCourse.par) })
+  if (publicCourse?.green_fee != null) items.push({ label: 'Green fee', value: priceTier(publicCourse.green_fee) })
+  if (publicCourse?.slope_rating != null) items.push({ label: 'Slope', value: String(publicCourse.slope_rating), secondary: publicCourse.difficulty ? titleCase(publicCourse.difficulty) : undefined })
   return {
-    access: titleCase(access),
-    items: [
-      { label: 'Holes', value: publicCourse?.hole_count == null ? '—' : String(publicCourse.hole_count) },
-      { label: 'Par', value: publicCourse?.par == null ? '—' : String(publicCourse.par) },
-      { label: 'Green fee', value: publicCourse ? priceTier(publicCourse.green_fee) : course.price },
-      { label: 'Slope', value: publicCourse?.slope_rating == null ? '—' : String(publicCourse.slope_rating), secondary: publicCourse?.difficulty ? titleCase(publicCourse.difficulty) : undefined },
-    ],
+    accessLabel,
+    items: publicCourse ? items : [{ label: 'Green fee', value: course.price }],
   }
 }
 
