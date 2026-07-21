@@ -254,3 +254,45 @@ def test_rating_experience_migration_round_trip(tmp_path: Path, monkeypatch: pyt
     assert "is_rating_round" not in round_column_names
     assert {"user_course_ratings", "round_companions"}.isdisjoint(inspector.get_table_names())
     engine.dispose()
+
+
+def test_legacy_seed_course_facts_are_backfilled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database_path = tmp_path / "legacy-seed-course.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    api_root = Path(__file__).parents[1]
+    config = Config(str(api_root / "alembic.ini"))
+    config.set_main_option("script_location", str(api_root / "alembic"))
+
+    command.upgrade(config, "0010_course_detail_enrichment")
+    engine = make_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            """
+            INSERT INTO courses
+                (id, name, region, latitude, longitude, source, source_course_id,
+                 country_code, status)
+            VALUES
+                (1, 'Pebble Beach Golf Links', 'Monterey, CA', 36.568, -121.949,
+                 'seed', NULL, 'US', 'active')
+            """
+        ))
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = make_engine(database_url)
+    with engine.connect() as connection:
+        row = connection.execute(text(
+            """
+            SELECT source_course_id, hole_count, par, slope_rating, tee_time_url
+            FROM courses WHERE id = 1
+            """
+        )).one()
+
+    assert row.source_course_id == "pebble"
+    assert row.hole_count == 18
+    assert row.par == 72
+    assert row.slope_rating == 145
+    assert row.tee_time_url.startswith("https://www.pebblebeach.com/")
+    engine.dispose()
