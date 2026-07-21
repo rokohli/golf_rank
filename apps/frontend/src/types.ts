@@ -26,6 +26,16 @@ export type OnboardingPreferences = {
   }
 }
 
+export type CourseImage = {
+  id: number
+  url: string | null
+  alt_text: string | null
+  source_name: string | null
+  source_url: string | null
+  position: number
+  is_hero: boolean
+}
+
 export type Course = {
   id: number
   name: string
@@ -44,6 +54,10 @@ export type Course = {
   course_name?: string | null
   status?: string
   hole_count?: number | null
+  par?: number | null
+  slope_rating?: number | null
+  tee_time_url?: string | null
+  images?: CourseImage[]
   access?: string | null
   community_rating?: number | null
   rating_count?: number

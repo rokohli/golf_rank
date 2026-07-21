@@ -19,16 +19,25 @@ def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records(
         "state": "CA",
         "city": "Los Angeles",
         "type": None,
+        "holes": 18,
+        "par": 71,
     }]
     with session_factory() as session:
         first = import_courses(session, records, state="CA")
-        second = import_courses(session, records, state="CA")
+        second = import_courses(
+            session,
+            [{key: value for key, value in records[0].items() if key not in {"holes", "par"}}],
+            state="CA",
+        )
         assert first.inserted == 1
         assert second.updated == 1
         stored = session.scalar(select(Course).where(Course.source_course_id == "provider-1"))
         assert stored is not None
         assert stored.green_fee is None
         assert stored.access is None
+        assert stored.hole_count == 18
+        assert stored.par == 71
+        assert stored.tee_time_url is None
 
         retired = import_courses(session, [], state="CA")
         assert retired.retired == 1

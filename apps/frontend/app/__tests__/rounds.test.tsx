@@ -64,7 +64,11 @@ describe('round history', () => {
 
     expect(await screen.findByText('Test Links')).toBeOnTheScreen()
     expect(screen.getByText('84.5')).toBeOnTheScreen()
+    expect(screen.getByText('JULY 2026')).toBeOnTheScreen()
+    expect(screen.getByText('JUL')).toBeOnTheScreen()
+    expect(screen.getByText('17')).toBeOnTheScreen()
     expect(screen.queryByText('72°F')).toBeNull()
+    expect(screen.queryByText('chevron-right')).toBeNull()
     expect(mockGetRounds).toHaveBeenCalledWith(expect.anything(), { limit: 20, year: 2026 })
 
     fireEvent.press(screen.getByRole('button', { name: 'Open Test Links round' }))
