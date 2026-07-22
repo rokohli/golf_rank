@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.main import create_app
 
@@ -9,3 +10,29 @@ def test_health_returns_ok_with_request_id() -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert response.headers["x-request-id"]
+
+
+def test_readiness_checks_database_connection() -> None:
+    response = TestClient(create_app()).get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_readiness_fails_when_database_is_unavailable() -> None:
+    class UnavailableSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, _statement):
+            raise OperationalError("SELECT 1", {}, RuntimeError("offline"))
+
+    app = create_app()
+    app.state.session_factory = UnavailableSession
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database unavailable"}

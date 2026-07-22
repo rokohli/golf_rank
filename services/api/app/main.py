@@ -3,7 +3,8 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -30,7 +31,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings.validate_security()
 
     app = FastAPI(title="GolfRank API")
-    engine = make_engine(settings.database_url)
+    engine = make_engine(
+        settings.database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+    )
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
     app.include_router(ranking_router)
@@ -58,6 +63,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    def ready() -> dict[str, str]:
+        try:
+            with app.state.session_factory() as session:
+                session.execute(text("SELECT 1"))
+        except SQLAlchemyError as error:
+            logger.exception("Database readiness check failed")
+            raise HTTPException(503, "Database unavailable") from error
+        return {"status": "ready"}
 
     @app.put("/api/v1/me/onboarding-preferences", response_model=ProfileOut)
     def save_preferences(

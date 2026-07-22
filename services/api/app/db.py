@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
-def make_engine(database_url: str) -> Engine:
+def make_engine(database_url: str, *, pool_size: int = 5, max_overflow: int = 10) -> Engine:
     if database_url.startswith("sqlite"):
         if database_url == "sqlite+pysqlite://":
             engine = create_engine(
@@ -24,7 +24,13 @@ def make_engine(database_url: str) -> Engine:
             cursor.close()
 
         return engine
-    return create_engine(database_url, pool_pre_ping=True)
+    return create_engine(
+        database_url,
+        max_overflow=max_overflow,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=pool_size,
+    )
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

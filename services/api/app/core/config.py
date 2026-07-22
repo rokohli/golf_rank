@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     allow_development_identity: bool = True
     database_url: str = "sqlite+pysqlite://"
+    database_pool_size: int = 5
+    database_max_overflow: int = 10
     clerk_issuer: str | None = None
     clerk_jwks_url: str | None = None
     clerk_audience: str | None = None
