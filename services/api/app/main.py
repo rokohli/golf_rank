@@ -1,5 +1,4 @@
 import logging
-from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -45,7 +44,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_overflow=settings.database_max_overflow,
     )
     app.state.engine = engine
-    app.state.session_factory = make_session_factory(engine)
+    app.state.session_factory = make_session_factory(
+        engine, course_image_base_url=settings.course_image_base_url
+    )
     app.include_router(ranking_router)
     app.include_router(course_ratings_router)
     app.include_router(rounds_router)
@@ -279,7 +280,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 UserCourseRating.course_id.in_(identity_ids)
             )
         ).one()
-        images = stored_course.images
         return {
             **course_data(stored_course),
             "community_rating": (
@@ -288,27 +288,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else None
             ),
             "rating_count": int(rating_count),
-            "images": [
-                {
-                    "id": image.id,
-                    "url": image.external_url or storage_image_url(settings.course_image_base_url, image.storage_key),
-                    "alt_text": image.alt_text,
-                    "source_name": image.source_name,
-                    "source_url": image.source_url,
-                    "position": image.position,
-                    "is_hero": image.is_hero,
-                }
-                for image in images
-            ],
         }
 
     return app
-
-
-def storage_image_url(base_url: str | None, storage_key: str | None) -> str | None:
-    if not base_url or not storage_key:
-        return None
-    return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"
-
 
 app = create_app()

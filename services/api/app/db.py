@@ -33,8 +33,14 @@ def make_engine(database_url: str, *, pool_size: int = 5, max_overflow: int = 10
     )
 
 
-def make_session_factory(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, expire_on_commit=False)
+def make_session_factory(
+    engine: Engine, *, course_image_base_url: str | None = None
+) -> sessionmaker[Session]:
+    return sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+        info={"course_image_base_url": course_image_base_url},
+    )
 
 
 def get_session(request: Request) -> Generator[Session]:

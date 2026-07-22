@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import require_course
+from .domain import course_data, require_course
 from .models import (
     Comparison,
     Course,
@@ -54,6 +54,34 @@ def _adapt_snapshot_entries(entries: list[dict]) -> list[dict]:
     return [
         {**entry, "tier": LEGACY_TIERS.get(entry["tier"], entry["tier"])}
         for entry in entries
+    ]
+
+
+def _current_course_payloads(session: Session, payloads: list[dict]) -> list[dict]:
+    course_ids = [payload["id"] for payload in payloads]
+    courses = (
+        {
+            course.id: course
+            for course in session.scalars(
+                select(Course).where(Course.id.in_(course_ids))
+            ).all()
+        }
+        if course_ids
+        else {}
+    )
+    return [
+        course_data(courses[payload["id"]])
+        if payload["id"] in courses
+        else payload
+        for payload in payloads
+    ]
+
+
+def _with_current_course_data(session: Session, entries: list[dict]) -> list[dict]:
+    courses = _current_course_payloads(session, [entry["course"] for entry in entries])
+    return [
+        {**entry, "course": course}
+        for entry, course in zip(entries, courses, strict=True)
     ]
 
 
@@ -215,14 +243,7 @@ def _stage_snapshot(
         entries.append(
             {
                 "rank": rank,
-                "course": {
-                    "id": course.id,
-                    "name": course.name,
-                    "region": course.region,
-                    "green_fee": course.green_fee,
-                    "difficulty": course.difficulty,
-                    "is_public": course.is_public,
-                },
+                "course": course_data(course),
                 "tier": assignment.tier,
                 "tier_position": assignment.ordinal_position,
                 "personal_rating": _rating(
@@ -241,14 +262,7 @@ def _stage_snapshot(
     ) or 0) + 1
     created_at = datetime.now(UTC)
     unranked_courses = [
-        {
-            "id": courses[assignment.course_id].id,
-            "name": courses[assignment.course_id].name,
-            "region": courses[assignment.course_id].region,
-            "green_fee": courses[assignment.course_id].green_fee,
-            "difficulty": courses[assignment.course_id].difficulty,
-            "is_public": courses[assignment.course_id].is_public,
-        }
+        course_data(courses[assignment.course_id])
         for assignment in unranked_assignments
     ]
     entries_by_course = {entry["course"]["id"]: entry for entry in entries}
@@ -349,14 +363,20 @@ def get_ranking(
             unranked_courses=[],
         )
     entries = _with_round_stats(
-        session, stored.id, _adapt_snapshot_entries(latest.ranking_data["entries"])
+        session,
+        stored.id,
+        _with_current_course_data(
+            session, _adapt_snapshot_entries(latest.ranking_data["entries"])
+        ),
     )
     return RankingSnapshotOut(
         version=latest.version,
         algorithm_version=latest.algorithm_version,
         overall_confidence=latest.overall_confidence,
         entries=entries,
-        unranked_courses=latest.ranking_data.get("unranked_courses", []),
+        unranked_courses=_current_course_payloads(
+            session, latest.ranking_data.get("unranked_courses", [])
+        ),
         created_at=latest.created_at,
     )
 
@@ -388,10 +408,17 @@ def get_friend_rankings(
             .order_by(RankingSnapshot.version.desc())
             .limit(1)
         )
-        entries = [] if latest is None else _with_round_stats(
-            session,
-            friend_id,
-            _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
+        entries = (
+            []
+            if latest is None
+            else _with_round_stats(
+                session,
+                friend_id,
+                _with_current_course_data(
+                    session,
+                    _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
+                ),
+            )
         )
         output.append(FriendRankingOut(
             user=_friend_identity(session, friend),
