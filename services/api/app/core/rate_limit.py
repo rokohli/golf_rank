@@ -270,14 +270,17 @@ async def candidate_rate_limit(
 
 def client_ip(request: Request, settings: Settings) -> str:
     direct = request.client.host if request.client is not None else "unknown"
-    if settings.trust_render_forwarded_for:
+    trusted_hops = settings.forwarded_for_trusted_hops
+    if trusted_hops:
         forwarded_for = request.headers.get("x-forwarded-for")
         if forwarded_for:
-            first = forwarded_for.split(",", 1)[0].strip()
-            try:
-                return str(ip_address(first))
-            except ValueError:
-                pass
+            chain = [item.strip() for item in forwarded_for.split(",")]
+            if len(chain) >= trusted_hops:
+                candidate = chain[-trusted_hops]
+                try:
+                    return str(ip_address(candidate))
+                except ValueError:
+                    pass
     return direct
 
 

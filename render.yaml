@@ -33,8 +33,8 @@ services:
         value: "true"
       - key: RATE_LIMIT_KEY_SALT
         generateValue: true
-      - key: TRUST_RENDER_FORWARDED_FOR
-        value: "true"
+      - key: FORWARDED_FOR_TRUSTED_HOPS
+        value: "1"
       - key: ALLOWED_HOSTS
         value: fairway-api-h93s.onrender.com
       - key: MAX_REQUEST_BODY_BYTES

@@ -28,6 +28,10 @@ cd services/api
 REDIS_TEST_URL=redis://localhost:6379/15 pytest -q tests/test_rate_limit.py
 ```
 
+`FORWARDED_FOR_TRUSTED_HOPS` is `0` by default. Render staging sets it to `1`,
+so the API selects the proxy-appended address from the right side of
+`X-Forwarded-For`; caller-prepended values are never used as the client key.
+
 ### California course catalog
 
 The MVP catalog imports OpenGolfAPI data under ODbL 1.0. Preview and apply an idempotent import with:
