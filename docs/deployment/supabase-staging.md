@@ -38,7 +38,7 @@ DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA --dry-run
 DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA
 ```
 
-The expected migration head is `0013_canonical_course_identity`. Confirm `/health` and `/ready` before pointing a preview build at the API.
+The expected migration head is `0014_provider_first_catalog`. Confirm `/health` and `/ready` before pointing a preview build at the API.
 
 ## Verification
 
