@@ -3,7 +3,7 @@ import { usePathname, useRouter } from 'expo-router'
 import { ReactElement, ReactNode } from 'react'
 import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
-import { DemoCourse } from '../data/demo'
+import { CoursePresentation } from '../coursePresentation'
 import { colors, radii } from '../ui/theme'
 
 export function ProductScreen({ children, edgeToEdge = false, scroll = true, refreshControl }: { children: ReactNode; edgeToEdge?: boolean; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
@@ -51,12 +51,12 @@ export function BottomNav() {
   )
 }
 
-export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: DemoCourse; height?: number; squareTop?: boolean; children?: ReactNode }) {
+export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; children?: ReactNode }) {
   const visualStyle = [styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]
   if (!course.image) {
     return (
-      <View style={[visualStyle, styles.coursePlaceholder]}>
-        <Feather accessibilityLabel="Course image unavailable" name="flag" size={24} color={colors.pine} />
+      <View accessibilityLabel="Course image unavailable" style={[visualStyle, styles.coursePlaceholder]}>
+        <Feather name="flag" size={24} color={colors.pine} />
         {children}
       </View>
     )
@@ -69,7 +69,7 @@ export function CourseVisual({ course, height = 116, squareTop = false, children
   )
 }
 
-export function CourseCard({ course, compact = false, onPress, badge }: { course: DemoCourse; compact?: boolean; onPress?: () => void; badge?: string }) {
+export function CourseCard({ course, compact = false, onPress, badge }: { course: CoursePresentation; compact?: boolean; onPress?: () => void; badge?: string }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, compact && styles.compactCard, pressed && styles.pressed]}>
       <CourseVisual course={course} height={compact ? 92 : 132}>
@@ -88,7 +88,7 @@ export function CourseCard({ course, compact = false, onPress, badge }: { course
   )
 }
 
-export function DemoCourseRow({ course, index, onPress, trailing, showRating = true, showReviewCount = true }: { course: DemoCourse; index?: number; onPress?: () => void; trailing?: ReactNode; showRating?: boolean; showReviewCount?: boolean }) {
+export function CourseRow({ course, index, onPress, trailing, showRating = true, showReviewCount = true }: { course: CoursePresentation; index?: number; onPress?: () => void; trailing?: ReactNode; showRating?: boolean; showReviewCount?: boolean }) {
   return <Pressable onPress={onPress} style={({ pressed }) => [styles.courseRow, pressed && styles.pressed]}>
     {index ? <Text style={styles.courseRowIndex}>{index}</Text> : null}
     <View style={styles.courseRowImage}><CourseVisual course={course} height={52} /></View>

@@ -8,7 +8,7 @@ import { getProfile, getRoundSummary } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, ProductScreen } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { Course, OnboardingPreferences, RoundSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -109,8 +109,8 @@ function ProfileAction({ icon, label, onPress }: { icon: keyof typeof Feather.gl
   return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.pressed]}><Feather name={icon} size={20} color={colors.pine} /><Text style={styles.actionText}>{label}</Text></Pressable>
 }
 
-const profileBackdrop: DemoCourse = { id: 'profile', name: 'Profile', location: '', rating: 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7' }
-function displayCourse(course: Course): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
+const profileBackdrop: CoursePresentation = { id: 'profile', name: 'Profile', location: '', rating: 0, reviews: '', distance: '', price: '' }
+function displayCourse(course: Course): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
 function formatAverage(value: number | null | undefined) { return value == null ? '—' : value.toFixed(1) }
 function formatDate(value: string) { return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) }

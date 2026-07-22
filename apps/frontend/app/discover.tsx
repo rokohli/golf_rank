@@ -5,8 +5,8 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 
 import { getCourseRegions, getProfile, searchCourses, submitCourseCandidate } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
-import { BottomNav, DemoCourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { BottomNav, CourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
+import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { DEFAULT_COURSE_REGION, resolveCurrentLocation } from '../src/location/currentRegion'
 import { loadSavedRegion, saveRegion } from '../src/location/regionPreference'
 import { Course, CourseRegion } from '../src/types'
@@ -193,7 +193,7 @@ export default function Discover() {
       {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading courses" color={colors.pine} /><Text style={styles.muted}>Searching the catalog…</Text></View> : null}
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void loadCourses()} style={styles.primary}><Text style={styles.primaryText}>Try again</Text></Pressable></View> : null}
       {!loading && !error && !courses.length ? <View style={styles.state}><Feather name="map" size={25} color={colors.muted} /><Text style={styles.emptyTitle}>{query || activeFilterCount ? 'No matching courses' : 'The catalog is empty'}</Text><Text style={styles.muted}>{query || activeFilterCount ? 'Try widening your region or clearing a filter.' : `Add catalog data for ${region} to make courses discoverable.`}</Text></View> : null}
-      <View>{courses.map((course, index) => <DemoCourseRow key={course.id} course={toDisplayCourse(course, index)} index={index + 1} showReviewCount={false} onPress={() => router.push(`/course/${course.id}` as never)} />)}</View>
+      <View>{courses.map((course, index) => <CourseRow key={course.id} course={toDisplayCourse(course, index)} index={index + 1} showReviewCount={false} onPress={() => router.push(`/course/${course.id}` as never)} />)}</View>
       {courses.length >= 50 ? <Pressable accessibilityRole="button" disabled={loadingMore} onPress={() => void loadMore()} style={styles.loadMore}>{loadingMore ? <ActivityIndicator color={colors.pine} /> : <Text style={styles.link}>Load more courses</Text>}</Pressable> : null}
       <Pressable accessibilityRole="button" onPress={() => setMissingOpen(true)} style={styles.missing}><View><Text style={styles.missingTitle}>Can’t find a course?</Text><Text style={styles.muted}>Submit it for catalog review.</Text></View><Feather name="plus-circle" size={19} color={colors.pine} /></Pressable>
       <Text style={styles.attribution}>Course catalog data © OpenGolfAPI, ODbL 1.0</Text>
@@ -212,7 +212,7 @@ function FilterModal({ visible, onClose, regions, region, setRegion, radius, set
 
 function OptionRow({ options, selected, onSelect, suffix = '' }: { options: (string | number)[]; selected: string | number; onSelect: (value: never) => void; suffix?: string }) { return <View style={styles.chips}>{options.map((option) => <FilterChip key={option} label={`${typeof option === 'string' ? capitalize(option) : option}${suffix}`} active={selected === option} onPress={() => onSelect(option as never)} />)}</View> }
 function FilterChip({ label, active = false, onPress }: { label: string; active?: boolean; onPress?: () => void }) { return <Pressable accessibilityRole={onPress ? 'button' : undefined} onPress={onPress} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text></Pressable> }
-function toDisplayCourse(course: Course, _index: number): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: course.distance_miles == null ? (course.green_fee == null ? 'Fee unavailable' : `$${course.green_fee}`) : `${course.distance_miles.toFixed(1)} mi`, price: course.green_fee != null && course.green_fee > 500 ? '$$$$' : '$$$', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
+function toDisplayCourse(course: Course, _index: number): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: course.distance_miles == null ? (course.green_fee == null ? 'Fee unavailable' : `$${course.green_fee}`) : `${course.distance_miles.toFixed(1)} mi`, price: course.green_fee != null && course.green_fee > 500 ? '$$$$' : '$$$', image: attributedCourseImage(course) } }
 function regionCode(value: string) { return /,\s*([A-Z]{2})\s*$/.exec(value)?.[1] }
 function capitalize(value: string) { return value.charAt(0).toUpperCase() + value.slice(1) }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }

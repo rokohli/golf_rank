@@ -6,7 +6,7 @@ import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } 
 import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { Activity, Course } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -129,7 +129,7 @@ function eventPresentation(activity: Activity) {
   return { action: 'shared', title: 'Golf update', detail: null, accessibilityLabel: 'Open activity' }
 }
 
-function toDisplayCourse(course: Course, _index: number): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
+function toDisplayCourse(course: Course, _index: number): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
 function openActivity(activity: Activity, router: ReturnType<typeof useRouter>) { if (activity.course) router.push(`/course/${activity.course.id}` as never) }
 function numberDetail(value: unknown, suffix = '') { return typeof value === 'number' ? `${value}${suffix}` : null }
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }

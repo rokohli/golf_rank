@@ -5,8 +5,8 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'rea
 
 import { getFriendRankings, getRanking, saveComparison as saveRankingComparison } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
-import { Avatar, BottomNav, CourseVisual, DemoCourseRow, IconButton, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { Avatar, BottomNav, CourseRow, CourseVisual, IconButton, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
+import { CoursePresentation } from '../src/coursePresentation'
 import { ComparisonResult, FriendRanking, RankedCourse, RankingSnapshot, RankingTier } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -64,7 +64,7 @@ export default function Rankings() {
   }, [refreshRanking]))
 
   const ranked = useMemo(() => {
-    return snapshot?.entries.map((entry, index): DemoCourse => ({
+    return snapshot?.entries.map((entry, index): CoursePresentation => ({
       id: String(entry.course.id),
       name: entry.course.name,
       location: entry.course.region,
@@ -72,8 +72,6 @@ export default function Rankings() {
       reviews: '',
       distance: '',
       price: entry.course.green_fee > 500 ? '$$$$' : '$$$',
-      accent: '#6E8B84',
-      secondary: '#AEC3B7',
       image: undefined,
       personalRank: entry.rank,
       personalRating: entry.personal_rating,
@@ -152,7 +150,7 @@ export default function Rankings() {
             <View style={styles.leaderFacts}><Text style={styles.fact}>Best score: <Text style={styles.factStrong}>{snapshot?.entries[0]?.best_score ?? '—'}</Text></Text><Text style={styles.fact}>Played {snapshot?.entries[0]?.round_count ?? 0} {snapshot?.entries[0]?.round_count === 1 ? 'time' : 'times'}</Text></View>
           </Pressable>
 
-          <View>{ranked.slice(1).map((course) => <DemoCourseRow key={course.id} course={course} index={course.personalRank} showRating={false} onPress={() => router.push(`/course/${course.id}` as never)} trailing={<View style={styles.rowRatingWrap}><Text style={styles.rowRating}>{course.personalRating?.toFixed(1)}<Text style={styles.rowScale}> / 10</Text></Text><Text style={styles.tierLabel}>{tierLabel(course.tier)}</Text></View>} />)}</View>
+          <View>{ranked.slice(1).map((course) => <CourseRow key={course.id} course={course} index={course.personalRank} showRating={false} onPress={() => router.push(`/course/${course.id}` as never)} trailing={<View style={styles.rowRatingWrap}><Text style={styles.rowRating}>{course.personalRating?.toFixed(1)}<Text style={styles.rowScale}> / 10</Text></Text><Text style={styles.tierLabel}>{tierLabel(course.tier)}</Text></View>} />)}</View>
 
           <Pressable accessibilityRole="button" disabled={availableComparisons === 0} onPress={openRefinement} style={[styles.outlineButton, availableComparisons === 0 && styles.disabledButton]}><Text style={[styles.outlineText, availableComparisons === 0 && styles.disabledText]}>Refine my rankings</Text></Pressable>
           <View style={styles.note}><Feather name="award" size={19} color={colors.pine} /><View style={{ flex: 1 }}><Text style={styles.noteTitle}>{availableComparisons ? 'Your list is taking shape' : 'Add another course to refine'}</Text><Text style={styles.noteBody}>{availableComparisons ? `${availableComparisons} same-tier ${availableComparisons === 1 ? 'comparison' : 'comparisons'} can improve your ranking confidence.` : 'Pairwise refinement becomes available when two courses share a tier.'}</Text></View></View>

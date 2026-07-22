@@ -25,6 +25,7 @@ import {
   RatingDetailsInput,
   RatingTier,
 } from '../types'
+import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
 
 type Guest = { name: string; phone: string | null }
@@ -47,12 +48,6 @@ const tiers: { key: RatingTier; name: string; range: string; icon: keyof typeof 
   { key: 'fairway', name: 'Fairway', range: '7–8.4', icon: 'compass' },
   { key: 'rough', name: 'Rough', range: '5–6.9', icon: 'wind' },
   { key: 'bunker', name: 'Bunker', range: '1–4.9', icon: 'circle' },
-]
-
-const courseImages = [
-  require('../../assets/course-images/coastal-course.png'),
-  require('../../assets/course-images/parkland-course.png'),
-  require('../../assets/course-images/dunes-course.png'),
 ]
 
 function localToday() {
@@ -301,9 +296,9 @@ export function RatingFlow({
 
           {stage === 'comparison' && candidate ? (
             <View style={styles.comparisonStage}>
-              <CourseChoice course={course} disabled={busy} imageIndex={0} onPress={() => persistRating(candidate.id, 'course_a')} />
+              <CourseChoice course={course} disabled={busy} onPress={() => persistRating(candidate.id, 'course_a')} />
               <View style={styles.versusRow}><View style={styles.versusLine} /><Text style={styles.versus}>VS.</Text><View style={styles.versusLine} /></View>
-              <CourseChoice course={candidate} disabled={busy} imageIndex={1} onPress={() => persistRating(candidate.id, 'course_b')} />
+              <CourseChoice course={candidate} disabled={busy} onPress={() => persistRating(candidate.id, 'course_b')} />
               <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => persistRating(candidate.id, 'too_close')} style={styles.tooClose}><Text style={styles.tooCloseText}>Too close</Text></Pressable>
             </View>
           ) : null}
@@ -342,7 +337,8 @@ function InlineField(props: React.ComponentProps<typeof TextInput>) {
   return <View style={styles.inlineFieldWrap}><TextInput placeholderTextColor="#929A95" style={[styles.inlineField, props.multiline && styles.multiline]} {...props} /></View>
 }
 
-function CourseChoice({ course, imageIndex, disabled, onPress }: { course: Course; imageIndex: number; disabled: boolean; onPress: () => void }) {
+function CourseChoice({ course, disabled, onPress }: { course: Course; disabled: boolean; onPress: () => void }) {
+  const image = attributedCourseImage(course)
   return <Pressable
     accessibilityLabel={course.name}
     accessibilityRole="button"
@@ -351,7 +347,9 @@ function CourseChoice({ course, imageIndex, disabled, onPress }: { course: Cours
     onPress={onPress}
     style={({ pressed }) => [styles.courseChoice, pressed && styles.courseChoicePressed]}
   >
-    <ImageBackground source={courseImages[imageIndex % courseImages.length]} style={styles.courseImage} imageStyle={styles.courseImageRadius} />
+    {image
+      ? <ImageBackground accessibilityLabel={`${course.name} course photo`} source={image} style={styles.courseImage} imageStyle={styles.courseImageRadius} />
+      : <View accessibilityLabel={`${course.name} image unavailable`} style={[styles.courseImage, styles.courseImagePlaceholder]}><Feather name="flag" size={25} color={colors.pine} /></View>}
     <View style={styles.courseCopy}><Text style={styles.comparisonName}>{course.name}</Text><Text style={styles.courseRegion}>{course.region}</Text></View>
   </Pressable>
 }
@@ -456,6 +454,7 @@ const styles = StyleSheet.create({
   courseChoicePressed: { backgroundColor: colors.pineSoft, borderWidth: 1, transform: [{ scale: 0.995 }] },
   courseImage: { height: 112, width: 140 },
   courseImageRadius: { borderRadius: 3 },
+  courseImagePlaceholder: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: 3, justifyContent: 'center' },
   courseCopy: { flex: 1, gap: 8 },
   comparisonName: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 20, lineHeight: 24 },
   courseRegion: { color: colors.muted, fontSize: 12, lineHeight: 17 },

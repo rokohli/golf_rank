@@ -96,4 +96,17 @@ def course_data(course: Course) -> dict:
         "slope_rating": course.slope_rating,
         "tee_time_url": course.tee_time_url,
         "access": course.access,
+        "images": [
+            {
+                "id": image.id,
+                "url": image.external_url,
+                "alt_text": image.alt_text,
+                "source_name": image.source_name,
+                "source_url": image.source_url,
+                "position": image.position,
+                "is_hero": image.is_hero,
+            }
+            for image in course.images
+            if image.external_url is not None
+        ],
     }

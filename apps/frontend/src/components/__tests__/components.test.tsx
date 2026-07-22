@@ -4,7 +4,6 @@ import * as SecureStore from 'expo-secure-store'
 import { CourseList } from '../CourseList'
 import { OnboardingForm } from '../OnboardingForm'
 import { CourseCard } from '../ProductUI'
-import { demoCourses } from '../../data/demo'
 
 jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn().mockResolvedValue(undefined),
@@ -111,10 +110,19 @@ describe('CourseList', () => {
 
 describe('course rating presentation', () => {
   it('renders community ratings on a 10-point scale without stars', () => {
-    render(<CourseCard course={demoCourses[0]} />)
+    render(<CourseCard course={{
+      id: '1',
+      name: 'Pebble Beach Golf Links',
+      location: 'Pebble Beach, CA',
+      rating: 9.7,
+      reviews: '2,341',
+      distance: '',
+      price: '$$$$',
+    }} />)
 
     expect(screen.getByLabelText('Community rating 9.7 out of 10')).toBeOnTheScreen()
     expect(screen.getByText('9.7/10')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Course image unavailable')).toBeOnTheScreen()
     expect(screen.queryByText(/★/)).toBeNull()
   })
 })

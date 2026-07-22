@@ -1,20 +1,15 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Linking, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { createSavedList, getCourse, getCourseRating, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
-import { DemoCourse, demoCourses } from '../../src/data/demo'
+import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
 import { Course, CourseRatingState, RoundPatch, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
-
-const seededDemoCourseIds: Record<string, number> = {
-  pebble: 1,
-  pasatiempo: 3,
-}
 
 export default function CourseDetail() {
   const router = useRouter()
@@ -24,10 +19,9 @@ export default function CourseDetail() {
   const mounted = useRef(true)
   const ratingRequestVersion = useRef(0)
   const savedRequestVersion = useRef(0)
-  const demoCourse = useMemo(() => demoCourses.find((item) => item.id === id) ?? null, [id])
   const isNumericRoute = Boolean(id && /^\d+$/.test(id))
-  const numericCourseId = isNumericRoute ? Number(id) : id ? seededDemoCourseIds[id] ?? null : null
-  const [course, setCourse] = useState<DemoCourse | null>(demoCourse && !numericCourseId ? demoCourse : null)
+  const numericCourseId = isNumericRoute ? Number(id) : null
+  const [course, setCourse] = useState<CoursePresentation | null>(null)
   const [publicCourse, setPublicCourse] = useState<Course | null>(null)
   const [courseError, setCourseError] = useState<string | null>(null)
   const [courseLoading, setCourseLoading] = useState(Boolean(numericCourseId))
@@ -50,13 +44,6 @@ export default function CourseDetail() {
   }, [])
 
   const loadCourse = useCallback(async () => {
-    if (demoCourse && !numericCourseId) {
-      setCourse(demoCourse)
-      setPublicCourse(null)
-      setCourseError(null)
-      setCourseLoading(false)
-      return
-    }
     if (!numericCourseId) {
       setCourse(null)
       setPublicCourse(null)
@@ -73,13 +60,13 @@ export default function CourseDetail() {
       const nextCourse = await getCourse(numericCourseId)
       if (!mounted.current) return
       setPublicCourse(nextCourse)
-      setCourse(toDemoCourse(nextCourse))
+      setCourse(toCoursePresentation(nextCourse))
     } catch (reason) {
       if (mounted.current) setCourseError(errorMessage(reason, 'Unable to load this course.'))
     } finally {
       if (mounted.current) setCourseLoading(false)
     }
-  }, [demoCourse, numericCourseId])
+  }, [numericCourseId])
 
   useEffect(() => {
     void loadCourse()
@@ -231,7 +218,7 @@ export default function CourseDetail() {
   const defaultSavedList = savedLists?.find((list) => list.is_default) ?? savedLists?.[0]
   const isSaved = Boolean(defaultSavedList?.courses.some((item) => item.course.id === numericCourseId))
   const facts = courseFacts(course, publicCourse)
-  const photos = publicCourse?.images?.filter((image) => image.url) ?? []
+  const photos = publicCourse ? attributedCourseImages(publicCourse) : []
 
   return <>
     <Stack.Screen options={{ headerShown: false }} />
@@ -263,7 +250,6 @@ export default function CourseDetail() {
         </View>
       </View>
 
-      {!numericCourseId ? <Text style={styles.unavailable}>Personal rating is unavailable for this demo-only course.</Text> : null}
       <View style={styles.actions}>
         {numericCourseId && hasKnownRatingState ? <CourseAction icon={hasPersonalRating ? 'check-circle' : 'bar-chart-2'} label={hasPersonalRating ? 'Rated' : 'Rate'} onPress={() => router.push(`/rate/${numericCourseId}` as never)} /> : null}
         {numericCourseId ? <CourseAction disabled={saveLoading} icon={isSaved ? 'check-circle' : 'bookmark'} label={saveLoading ? 'Saving' : isSaved ? 'Saved' : 'Save'} onPress={() => void toggleSaved()} /> : null}
@@ -351,7 +337,7 @@ const styles = StyleSheet.create({
   hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' }, back: { left: 14, position: 'absolute', top: 14 }, heroActions: { flexDirection: 'row', gap: 8, position: 'absolute', right: 14, top: 14 }, heroButton: { alignItems: 'center', backgroundColor: 'rgba(16,56,42,0.88)', borderColor: 'rgba(255,255,255,0.35)', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
   coursePanel: { backgroundColor: colors.pine, borderRadius: 14, marginHorizontal: -18, marginTop: -38, paddingHorizontal: 22, paddingTop: 24, zIndex: 2 }, title: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 25, lineHeight: 31 }, location: { color: '#D0DAD4', fontSize: 12, marginTop: 7 }, access: { color: '#D0DAD4', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 15, textTransform: 'uppercase' },
   facts: { borderTopColor: 'rgba(255,255,255,0.23)', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', marginTop: 18 }, fact: { alignItems: 'center', flex: 1, minHeight: 94, paddingHorizontal: 4, paddingTop: 17 }, factBorder: { borderLeftColor: 'rgba(255,255,255,0.23)', borderLeftWidth: StyleSheet.hairlineWidth }, factValue: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 22 }, factLabel: { color: '#D0DAD4', fontSize: 7, fontWeight: '800', letterSpacing: 1, marginTop: 7, textAlign: 'center', textTransform: 'uppercase' }, factSecondary: { color: '#D0DAD4', fontSize: 8, marginTop: 4, textAlign: 'center' },
-  ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 }, unavailable: { color: colors.muted, fontSize: 11, textAlign: 'center' },
+  ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 },
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 7, minWidth: 70 }, actionIcon: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 24, borderWidth: 1, height: 48, justifyContent: 'center', width: 48 }, actionIconPressed: { backgroundColor: colors.pine, borderColor: colors.pine }, actionLabel: { color: colors.ink, fontSize: 10 }, actionLabelPressed: { color: colors.pine, fontWeight: '700' }, actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },
   teeTimes: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 46 }, teeTimesText: { color: colors.pineDark, fontSize: 13, fontWeight: '700' }, pressed: { opacity: 0.7 },
   photoSection: { gap: 12 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, photoRow: { flexDirection: 'row', gap: 8 }, photo: { aspectRatio: 1.25, borderRadius: 7, flex: 1 }, photoCredit: { color: colors.muted, fontSize: 9 }, emptyPhotos: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, minHeight: 58 }, emptyText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
@@ -359,8 +345,7 @@ const styles = StyleSheet.create({
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })
 
-function toDemoCourse(course: Course): DemoCourse {
-  const heroImage = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url)
+function toCoursePresentation(course: Course): CoursePresentation {
   return {
     id: String(course.id),
     location: course.region,
@@ -369,13 +354,11 @@ function toDemoCourse(course: Course): DemoCourse {
     reviews: String(course.rating_count ?? 0),
     distance: '',
     price: priceTier(course.green_fee),
-    accent: '#6E8B84',
-    secondary: '#AEC3B7',
-    image: heroImage?.url ? { uri: heroImage.url } : undefined,
+    image: attributedCourseImage(course),
   }
 }
 
-function courseFacts(course: DemoCourse, publicCourse: Course | null) {
+function courseFacts(course: CoursePresentation, publicCourse: Course | null) {
   const accessLabel = publicCourse
     ? publicCourse.access
       ? `${titleCase(publicCourse.access)} course`

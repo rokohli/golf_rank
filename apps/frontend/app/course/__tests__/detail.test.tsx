@@ -208,6 +208,27 @@ describe('course detail ratings', () => {
     expect(screen.getByText('Photos: Course photographer')).toBeOnTheScreen()
   })
 
+  it('does not present an unattributed URL as a course photograph', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      images: [{
+        id: 8,
+        url: 'https://images.example/unknown.jpg',
+        alt_text: null,
+        source_name: null,
+        source_url: null,
+        position: 0,
+        is_hero: true,
+      }],
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('No course photos yet.')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Course image unavailable')).toBeOnTheScreen()
+    expect(screen.queryByLabelText('Test Links course photo')).toBeNull()
+  })
+
   it('shows only known backend facts and does not invent course access', async () => {
     mockGetCourse.mockResolvedValue({
       ...course,
@@ -345,42 +366,15 @@ describe('course detail ratings', () => {
     expect(screen.queryByLabelText('Loading your rating')).toBeNull()
   })
 
-  it('maps seeded demo courses and hides Rate for demo-only courses', async () => {
-    mockCourseId = 'pasatiempo'
-    mockGetCourse.mockResolvedValueOnce({ ...course, id: 3, name: 'Pasatiempo Golf Club', par: 70, slope_rating: 141 })
-    mockGetCourseRating.mockResolvedValue(rating(null))
-    const { unmount } = render(<CourseDetail />)
-
-    expect(await screen.findByRole('button', { name: 'Rate' })).toBeOnTheScreen()
-    fireEvent.press(screen.getByRole('button', { name: 'Rate' }))
-    expect(mockPush).toHaveBeenLastCalledWith('/rate/3')
-    unmount()
-
-    mockCourseId = 'bandon'
-    render(<CourseDetail />)
-    expect(await screen.findByText('Bandon Dunes')).toBeOnTheScreen()
-    expect(screen.queryByRole('button', { name: 'Rate' })).toBeNull()
-    expect(screen.getByText('Personal rating is unavailable for this demo-only course.')).toBeOnTheScreen()
-  })
-
-  it('hydrates a seeded course slug with canonical course facts', async () => {
+  it('rejects legacy demo slugs instead of presenting bundled course data', async () => {
     mockCourseId = 'pebble'
-    mockGetCourse.mockResolvedValue({
-      ...course,
-      id: 1,
-      name: 'Pebble Beach Golf Links',
-      hole_count: 18,
-      par: 72,
-      slope_rating: 145,
-    })
 
     render(<CourseDetail />)
 
-    expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
-    expect(screen.getByText('18')).toBeOnTheScreen()
-    expect(screen.getByText('72')).toBeOnTheScreen()
-    expect(screen.queryByText('145')).toBeNull()
-    expect(mockGetCourse).toHaveBeenCalledWith(1)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Course not found.')
+    expect(mockGetCourse).not.toHaveBeenCalled()
+    expect(mockGetCourseRating).not.toHaveBeenCalled()
+    expect(screen.queryByText('Pebble Beach Golf Links')).toBeNull()
   })
 
   it('offers retry when the public course fails to load', async () => {

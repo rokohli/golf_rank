@@ -6,7 +6,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View 
 import { createPlan, deletePlan, getPlan, getPlans, savePlan, updatePlan } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { CourseVisual, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { GolfPlan, PlanInput, PlanSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -185,7 +185,7 @@ function PlanResult({ plan, onSave, onDelete, working }: { plan: GolfPlan; onSav
 }
 
 function Field({ label, help, ...props }: { label: string; help?: string } & React.ComponentProps<typeof TextInput>) { return <View style={styles.fieldWrap}><Text style={styles.label}>{label}</Text><TextInput accessibilityLabel={label} placeholderTextColor={colors.muted} style={styles.field} {...props} />{help ? <Text style={styles.help}>{help}</Text> : null}</View> }
-function displayCourse(course: GolfPlan['candidates'][number]['course']): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
+function displayCourse(course: GolfPlan['candidates'][number]['course']): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
 function validate(input: PlanInput) { if (!input.title) return 'Enter a trip name.'; if (!input.start_date || !input.end_date) return 'Use MM/DD/YYYY for both dates.'; if (input.end_date < input.start_date) return 'End date must be on or after the start date.'; return null }
 function nullableNumber(value: string) { const trimmed = value.trim(); if (!trimmed) return null; const number = Number(trimmed); return Number.isFinite(number) ? number : null }
 function numeric(value: string, fallback: number) { const number = Number(value.replace(/\D/g, '')); return number || fallback }

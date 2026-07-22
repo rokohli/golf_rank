@@ -16,7 +16,6 @@ from .domain import canonical_courses_only, course_data, course_identity_ids, re
 from .models import (
     Base,
     Course,
-    CourseImage,
     CourseReconciliation,
     OnboardingPreference,
     Profile,
@@ -280,11 +279,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 UserCourseRating.course_id.in_(identity_ids)
             )
         ).one()
-        images = session.scalars(
-            select(CourseImage)
-            .where(CourseImage.course_id == canonical_id)
-            .order_by(CourseImage.position, CourseImage.id)
-        ).all()
+        images = stored_course.images
         return {
             **course_data(stored_course),
             "community_rating": (
