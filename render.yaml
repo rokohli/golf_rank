@@ -7,7 +7,7 @@ services:
     repo: https://github.com/rokohli/golf_rank
     dockerContext: ./services/api
     dockerfilePath: ./services/api/Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /ready
     autoDeployTrigger: checksPass
     envVars:
       - key: APP_ENV
