@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: fairway-api
+    runtime: docker
+    plan: free
+    region: oregon
+    repo: https://github.com/rokohli/golf_rank
+    dockerContext: ./services/api
+    dockerfilePath: ./services/api/Dockerfile
+    healthCheckPath: /ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: ALLOW_DEVELOPMENT_IDENTITY
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_POOL_SIZE
+        value: "5"
+      - key: DATABASE_MAX_OVERFLOW
+        value: "5"
+      - key: CLERK_ISSUER
+        sync: false
+      - key: CLERK_JWKS_URL
+        sync: false
