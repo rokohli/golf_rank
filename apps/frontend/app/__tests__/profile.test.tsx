@@ -56,6 +56,10 @@ jest.mock('../../src/auth/useAuthToken', () => ({
   useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 34, left: 0, right: 0, top: 59 }),
+}))
+
 const profile = {
   access: 'public',
   difficulty: 'challenging',

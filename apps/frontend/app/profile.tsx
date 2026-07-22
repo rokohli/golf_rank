@@ -2,6 +2,7 @@ import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
 import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { getProfile, getRoundSummary } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
@@ -13,6 +14,7 @@ import { colors } from '../src/ui/theme'
 
 export default function Profile() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const { profileImageUrl } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
@@ -48,10 +50,10 @@ export default function Profile() {
 
   return <>
     <Stack.Screen options={{ headerShown: false }} />
-    <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
+    <ProductScreen edgeToEdge refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
       <View style={styles.hero}>
-        <CourseVisual course={demoCourses[0]} height={176} />
-        <Pressable accessibilityLabel="Profile settings" accessibilityRole="button" hitSlop={10} onPress={() => router.push('/settings' as never)} style={({ pressed }) => [styles.settings, pressed && styles.pressed]}>
+        <CourseVisual course={demoCourses[0]} height={176 + insets.top} squareTop />
+        <Pressable accessibilityLabel="Profile settings" accessibilityRole="button" hitSlop={10} onPress={() => router.push('/settings' as never)} style={({ pressed }) => [styles.settings, { top: insets.top + 8 }, pressed && styles.pressed]}>
           <Feather name="settings" size={22} color="#FFFFFF" />
         </Pressable>
         <View style={styles.avatarWrap}><Avatar color={colors.pine} imageUrl={profileImageUrl} initials={initials(name)} size={64} /></View>
@@ -113,7 +115,7 @@ function message(reason: unknown, fallback: string) { return reason instanceof E
 
 const styles = StyleSheet.create({
   hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' },
-  settings: { alignItems: 'center', height: 44, justifyContent: 'center', position: 'absolute', right: 10, top: 8, width: 44 },
+  settings: { alignItems: 'center', height: 44, justifyContent: 'center', position: 'absolute', right: 10, width: 44 },
   avatarWrap: { alignItems: 'center', bottom: -32, left: 0, position: 'absolute', right: 0 },
   identity: { alignItems: 'center', gap: 4, marginTop: 22 },
   name: { color: colors.ink, fontFamily: 'Georgia', fontSize: 23 },

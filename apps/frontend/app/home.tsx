@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
 import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
@@ -19,6 +19,13 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [greeting, setGreeting] = useState(() => greetingForHour(new Date().getHours()))
+
+  useEffect(() => {
+    const updateGreeting = () => setGreeting(greetingForHour(new Date().getHours()))
+    const interval = setInterval(updateGreeting, 60_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true)
@@ -79,7 +86,7 @@ export default function Home() {
   return <>
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
-      <View style={styles.topRow}><Text style={styles.title}>Good morning</Text><View style={styles.topActions}><IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} /><Pressable accessibilityRole="button" accessibilityLabel="Profile" onPress={() => router.push('/profile')}><Avatar initials="GR" /></Pressable></View></View>
+      <View style={styles.topRow}><Text style={styles.title}>{greeting}</Text><View style={styles.topActions}><IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} /><Pressable accessibilityRole="button" accessibilityLabel="Profile" onPress={() => router.push('/profile')}><Avatar initials="GR" /></Pressable></View></View>
       <SectionTitle title="FRIENDS ACTIVITY" action="Find friends" onPress={() => router.push('/friends')} />
 
       {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading friends activity" color={colors.pine} /></View> : null}
@@ -127,6 +134,7 @@ function numberDetail(value: unknown, suffix = '') { return typeof value === 'nu
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
 function relativeTime(value: string) { const days = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000)); return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : `${days}d ago` }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
+export function greetingForHour(hour: number) { return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening' }
 
 const styles = StyleSheet.create({
   topRow: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' }, topActions: { alignItems: 'center', flexDirection: 'row', gap: 9 }, title: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 31, fontWeight: '400', letterSpacing: -0.8, lineHeight: 36 },

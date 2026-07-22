@@ -103,6 +103,29 @@ describe('Discover location search', () => {
     expect(await screen.findByDisplayValue('Monterey, CA')).toBeOnTheScreen()
   })
 
+  it('searches the full catalog even when the course is outside the selected region', async () => {
+    mockResolveCurrentRegion.mockResolvedValue({ label: 'Monterey, CA', latitude: 36.6, longitude: -121.9 })
+    mockSearchCourses.mockImplementation(async (filters: { q?: string; region?: string; lat?: number }) => {
+      if (filters.q === 'Torrey Pines') return [courses[1]]
+      if (filters.region === 'Monterey, CA' || filters.lat !== undefined) return [courses[0]]
+      return courses
+    })
+    render(<Discover />)
+
+    fireEvent(screen.getByLabelText('Search courses'), 'focus')
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ lat: 36.6 })))
+    fireEvent.changeText(screen.getByLabelText('Search courses'), 'Torrey Pines')
+
+    expect(await screen.findByText('Torrey Pines South')).toBeOnTheScreen()
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({
+      q: 'Torrey Pines',
+      region: undefined,
+      lat: undefined,
+      lng: undefined,
+      radius_miles: undefined,
+    })))
+  })
+
   it('does not render the redundant Filters section action or rating counts', async () => {
     render(<Discover />)
 

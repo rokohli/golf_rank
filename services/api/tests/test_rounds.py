@@ -234,6 +234,30 @@ def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() ->
     assert rating.status_code == 200
     round_id = rating.json()["round"]["id"]
 
+    edited = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"score": 79, "favorite_hole": 7, "note": "Fast greens"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["score"] == 79
+    assert edited.json()["favorite_hole"] == 7
+    assert edited.json()["note"] == "Fast greens"
+    with app.state.session_factory() as session:
+        event = session.scalar(select(ActivityEvent).where(
+            ActivityEvent.subject_type == "rating_round",
+            ActivityEvent.subject_id == round_id,
+        ))
+        assert event is not None
+        assert event.event_data == {
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "score": 79,
+            "rating": rating.json()["personal_rating"],
+            "tier": "green",
+        }
+        assert "note" not in event.event_data
+
     unranked = client.put(
         "/api/v1/me/rankings/tiers",
         headers=ALICE,
