@@ -360,18 +360,18 @@ const styles = StyleSheet.create({
 })
 
 function toDemoCourse(course: Course): DemoCourse {
-  const knownCourse = demoCourses.find((item) => item.name === course.name)
-  const visualFallback = knownCourse ?? demoCourses[(course.id - 1) % demoCourses.length]
   const heroImage = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url)
   return {
-    ...visualFallback,
     id: String(course.id),
     location: course.region,
     name: course.name,
     rating: course.community_rating ?? 0,
     reviews: String(course.rating_count ?? 0),
+    distance: '',
     price: priceTier(course.green_fee),
-    image: heroImage?.url ? { uri: heroImage.url } : visualFallback.image,
+    accent: '#6E8B84',
+    secondary: '#AEC3B7',
+    image: heroImage?.url ? { uri: heroImage.url } : undefined,
   }
 }
 

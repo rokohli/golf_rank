@@ -52,8 +52,17 @@ export function BottomNav() {
 }
 
 export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: DemoCourse; height?: number; squareTop?: boolean; children?: ReactNode }) {
+  const visualStyle = [styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]
+  if (!course.image) {
+    return (
+      <View style={[visualStyle, styles.coursePlaceholder]}>
+        <Feather accessibilityLabel="Course image unavailable" name="flag" size={24} color={colors.pine} />
+        {children}
+      </View>
+    )
+  }
   return (
-    <ImageBackground source={course.image} resizeMode="cover" style={[styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]}>
+    <ImageBackground source={course.image} resizeMode="cover" style={visualStyle}>
       <View style={styles.photoWash} />
       {children}
     </ImageBackground>
@@ -136,6 +145,7 @@ const styles = StyleSheet.create({
   navLabel: { color: colors.muted, fontSize: 10, fontWeight: '600' },
   navLabelActive: { color: colors.pine, fontWeight: '800' },
   courseVisual: { borderRadius: 10, overflow: 'hidden', position: 'relative' },
+  coursePlaceholder: { alignItems: 'center', backgroundColor: colors.pineSoft, justifyContent: 'center' },
   courseVisualSquareTop: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
   photoWash: { backgroundColor: 'rgba(8, 25, 17, 0.05)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
   card: { backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden' },

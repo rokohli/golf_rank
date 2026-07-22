@@ -52,6 +52,18 @@ def test_plan_hard_filters_and_uses_ranking_and_saved_signals() -> None:
     assert client.get(f"/api/v1/me/plans/{plan_id}", headers=BOB).status_code == 404
     saved = client.post(f"/api/v1/me/plans/{plan_id}/save", headers=ALICE)
     assert saved.json()["status"] == "saved"
+    regenerated = client.put(
+        f"/api/v1/me/plans/{plan_id}",
+        headers=ALICE,
+        json={
+            "title": "Monterey weekend updated",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "max_green_fee": 500,
+            "access": "public",
+        },
+    )
+    assert regenerated.json()["status"] == "draft"
 
 
 def test_plan_radius_requires_origin_and_updates_regenerate_candidates() -> None:
@@ -90,3 +102,26 @@ def test_plan_radius_requires_origin_and_updates_regenerate_candidates() -> None
         },
     )
     assert {item["course"]["id"] for item in updated.json()["candidates"]} == {1, 2}
+    assert all(item["distance_miles"] is not None for item in updated.json()["candidates"])
+    assert all(
+        any("destination center" in reason for reason in item["reasons"])
+        for item in updated.json()["candidates"]
+    )
+
+
+def test_plan_destination_accepts_a_city_and_derives_its_origin() -> None:
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Monterey",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey"],
+        },
+    )
+
+    assert response.status_code == 201
+    assert {item["course"]["id"] for item in response.json()["candidates"]} == {1, 2}
+    assert all(item["distance_miles"] is not None for item in response.json()["candidates"])

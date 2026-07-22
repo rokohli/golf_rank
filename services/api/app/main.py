@@ -12,7 +12,7 @@ from .core.config import Settings
 from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
-from .domain import course_data
+from .domain import canonical_courses_only, course_data, course_identity_ids, require_course
 from .models import Base, Course, CourseImage, OnboardingPreference, Profile, User, UserCourseRating
 from .plans import router as plans_router
 from .ranking import router as ranking_router
@@ -163,7 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 func.count(UserCourseRating.id).label("rating_count"),
             )
             .outerjoin(UserCourseRating, UserCourseRating.course_id == Course.id)
-            .where(Course.status == "active")
+            .where(Course.status == "active", canonical_courses_only())
             .group_by(Course.id)
         )
         if q:
@@ -240,17 +240,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)
     def course(course_id: int, session: Session = Depends(get_session)) -> dict:
-        stored_course = session.get(Course, course_id)
-        if stored_course is None:
-            raise HTTPException(404, "Course not found")
+        stored_course = require_course(session, course_id)
+        canonical_id = stored_course.id
+        identity_ids = course_identity_ids(session, stored_course)
         community_rating, rating_count = session.execute(
             select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id)).where(
-                UserCourseRating.course_id == course_id
+                UserCourseRating.course_id.in_(identity_ids)
             )
         ).one()
         images = session.scalars(
             select(CourseImage)
-            .where(CourseImage.course_id == course_id)
+            .where(CourseImage.course_id == canonical_id)
             .order_by(CourseImage.position, CourseImage.id)
         ).all()
         return {

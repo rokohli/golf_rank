@@ -6,7 +6,7 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'rea
 import { getFriendRankings, getRanking, saveComparison as saveRankingComparison } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, DemoCourseRow, IconButton, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse, demoCourses } from '../src/data/demo'
+import { DemoCourse } from '../src/data/demo'
 import { ComparisonResult, FriendRanking, RankedCourse, RankingSnapshot, RankingTier } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -74,7 +74,7 @@ export default function Rankings() {
       price: entry.course.green_fee > 500 ? '$$$$' : '$$$',
       accent: '#6E8B84',
       secondary: '#AEC3B7',
-      image: demoCourses[index % 3].image,
+      image: undefined,
       personalRank: entry.rank,
       personalRating: entry.personal_rating,
       tier: entry.tier,

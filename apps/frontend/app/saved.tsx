@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { getSavedLists } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseCard, ProductScreen, ScreenHeader, Segmented } from '../src/components/ProductUI'
-import { DemoCourse, demoCourses } from '../src/data/demo'
+import { DemoCourse } from '../src/data/demo'
 import { Course, SavedList } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -57,16 +57,18 @@ export default function Saved() {
 }
 
 function toDemoCourse(course: Course): DemoCourse {
-  const known = demoCourses.find((item) => item.name === course.name)
-  const visual = known ?? demoCourses[(course.id - 1) % demoCourses.length]
+  const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url)
   return {
-    ...visual,
     id: String(course.id),
     name: course.name,
     location: course.region,
     rating: course.community_rating ?? 0,
     reviews: String(course.rating_count ?? 0),
+    distance: '',
     price: course.green_fee == null ? '—' : course.green_fee > 500 ? '$$$$' : '$$$',
+    accent: '#6E8B84',
+    secondary: '#AEC3B7',
+    image: hero?.url ? { uri: hero.url } : undefined,
   }
 }
 

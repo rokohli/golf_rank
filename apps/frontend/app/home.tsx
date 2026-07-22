@@ -6,7 +6,7 @@ import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } 
 import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse, demoCourses } from '../src/data/demo'
+import { DemoCourse } from '../src/data/demo'
 import { Activity, Course } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -87,6 +87,7 @@ export default function Home() {
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
       <View style={styles.topRow}><Text style={styles.title}>{greeting}</Text><View style={styles.topActions}><IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} /><Pressable accessibilityRole="button" accessibilityLabel="Profile" onPress={() => router.push('/profile')}><Avatar initials="GR" /></Pressable></View></View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Plan a golf trip" onPress={() => router.push('/planner' as never)} style={({ pressed }) => [styles.planner, pressed && { opacity: 0.7 }]}><View style={styles.plannerIcon}><Feather name="map" size={19} color={colors.pine} /></View><View style={{ flex: 1 }}><Text style={styles.plannerTitle}>Plan a golf trip</Text><Text style={styles.muted}>Build and save a course itinerary from real catalog data.</Text></View><Feather name="chevron-right" size={17} color={colors.pine} /></Pressable>
       <SectionTitle title="FRIENDS ACTIVITY" action="Find friends" onPress={() => router.push('/friends')} />
 
       {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading friends activity" color={colors.pine} /></View> : null}
@@ -128,7 +129,7 @@ function eventPresentation(activity: Activity) {
   return { action: 'shared', title: 'Golf update', detail: null, accessibilityLabel: 'Open activity' }
 }
 
-function toDisplayCourse(course: Course, index: number): DemoCourse { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: demoCourses[index % demoCourses.length].image } }
+function toDisplayCourse(course: Course, _index: number): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
 function openActivity(activity: Activity, router: ReturnType<typeof useRouter>) { if (activity.course) router.push(`/course/${activity.course.id}` as never) }
 function numberDetail(value: unknown, suffix = '') { return typeof value === 'number' ? `${value}${suffix}` : null }
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
@@ -138,6 +139,7 @@ export function greetingForHour(hour: number) { return hour < 12 ? 'Good morning
 
 const styles = StyleSheet.create({
   topRow: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' }, topActions: { alignItems: 'center', flexDirection: 'row', gap: 9 }, title: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 31, fontWeight: '400', letterSpacing: -0.8, lineHeight: 36 },
+  planner: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: 13, flexDirection: 'row', gap: 11, padding: 13 }, plannerIcon: { alignItems: 'center', backgroundColor: colors.card, borderRadius: 20, height: 40, justifyContent: 'center', width: 40 }, plannerTitle: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 16, marginBottom: 3 },
   storyScrim: { backgroundColor: 'rgba(5, 21, 13, 0.62)', bottom: 0, height: 92, left: 0, position: 'absolute', right: 0 }, storyContent: { alignItems: 'center', bottom: 13, flexDirection: 'row', left: 13, position: 'absolute', right: 13 }, storyIdentity: { alignItems: 'center', flexDirection: 'row', flex: 1, gap: 9 }, storyKicker: { color: '#DCE5DE', fontSize: 9 }, storyTitle: { color: '#FFF', fontFamily: 'Georgia', fontSize: 18, marginTop: 2 }, storyMeta: { color: '#E4E9E5', fontSize: 10, marginTop: 2 }, score: { color: '#FFF', fontFamily: 'Georgia', fontSize: 28 },
   socialProof: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 13 }, muted: { color: colors.muted, fontSize: 10, lineHeight: 15 },
   activityRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 12 }, lastRow: { borderBottomWidth: 0 }, activityPerson: { color: colors.muted, fontSize: 10 }, activityCourse: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14, marginTop: 3 }, activityDetail: { color: colors.ink, fontSize: 11, fontWeight: '700' }, activityActions: { alignItems: 'flex-end', gap: 3 }, inlineActions: { flexDirection: 'row', gap: 9, marginTop: 3 },

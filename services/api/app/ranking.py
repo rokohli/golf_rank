@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
+from .domain import require_course
 from .models import (
     Comparison,
     Course,
@@ -407,25 +408,25 @@ def place_in_tiers(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> RankingSnapshotOut:
-    course_ids = [assignment.course_id for assignment in payload.assignments]
+    placements = [
+        (placement, require_course(session, placement.course_id).id)
+        for placement in payload.assignments
+    ]
+    course_ids = [course_id for _, course_id in placements]
     if len(course_ids) != len(set(course_ids)):
         raise HTTPException(422, "Each course can appear only once per request")
-    existing_ids = set(session.scalars(select(Course.id).where(Course.id.in_(course_ids))).all())
-    missing_ids = sorted(set(course_ids) - existing_ids)
-    if missing_ids:
-        raise HTTPException(404, f"Courses not found: {missing_ids}")
 
     stored = _stored_user(session, user, create=True)
     assert stored is not None
-    for placement in payload.assignments:
+    for placement, course_id in placements:
         assignment = session.scalar(
             select(TierAssignment).where(
                 TierAssignment.user_id == stored.id,
-                TierAssignment.course_id == placement.course_id,
+                TierAssignment.course_id == course_id,
             )
         )
         if assignment is None:
-            assignment = TierAssignment(user_id=stored.id, course_id=placement.course_id)
+            assignment = TierAssignment(user_id=stored.id, course_id=course_id)
         assignment.tier = placement.tier
         # Put the course at the requested slot and shift its neighbors. This
         # supports one-course moves as well as the initial batch tier drop.
@@ -435,7 +436,7 @@ def place_in_tiers(
                 .where(
                     TierAssignment.user_id == stored.id,
                     TierAssignment.tier == placement.tier,
-                    TierAssignment.course_id != placement.course_id,
+                    TierAssignment.course_id != course_id,
                 )
                 .order_by(TierAssignment.ordinal_position, TierAssignment.id)
             ).all()
@@ -458,7 +459,9 @@ def compare_courses(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> RankingSnapshotOut:
-    if payload.course_a_id == payload.course_b_id:
+    course_a_id = require_course(session, payload.course_a_id).id
+    course_b_id = require_course(session, payload.course_b_id).id
+    if course_a_id == course_b_id:
         raise HTTPException(422, "A course cannot be compared with itself")
     stored = _stored_user(session, user, create=False)
     if stored is None:
@@ -467,7 +470,7 @@ def compare_courses(
         session.scalars(
             select(TierAssignment).where(
                 TierAssignment.user_id == stored.id,
-                TierAssignment.course_id.in_([payload.course_a_id, payload.course_b_id]),
+                TierAssignment.course_id.in_([course_a_id, course_b_id]),
             )
         ).all()
     )
@@ -481,11 +484,11 @@ def compare_courses(
     preferred_id: int | None = None
     if payload.result in ("course_a", "course_b"):
         preferred_id = (
-            payload.course_a_id if payload.result == "course_a" else payload.course_b_id
+            course_a_id if payload.result == "course_a" else course_b_id
         )
         assignment_by_course = {item.course_id: item for item in assignments}
         winner = assignment_by_course[preferred_id]
-        loser_id = payload.course_b_id if preferred_id == payload.course_a_id else payload.course_a_id
+        loser_id = course_b_id if preferred_id == course_a_id else course_a_id
         loser = assignment_by_course[loser_id]
         if winner.ordinal_position > loser.ordinal_position:
             tier_order = list(
@@ -506,8 +509,8 @@ def compare_courses(
     session.add(
         Comparison(
             user_id=stored.id,
-            course_a_id=payload.course_a_id,
-            course_b_id=payload.course_b_id,
+            course_a_id=course_a_id,
+            course_b_id=course_b_id,
             preferred_course_id=preferred_id,
             outcome=payload.result,
         )

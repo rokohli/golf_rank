@@ -67,7 +67,10 @@ def _list_out(session: Session, saved_list: SavedList) -> SavedListOut:
     ).all()
     output_courses: list[SavedCourseOut] = []
     for saved in saved_courses:
-        course = session.get(Course, saved.course_id)
+        try:
+            course = require_course(session, saved.course_id)
+        except HTTPException:
+            course = None
         if course is not None:
             output_courses.append(
                 SavedCourseOut(
@@ -215,7 +218,7 @@ def save_course(
 ) -> SavedListOut:
     user = require_user(session, current)
     saved_list = _require_list(session, user.id, list_id)
-    require_course(session, course_id)
+    course_id = require_course(session, course_id).id
     saved = session.scalar(
         select(SavedCourse).where(
             SavedCourse.list_id == saved_list.id, SavedCourse.course_id == course_id
@@ -251,6 +254,7 @@ def remove_saved_course(
 ) -> Response:
     user = require_user(session, current)
     saved_list = _require_list(session, user.id, list_id)
+    course_id = require_course(session, course_id).id
     saved = session.scalar(
         select(SavedCourse).where(
             SavedCourse.list_id == saved_list.id, SavedCourse.course_id == course_id
