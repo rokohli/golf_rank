@@ -38,7 +38,7 @@ DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA --dry-run
 DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA
 ```
 
-The expected migration head is `0012_data_api_hardening`. Confirm `/health` and `/ready` before pointing a preview build at the API.
+The expected migration head is `0013_canonical_course_identity`. Confirm `/health` and `/ready` before pointing a preview build at the API.
 
 ## Verification
 
@@ -51,5 +51,15 @@ The expected migration head is `0012_data_api_hardening`. Confirm `/health` and 
 ## Backups and promotion
 
 The Free Plan does not include managed downloadable backups. Keep Free projects limited to reproducible staging data, and regularly create an off-platform logical dump with `supabase db dump` or `pg_dump` if staging begins collecting data that cannot be recreated.
+
+For Fairway's backend-only access model, keep schema recovery in the source-controlled Alembic migrations and export application data with the restricted runtime connection:
+
+```bash
+cd services/api
+DATABASE_URL='<session-pooler-runtime-url>' ./scripts/backup_staging_data.sh
+./scripts/verify_staging_backup.sh ../../.backups/<backup-file>.dump
+```
+
+Backup files are stored under the ignored `.backups/` directory with owner-only permissions. Copy them to a separate encrypted location for actual disaster recovery; a file that exists only on the development machine is not an off-site backup. The verification script restores into a disposable PostgreSQL 17/PostGIS container that matches staging's database major version, runs every Alembic migration, loads the dump, checks key row counts, and removes the container.
 
 Use a paid plan with managed daily backups before storing production data. Before production cutover, restore a backup into a separate project and repeat the verification flow. Database backups do not restore deleted Supabase Storage objects; establish a separate object retention and recovery policy before golfer photo uploads launch.
