@@ -28,7 +28,7 @@ from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
-from .seed import seed_courses
+from .seed import seed_test_courses
 from .social import router as social_router
 
 
@@ -59,7 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
         with app.state.session_factory() as session:
-            seed_courses(session)
+            seed_test_courses(session)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):

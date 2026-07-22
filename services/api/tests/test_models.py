@@ -319,3 +319,120 @@ def test_legacy_seed_course_facts_are_backfilled(tmp_path: Path, monkeypatch: py
     assert rows[1].slope_rating == 145
     assert rows[1].tee_time_url.startswith("https://www.pebblebeach.com/")
     engine.dispose()
+
+
+def test_provider_first_catalog_preserves_stable_ids_and_curated_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "provider-first-catalog.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    api_root = Path(__file__).parents[1]
+    config = Config(str(api_root / "alembic.ini"))
+    config.set_main_option("script_location", str(api_root / "alembic"))
+
+    command.upgrade(config, "0012_data_api_hardening")
+    engine = make_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            """
+            INSERT INTO courses
+                (id, name, region, latitude, longitude, is_public, difficulty,
+                 green_fee, source, source_course_id, country_code, admin1_code,
+                 admin1_name, city, course_name, status, hole_count, par,
+                 slope_rating, tee_time_url, access)
+            VALUES
+                (1, 'Pebble Beach Golf Links', 'Monterey, CA', 36.568, -121.949,
+                 1, 'challenging', 675, 'seed', 'pebble', 'US', 'CA',
+                 'California', 'Monterey', 'Pebble Beach Golf Links', 'active',
+                 18, 72, 145, 'https://seed.example/pebble', 'public'),
+                (2, 'Spyglass Hill Golf Course', 'Monterey, CA', 36.585, -121.942,
+                 1, 'challenging', 495, 'seed', 'spyglass', 'US', 'CA',
+                 'California', 'Monterey', 'Spyglass Hill Golf Course', 'active',
+                 18, 72, 145, 'https://seed.example/spyglass', 'public'),
+                (3, 'Pasatiempo Golf Club', 'Santa Cruz, CA', 37.004, -121.998,
+                 1, 'challenging', 410, 'seed', 'pasatiempo', 'US', 'CA',
+                 'California', 'Santa Cruz', 'Pasatiempo Golf Club', 'active',
+                 18, 70, 141, 'https://seed.example/pasatiempo', 'public'),
+                (687, 'Pebble Beach Golf Links', 'Pebble Beach, CA', 36.568,
+                 -121.949, 1, NULL, NULL, 'opengolfapi',
+                 '40977ee8-33ee-4195-b6a2-99a4ca83c2bc', 'US', 'CA',
+                 'California', 'Pebble Beach', 'Pebble Beach Golf Links',
+                 'active', 18, 72, NULL, NULL, 'public'),
+                (919, 'Spyglass Hill Golf Course', 'Pebble Beach, CA', 36.585,
+                 -121.942, 0, NULL, NULL, 'opengolfapi',
+                 '315fb576-129c-4508-abfa-561d8fbf2904', 'US', 'CA',
+                 'California', 'Pebble Beach', 'Spyglass Hill Golf Course',
+                 'active', 18, 72, NULL, NULL, 'resort'),
+                (682, 'Pasatiempo Golf Club', 'Santa Cruz, CA', 37.004,
+                 -121.998, 0, NULL, NULL, 'opengolfapi',
+                 '99f368a1-ea6a-403a-baca-ca235cb657cf', 'US', 'CA',
+                 'California', 'Santa Cruz', 'Pasatiempo Golf Club',
+                 'active', 18, 70, NULL, NULL, 'private')
+            """
+        ))
+        connection.execute(text(
+            "INSERT INTO users (id, provider_subject) VALUES (1, 'test:golfer')"
+        ))
+        connection.execute(text(
+            """
+            INSERT INTO rounds (id, user_id, course_id, played_on, visibility)
+            VALUES (1, 1, 1, '2026-07-22', 'private')
+            """
+        ))
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    def assert_provider_first_state() -> None:
+        migrated_engine = make_engine(database_url)
+        with migrated_engine.connect() as connection:
+            rows = connection.execute(text(
+                """
+                SELECT id, source_course_id, city, access, difficulty, green_fee,
+                       slope_rating, tee_time_url
+                FROM courses
+                WHERE id IN (1, 2, 3, 682, 687, 919)
+                ORDER BY id
+                """
+            )).mappings().all()
+            seed_count = connection.scalar(text(
+                "SELECT COUNT(*) FROM courses WHERE source = 'seed'"
+            ))
+            reconciliation_count = connection.scalar(text(
+                "SELECT COUNT(*) FROM course_reconciliations"
+            ))
+            round_course_id = connection.scalar(text(
+                "SELECT course_id FROM rounds WHERE id = 1"
+            ))
+
+        assert [row["id"] for row in rows] == [1, 2, 3]
+        assert [row["source_course_id"] for row in rows] == [
+            "40977ee8-33ee-4195-b6a2-99a4ca83c2bc",
+            "315fb576-129c-4508-abfa-561d8fbf2904",
+            "99f368a1-ea6a-403a-baca-ca235cb657cf",
+        ]
+        assert [row["city"] for row in rows] == [
+            "Pebble Beach", "Pebble Beach", "Santa Cruz"
+        ]
+        assert [row["access"] for row in rows] == ["public", "resort", "private"]
+        assert [row["difficulty"] for row in rows] == ["challenging"] * 3
+        assert [row["green_fee"] for row in rows] == [675, 495, 410]
+        assert [row["slope_rating"] for row in rows] == [145, 145, 141]
+        assert [row["tee_time_url"] for row in rows] == [
+            "https://seed.example/pebble",
+            "https://seed.example/spyglass",
+            "https://seed.example/pasatiempo",
+        ]
+        assert seed_count == 0
+        assert reconciliation_count == 0
+        assert round_course_id == 1
+        migrated_engine.dispose()
+
+    assert_provider_first_state()
+    command.downgrade(config, "0013_canonical_course_identity")
+    assert_provider_first_state()
+    command.upgrade(config, "head")
+    assert_provider_first_state()

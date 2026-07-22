@@ -8,34 +8,33 @@ The next work should close visible product gaps before adding broad new surfaces
 
 ## Recommended implementation order
 
-1. Canonicalize duplicate courses and finish real course presentation.
-2. Ship the existing deterministic planner as a complete mobile feature.
-3. Add API security hardening and Redis-backed abuse prevention.
-4. Add the AI planning layer with strict factual guardrails.
-5. Add private round and course-memory photos.
-6. Make Friends' thoughts real on course pages.
-7. Implement actual notifications and availability signals.
-8. Add EAS distribution, monitoring, and a separate production environment.
+1. Finish real course image presentation.
+2. Add API security hardening and Redis-backed abuse prevention.
+3. Add the AI planning layer with strict factual guardrails.
+4. Add private round and course-memory photos.
+5. Make Friends' thoughts real on course pages.
+6. Implement actual notifications and availability signals.
+7. Add EAS distribution, monitoring, and a separate production environment.
 
 ## 1. Canonical course identity and presentation
 
-### Problem
+### Provider-first catalog completed
 
-The live catalog can return duplicate real-world courses from seed and OpenGolfAPI records. Pebble Beach is one confirmed example. Real API courses also reuse a small set of demo images in Discover, Saved, Feed, Profile, and course detail views.
+Migration `0014_provider_first_catalog` makes OpenGolfAPI identities authoritative for the three legacy fixture courses while preserving their stable database IDs, user relationships, and curated facts that OpenGolfAPI does not provide. The redundant provider rows and obsolete reconciliation mappings are removed. Deployed catalogs are populated only by the explicit OpenGolfAPI import job; the three deterministic seed rows remain SQLite-only test fixtures.
+
+Real API courses still reuse a small set of demo images in Discover, Saved, Feed, Profile, and course detail views.
 
 ### Scope
 
-- Use `course_reconciliations` as the explicit source-to-canonical mapping.
+- Keep `course_reconciliations` for future cross-provider aliases that cannot be collapsed into one provider-owned row.
 - Add an idempotent reconciliation command that proposes matches using normalized name, coordinates, city, hole count, and par, but requires an explicit mapping before merging ambiguous records.
 - Make search, detail, planner candidates, and relationship writes resolve aliases to the canonical course ID.
-- Preserve source attribution and provider identifiers; do not destructively discard provenance.
-- Backfill the known seed/OpenGolfAPI duplicates and add a regression fixture for Pebble Beach.
 - Replace `DemoCourse` image fallbacks with `Course.images` when available and a neutral non-photographic placeholder when unavailable.
 
 ### Acceptance criteria
 
-- Searching `Pebble` returns one Pebble Beach Golf Links result.
-- Existing ratings, rounds, saves, and feed events resolve to the canonical course.
+- Searching `Pebble` continues to return one Pebble Beach Golf Links result.
+- Existing ratings, rounds, saves, and feed events continue to resolve to the same stable course ID.
 - Re-running reconciliation is idempotent.
 - No unrelated courses are automatically merged solely because their names are similar.
 - Real courses never display another course's photograph.
