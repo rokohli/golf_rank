@@ -8,7 +8,7 @@ The next work should harden the real product flows before adding broad new surfa
 
 ## Recommended implementation order
 
-1. Add API security hardening and Redis-backed abuse prevention.
+1. Finish API security operations and the Clerk audience-template migration.
 2. Add the AI planning layer with strict factual guardrails.
 3. Add private round and course-memory photos.
 4. Make Friends' thoughts real on course pages.
@@ -80,10 +80,13 @@ The mobile planner calls the persisted API, is linked from Home and Profile, acc
 - Supabase application tables have RLS enabled, direct Data API privileges are revoked, and Render uses the restricted `fairway_api` runtime role instead of an administrative database login.
 - Pydantic input constraints and pagination caps limit many individual payload and response sizes.
 - Render terminates HTTPS, secrets remain in provider secret stores, and the Expo client receives no database or Supabase service-role credential.
+- Redis-backed token buckets protect public catalog reads, authenticated reads and writes, readiness checks, and course-candidate submissions. Candidate submissions also have a per-user daily quota.
+- Non-development deployments disable interactive API docs, validate hosts, reject oversized request bodies, return security headers, and never reflect malformed request IDs.
+- `/health` remains database-free and exempt from user limits; `/ready` is independently rate-limited and caches its database result briefly.
 
-This is a meaningful baseline, but the API does not yet have application-level rate limiting. Public catalog, region, health/readiness, OpenAPI, and Swagger routes can be called anonymously. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
+The application-level limiter foundation is implemented and covered against a real Redis service in CI. Remaining security work is operational: deploy and alert on the private Render Key Value service, complete the Clerk audience-template migration, expand cross-user authorization auditing, and add dependency, secret, and static-analysis checks. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
 
-### Redis and Lua token-bucket limiter
+### Redis and Lua token-bucket limiter, implemented
 
 - Use the existing local Redis service and add a private Render Key Value instance named for Fairway rate limits in the same Oregon region as the API.
 - Connect Render through the internal `REDIS_URL`; do not enable public access. Internal authentication should be enabled before production.
@@ -117,7 +120,7 @@ Treat these as environment-backed defaults that can be tuned without changing en
 
 ### Authentication and API hardening
 
-- Require `CLERK_AUDIENCE` outside development and always verify token signature, issuer, audience, expiry, and subject. Keep the development identity path impossible to enable in staging or production.
+- Continue verifying Clerk token signature, issuer, expiry, and subject. Before requiring `CLERK_AUDIENCE`, create a Clerk JWT template with the intended `aud` claim and update the Expo `getToken()` call to request that template; Clerk's default mobile session token does not include `aud`. Keep the development identity path impossible to enable in staging or production.
 - Audit every private read and mutation for owner scoping, including nested resources such as round companions, plan candidates, saved-list courses, reactions, and future photos.
 - Add cross-user authorization tests proving private resources return `404` or `403` consistently and cannot be inferred through response differences.
 - Disable `/docs`, `/redoc`, and `/openapi.json` outside development unless an authenticated operational need is established.
@@ -141,7 +144,7 @@ Treat these as environment-backed defaults that can be tuned without changing en
 
 - Add dependency vulnerability checks for Python and npm lockfiles, secret scanning, and static security analysis to pull-request CI.
 - Pin security-sensitive GitHub Actions and production dependencies to reviewed versions and enable automated dependency update pull requests.
-- Add tests for token-bucket refill, burst capacity, weighted cost, daily quotas, separate user/IP buckets, reset behavior, `Retry-After`, spoofed proxy headers, Redis failure modes, and concurrency atomicity.
+- Maintain the implemented tests for token-bucket refill, burst capacity, weighted cost, daily quotas, separate user/IP buckets, reset behavior, `Retry-After`, spoofed proxy headers, Redis failure modes, and concurrency atomicity.
 - Test that public routes have intended limits, private routes reject missing/invalid Clerk tokens, and health checks remain available under normal limiter load.
 - Run a database privilege and RLS audit after every schema change and before production launch.
 - Verify the deployed headers, authentication failures, rate-limit behavior, Render-to-Key-Value private connection, and alert delivery in staging before merging production configuration.

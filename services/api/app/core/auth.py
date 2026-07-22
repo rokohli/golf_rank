@@ -3,7 +3,7 @@ from functools import lru_cache
 
 import httpx
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from jwt import PyJWKClient
 
 from .config import Settings
@@ -43,8 +43,8 @@ def verify_clerk_token(token: str, settings: Settings) -> str:
     return subject
 
 
-def get_settings() -> Settings:
-    return Settings()
+def get_settings(request: Request) -> Settings:
+    return request.app.state.settings
 
 
 def current_user(

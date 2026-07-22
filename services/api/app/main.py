@@ -1,13 +1,23 @@
 import logging
-from uuid import uuid4
+import time
+from contextlib import asynccontextmanager
+from threading import Lock
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
+from .core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
+from .core.rate_limit import (
+    RateLimiter,
+    authenticated_rate_limit,
+    public_rate_limit,
+    readiness_rate_limit,
+)
 from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
@@ -36,56 +46,96 @@ logger = logging.getLogger("golfrank.catalog")
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.validate_security()
+    rate_limiter = RateLimiter(settings)
 
-    app = FastAPI(title="GolfRank API")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        await rate_limiter.close()
+
+    development = settings.app_env == "development"
+    app = FastAPI(
+        title="GolfRank API",
+        docs_url="/docs" if development else None,
+        redoc_url="/redoc" if development else None,
+        openapi_url="/openapi.json" if development else None,
+        lifespan=lifespan,
+    )
     engine = make_engine(
         settings.database_url,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
     )
     app.state.engine = engine
+    app.state.settings = settings
+    app.state.rate_limiter = rate_limiter
     app.state.session_factory = make_session_factory(
         engine, course_image_base_url=settings.course_image_base_url
     )
-    app.include_router(ranking_router)
-    app.include_router(course_ratings_router)
-    app.include_router(rounds_router)
-    app.include_router(course_state_router)
-    app.include_router(social_router)
+    authenticated_dependencies = [Depends(authenticated_rate_limit)]
+    app.include_router(ranking_router, dependencies=authenticated_dependencies)
+    app.include_router(course_ratings_router, dependencies=authenticated_dependencies)
+    app.include_router(rounds_router, dependencies=authenticated_dependencies)
+    app.include_router(course_state_router, dependencies=authenticated_dependencies)
+    app.include_router(social_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
-    app.include_router(saves_router)
-    app.include_router(plans_router)
+    app.include_router(saves_router, dependencies=authenticated_dependencies)
+    app.include_router(plans_router, dependencies=authenticated_dependencies)
+
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+    )
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.allowed_host_list,
+    )
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        production=not development,
+    )
+    readiness_lock = Lock()
+    readiness_cache: dict[str, float | bool] = {
+        "expires_at": 0.0,
+        "ready": False,
+    }
 
     if settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(engine)
         with app.state.session_factory() as session:
             seed_test_courses(session)
 
-    @app.middleware("http")
-    async def request_id(request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.headers.get(
-            "X-Request-ID", str(uuid4())
-        )
-        return response
-
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/ready")
-    def ready() -> dict[str, str]:
-        try:
-            with app.state.session_factory() as session:
-                session.execute(text("SELECT 1"))
-        except SQLAlchemyError as error:
-            logger.exception("Database readiness check failed")
-            raise HTTPException(503, "Database unavailable") from error
+    def ready(_rate_limit: None = Depends(readiness_rate_limit)) -> dict[str, str]:
+        now = time.monotonic()
+        with readiness_lock:
+            if readiness_cache["expires_at"] <= now:
+                try:
+                    with app.state.session_factory() as session:
+                        session.execute(text("SELECT 1"))
+                except SQLAlchemyError as error:
+                    logger.exception("Database readiness check failed")
+                    readiness_cache.update(
+                        expires_at=now + min(1.0, settings.readiness_cache_seconds),
+                        ready=False,
+                    )
+                    raise HTTPException(503, "Database unavailable") from error
+                readiness_cache.update(
+                    expires_at=now + settings.readiness_cache_seconds,
+                    ready=True,
+                )
+            if not readiness_cache["ready"]:
+                raise HTTPException(503, "Database unavailable")
         return {"status": "ready"}
 
     @app.put("/api/v1/me/onboarding-preferences", response_model=ProfileOut)
     def save_preferences(
         payload: OnboardingPreferencesIn,
+        _rate_limit: None = Depends(authenticated_rate_limit),
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> ProfileOut:
@@ -121,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/me/profile", response_model=ProfileOut)
     def profile(
+        _rate_limit: None = Depends(authenticated_rate_limit),
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> ProfileOut:
@@ -155,6 +206,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_green_fee: int | None = None,
         difficulty: str = "any",
         access: str = "any",
+        _rate_limit: None = Depends(public_rate_limit),
         session: Session = Depends(get_session),
     ) -> list[dict]:
         if (lat is None) != (lng is None):
@@ -271,7 +323,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
 
     @app.get("/api/v1/courses/{course_id}", response_model=CourseOut)
-    def course(course_id: int, session: Session = Depends(get_session)) -> dict:
+    def course(
+        course_id: int,
+        _rate_limit: None = Depends(public_rate_limit),
+        session: Session = Depends(get_session),
+    ) -> dict:
         stored_course = require_course(session, course_id)
         canonical_id = stored_course.id
         identity_ids = course_identity_ids(session, stored_course)

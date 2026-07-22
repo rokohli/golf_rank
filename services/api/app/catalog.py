@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
+from .core.rate_limit import candidate_rate_limit, public_rate_limit
 from .db import get_session
 from .domain import require_user
 from .models import Course, CourseCandidate
@@ -41,7 +42,11 @@ class CourseCandidateOut(BaseModel):
     status: str
 
 
-@router.get("/api/v1/course-regions", response_model=CourseRegionsOut)
+@router.get(
+    "/api/v1/course-regions",
+    response_model=CourseRegionsOut,
+    dependencies=[Depends(public_rate_limit)],
+)
 def course_regions(session: Session = Depends(get_session)) -> CourseRegionsOut:
     rows = session.execute(
         select(
@@ -67,7 +72,12 @@ def course_regions(session: Session = Depends(get_session)) -> CourseRegionsOut:
     ])
 
 
-@router.post("/api/v1/course-candidates", response_model=CourseCandidateOut, status_code=201)
+@router.post(
+    "/api/v1/course-candidates",
+    response_model=CourseCandidateOut,
+    status_code=201,
+    dependencies=[Depends(candidate_rate_limit)],
+)
 def submit_course_candidate(
     payload: CourseCandidateIn,
     current: CurrentUser = Depends(current_user),
