@@ -271,10 +271,10 @@ async def candidate_rate_limit(
 def client_ip(request: Request, settings: Settings) -> str:
     direct = request.client.host if request.client is not None else "unknown"
     if settings.trusted_client_ip_header:
-        candidate = request.headers.get(settings.trusted_client_ip_header)
-        if candidate:
+        candidates = request.headers.getlist(settings.trusted_client_ip_header)
+        if len(candidates) == 1:
             try:
-                return str(ip_address(candidate.strip()))
+                return str(ip_address(candidates[0].strip()))
             except ValueError:
                 pass
     return direct

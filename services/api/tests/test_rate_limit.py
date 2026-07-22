@@ -138,6 +138,17 @@ def test_client_ip_uses_only_explicitly_trusted_single_ip_header() -> None:
     )
     assert invalid_limiter.token_calls[0]["identity"] == "testclient"
 
+    duplicate_limiter = RecordingLimiter()
+    trusted_app.state.rate_limiter = duplicate_limiter
+    TestClient(trusted_app).get(
+        "/api/v1/courses",
+        headers=[
+            ("CF-Connecting-IP", "198.51.100.2"),
+            ("CF-Connecting-IP", "203.0.113.99"),
+        ],
+    )
+    assert duplicate_limiter.token_calls[0]["identity"] == "testclient"
+
 
 def test_redis_failure_opens_ordinary_requests_and_closes_cost_bearing_requests() -> None:
     async def exercise() -> None:
