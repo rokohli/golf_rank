@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, course_identity_ids, require_course, require_user, stored_user
 from .models import ActivityEvent, Course, SavedCourse, SavedList
 from .schemas import CourseOut
 
@@ -218,15 +218,31 @@ def save_course(
 ) -> SavedListOut:
     user = require_user(session, current)
     saved_list = _require_list(session, user.id, list_id)
-    course_id = require_course(session, course_id).id
-    saved = session.scalar(
+    course = require_course(session, course_id)
+    course_id = course.id
+    identity_ids = course_identity_ids(session, course)
+    matching_saves = list(session.scalars(
         select(SavedCourse).where(
-            SavedCourse.list_id == saved_list.id, SavedCourse.course_id == course_id
+            SavedCourse.list_id == saved_list.id,
+            SavedCourse.course_id.in_(identity_ids),
+        ).order_by(
+            (SavedCourse.course_id == course_id).desc(),
+            SavedCourse.id,
         )
-    )
+    ).all())
+    saved = matching_saves[0] if matching_saves else None
     created = saved is None
     if saved is None:
         saved = SavedCourse(list_id=saved_list.id, course_id=course_id)
+    else:
+        saved.course_id = course_id
+        for duplicate in matching_saves[1:]:
+            session.execute(delete(ActivityEvent).where(
+                ActivityEvent.actor_user_id == user.id,
+                ActivityEvent.subject_type == "saved_course",
+                ActivityEvent.subject_id == duplicate.id,
+            ))
+            session.delete(duplicate)
     saved.note = payload.note
     session.add(saved)
     session.flush()
@@ -254,21 +270,24 @@ def remove_saved_course(
 ) -> Response:
     user = require_user(session, current)
     saved_list = _require_list(session, user.id, list_id)
-    course_id = require_course(session, course_id).id
-    saved = session.scalar(
+    course = require_course(session, course_id)
+    identity_ids = course_identity_ids(session, course)
+    saved_courses = list(session.scalars(
         select(SavedCourse).where(
-            SavedCourse.list_id == saved_list.id, SavedCourse.course_id == course_id
+            SavedCourse.list_id == saved_list.id,
+            SavedCourse.course_id.in_(identity_ids),
         )
-    )
-    if saved is None:
+    ).all())
+    if not saved_courses:
         raise HTTPException(404, "Saved course not found")
     session.execute(
         delete(ActivityEvent).where(
             ActivityEvent.actor_user_id == user.id,
             ActivityEvent.subject_type == "saved_course",
-            ActivityEvent.subject_id == saved.id,
+            ActivityEvent.subject_id.in_([saved.id for saved in saved_courses]),
         )
     )
-    session.delete(saved)
+    for saved in saved_courses:
+        session.delete(saved)
     session.commit()
     return Response(status_code=204)

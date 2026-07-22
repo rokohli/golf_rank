@@ -3,9 +3,9 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
@@ -13,7 +13,16 @@ from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import canonical_courses_only, course_data, course_identity_ids, require_course
-from .models import Base, Course, CourseImage, OnboardingPreference, Profile, User, UserCourseRating
+from .models import (
+    Base,
+    Course,
+    CourseImage,
+    CourseReconciliation,
+    OnboardingPreference,
+    Profile,
+    User,
+    UserCourseRating,
+)
 from .plans import router as plans_router
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
@@ -156,15 +165,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, "limit must be between 1 and 100")
         if offset < 0:
             raise HTTPException(422, "offset must be non-negative")
-        statement = (
+        rated_course = aliased(Course)
+        canonical_rating_id = func.coalesce(
+            CourseReconciliation.canonical_course_id,
+            UserCourseRating.course_id,
+        )
+        rating_aggregates = (
             select(
-                Course,
+                canonical_rating_id.label("course_id"),
                 func.avg(UserCourseRating.rating).label("community_rating"),
                 func.count(UserCourseRating.id).label("rating_count"),
             )
-            .outerjoin(UserCourseRating, UserCourseRating.course_id == Course.id)
+            .select_from(UserCourseRating)
+            .join(rated_course, rated_course.id == UserCourseRating.course_id)
+            .outerjoin(
+                CourseReconciliation,
+                and_(
+                    CourseReconciliation.source == rated_course.source,
+                    CourseReconciliation.source_course_id == rated_course.source_course_id,
+                    CourseReconciliation.match_status == "confirmed",
+                ),
+            )
+            .group_by(canonical_rating_id)
+            .subquery()
+        )
+        statement = (
+            select(
+                Course,
+                rating_aggregates.c.community_rating,
+                rating_aggregates.c.rating_count,
+            )
+            .outerjoin(rating_aggregates, rating_aggregates.c.course_id == Course.id)
             .where(Course.status == "active", canonical_courses_only())
-            .group_by(Course.id)
         )
         if q:
             needle = f"%{q}%"
@@ -228,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if community_rating is not None
                     else None
                 ),
-                "rating_count": int(rating_count),
+                "rating_count": int(rating_count or 0),
                 "distance_miles": (
                     round(distances[stored_course.id], 1)
                     if stored_course.id in distances
