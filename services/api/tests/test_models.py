@@ -436,3 +436,69 @@ def test_provider_first_catalog_preserves_stable_ids_and_curated_facts(
     assert_provider_first_state()
     command.upgrade(config, "head")
     assert_provider_first_state()
+
+
+def test_provider_first_catalog_rejects_conflicting_manual_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "provider-first-conflict.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    api_root = Path(__file__).parents[1]
+    config = Config(str(api_root / "alembic.ini"))
+    config.set_main_option("script_location", str(api_root / "alembic"))
+
+    command.upgrade(config, "0012_data_api_hardening")
+    engine = make_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            """
+            INSERT INTO courses
+                (id, name, region, latitude, longitude, is_public, difficulty,
+                 green_fee, source, source_course_id, country_code, status)
+            VALUES
+                (2, 'Spyglass Hill Golf Course', 'Monterey, CA', 36.585,
+                 -121.942, 1, 'challenging', 495, 'seed', 'spyglass', 'US',
+                 'active'),
+                (4, 'Manual Canonical Course', 'Monterey, CA', 36.600,
+                 -121.900, 1, 'moderate', 200, 'manual', 'manual-canonical',
+                 'US', 'active'),
+                (919, 'Spyglass Hill Golf Course', 'Pebble Beach, CA', 36.585,
+                 -121.942, 0, NULL, NULL, 'opengolfapi',
+                 '315fb576-129c-4508-abfa-561d8fbf2904', 'US', 'active')
+            """
+        ))
+        connection.execute(text(
+            """
+            INSERT INTO course_reconciliations
+                (source, source_course_id, canonical_course_id, match_status,
+                 match_data)
+            VALUES
+                ('opengolfapi', '315fb576-129c-4508-abfa-561d8fbf2904', 4,
+                 'confirmed', '{"source":"manual-review"}')
+            """
+        ))
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="conflicts with an explicit canonical mapping"):
+        command.upgrade(config, "head")
+
+    engine = make_engine(database_url)
+    with engine.connect() as connection:
+        courses = connection.execute(text(
+            "SELECT id, source FROM courses WHERE id IN (2, 919) ORDER BY id"
+        )).all()
+        canonical_course_id = connection.scalar(text(
+            """
+            SELECT canonical_course_id
+            FROM course_reconciliations
+            WHERE source = 'opengolfapi'
+              AND source_course_id = '315fb576-129c-4508-abfa-561d8fbf2904'
+            """
+        ))
+
+    assert courses == [(2, "seed"), (919, "opengolfapi")]
+    assert canonical_course_id == 4
+    engine.dispose()

@@ -115,6 +115,17 @@ def upgrade() -> None:
             raise RuntimeError(
                 f"Provider course {provider_id} is canonical for another source mapping"
             )
+        mapped_canonical_id = connection.scalar(sa.select(
+            reconciliations.c.canonical_course_id
+        ).where(
+            reconciliations.c.source == "opengolfapi",
+            reconciliations.c.source_course_id == provider_identity,
+        ))
+        if mapped_canonical_id is not None and mapped_canonical_id != seed["id"]:
+            raise RuntimeError(
+                "Provider-first conversion conflicts with an explicit canonical "
+                f"mapping for opengolfapi:{provider_identity}"
+            )
 
         connection.execute(sa.delete(reconciliations).where(
             reconciliations.c.source == "opengolfapi",
