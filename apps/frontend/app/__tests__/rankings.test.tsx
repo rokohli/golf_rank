@@ -105,6 +105,24 @@ describe('rankings refresh', () => {
     expect(screen.queryByText(/All time/)).toBeNull()
   })
 
+  it('renders an attributed image for a ranked course', async () => {
+    const snapshot = rankingSnapshot('Photographed Links', 9.1)
+    snapshot.entries[0].course.images = [{
+      id: 8,
+      url: 'https://images.example.com/photographed-links.jpg',
+      source_name: 'Course photographer',
+      source_url: 'https://images.example.com/photographed-links',
+      is_hero: true,
+      position: 0,
+    }]
+    mockGetRanking.mockResolvedValue(snapshot)
+
+    render(<Rankings />)
+
+    expect(await screen.findByText('Photographed Links')).toBeOnTheScreen()
+    expect(screen.queryByLabelText('Course image unavailable')).toBeNull()
+  })
+
   it('fetches and updates the ranking whenever the screen regains focus', async () => {
     mockGetRanking
       .mockResolvedValueOnce(rankingSnapshot('First Ranking', 8.1))
