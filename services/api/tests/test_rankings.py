@@ -1,8 +1,9 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.config import Settings
 from app.main import create_app
-from app.models import Follow, OnboardingPreference, Profile, RankingSnapshot, User, UserBlock
+from app.models import Course, CourseImage, Follow, OnboardingPreference, Profile, RankingSnapshot, User, UserBlock
 
 
 HEADERS = {"X-Development-Subject": "dev:ranker"}
@@ -49,6 +50,45 @@ def test_ranking_entries_include_current_round_count_and_best_score() -> None:
 
     assert entry["round_count"] == 2
     assert entry["best_score"] == 82
+
+
+def test_ranking_snapshots_include_current_attributed_course_images() -> None:
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    with app.state.session_factory() as session:
+        course = session.get(Course, 1)
+        assert course is not None
+        session.add(CourseImage(
+            course_id=course.id,
+            storage_key="courses/rankings/hero image.jpg",
+            alt_text="Ranked course hero",
+            source_name="GolfRank photographer",
+            source_url="https://golfrank.example/photos/ranked-course",
+            position=0,
+            is_hero=True,
+        ))
+        session.commit()
+
+    client = TestClient(app)
+    staged = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=HEADERS,
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
+    )
+
+    expected_image = {
+        "id": 1,
+        "url": "https://cdn.example/assets/courses/rankings/hero%20image.jpg",
+        "alt_text": "Ranked course hero",
+        "source_name": "GolfRank photographer",
+        "source_url": "https://golfrank.example/photos/ranked-course",
+        "position": 0,
+        "is_hero": True,
+    }
+    assert staged.status_code == 200
+    assert staged.json()["entries"][0]["course"]["images"] == [expected_image]
+    assert client.get(
+        "/api/v1/me/rankings", headers=HEADERS
+    ).json()["entries"][0]["course"]["images"] == [expected_image]
 
 
 def test_friends_rankings_return_mutual_friends_with_their_round_stats() -> None:

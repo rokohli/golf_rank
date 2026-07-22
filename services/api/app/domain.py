@@ -1,6 +1,8 @@
+from urllib.parse import quote
+
 from fastapi import HTTPException
 from sqlalchemy import exists, select, tuple_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
 from .models import Course, CourseReconciliation, User
@@ -96,4 +98,31 @@ def course_data(course: Course) -> dict:
         "slope_rating": course.slope_rating,
         "tee_time_url": course.tee_time_url,
         "access": course.access,
+        "images": course_image_data(course),
     }
+
+
+def course_image_data(course: Course) -> list[dict]:
+    session = object_session(course)
+    image_base_url = session.info.get("course_image_base_url") if session is not None else None
+    output = []
+    for image in course.images:
+        url = image.external_url or storage_image_url(image_base_url, image.storage_key)
+        if url is None:
+            continue
+        output.append({
+            "id": image.id,
+            "url": url,
+            "alt_text": image.alt_text,
+            "source_name": image.source_name,
+            "source_url": image.source_url,
+            "position": image.position,
+            "is_hero": image.is_hero,
+        })
+    return output
+
+
+def storage_image_url(base_url: str | None, storage_key: str | None) -> str | None:
+    if not base_url or not storage_key:
+        return None
+    return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"

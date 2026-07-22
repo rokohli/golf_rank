@@ -4,17 +4,16 @@
 
 Fairway has a real Clerk-authenticated mobile client, FastAPI backend, Render staging service, Supabase PostgreSQL database, course discovery, ratings, rankings, rounds, saved courses, profiles, following, and a social feed. CI covers frontend tests and types, backend tests, and the complete PostGIS migration cycle.
 
-The next work should close visible product gaps before adding broad new surfaces. In particular, the planner screen is static demo content even though a deterministic planning API and persistence model already exist.
+The next work should harden the real product flows before adding broad new surfaces. The deterministic planner and provider-first catalog are deployed, and production course presentation now uses only attributed API images or a neutral placeholder.
 
 ## Recommended implementation order
 
-1. Finish real course image presentation.
-2. Add API security hardening and Redis-backed abuse prevention.
-3. Add the AI planning layer with strict factual guardrails.
-4. Add private round and course-memory photos.
-5. Make Friends' thoughts real on course pages.
-6. Implement actual notifications and availability signals.
-7. Add EAS distribution, monitoring, and a separate production environment.
+1. Add API security hardening and Redis-backed abuse prevention.
+2. Add the AI planning layer with strict factual guardrails.
+3. Add private round and course-memory photos.
+4. Make Friends' thoughts real on course pages.
+5. Implement actual notifications and availability signals.
+6. Add EAS distribution, monitoring, and a separate production environment.
 
 ## 1. Canonical course identity and presentation
 
@@ -22,14 +21,14 @@ The next work should close visible product gaps before adding broad new surfaces
 
 Migration `0014_provider_first_catalog` makes OpenGolfAPI identities authoritative for the three legacy fixture courses while preserving their stable database IDs, user relationships, and curated facts that OpenGolfAPI does not provide. The redundant provider rows and obsolete reconciliation mappings are removed. Deployed catalogs are populated only by the explicit OpenGolfAPI import job; the three deterministic seed rows remain SQLite-only test fixtures.
 
-Real API courses still reuse a small set of demo images in Discover, Saved, Feed, Profile, and course detail views.
+Production course surfaces no longer use bundled demo-course photographs. Discover, Saved, Feed, Profile, Planner, Rankings, course detail, and rating comparisons render an attributed `Course.images` photograph when available and the same neutral non-photographic placeholder otherwise. Legacy demo slugs are rejected instead of presenting invented course data.
 
 ### Scope
 
 - Keep `course_reconciliations` for future cross-provider aliases that cannot be collapsed into one provider-owned row.
 - Add an idempotent reconciliation command that proposes matches using normalized name, coordinates, city, hole count, and par, but requires an explicit mapping before merging ambiguous records.
 - Make search, detail, planner candidates, and relationship writes resolve aliases to the canonical course ID.
-- Replace `DemoCourse` image fallbacks with `Course.images` when available and a neutral non-photographic placeholder when unavailable.
+- Keep image ingestion attribution-safe: every stored image needs its real course ID, source name, source URL, and display permission.
 
 ### Acceptance criteria
 
@@ -39,24 +38,23 @@ Real API courses still reuse a small set of demo images in Discover, Saved, Feed
 - No unrelated courses are automatically merged solely because their names are similar.
 - Real courses never display another course's photograph.
 
-## 2. Real trip planner, deterministic release
+## 2. Real trip planner, deterministic release completed
 
 ### Existing foundation
 
-The backend already supports authenticated create, update/regenerate, save, list, get, and delete operations under `/api/v1/me/plans`. It filters candidates by dates, budget, access, difficulty, region, radius, and party preferences, then ranks them using personal rankings, saved courses, played history, budget fit, and distance. Plans, constraints, candidates, and itinerary items already persist in PostgreSQL.
+The backend supports authenticated create, update/regenerate, save, list, get, and delete operations under `/api/v1/me/plans`. It ranks candidates using destination-derived geography, dates, budget, personal rankings, saved courses, and played history. Plans, constraints, candidates, and itinerary items persist in PostgreSQL.
 
-The current `apps/frontend/app/planner.tsx` does not call this API, is not linked from the application navigation, uses fixed dates and demo courses, and has non-functional regenerate and save controls.
+The mobile planner calls the persisted API, is linked from Home and Profile, accepts US-formatted dates, derives origin from destination/regions, and supports create, refine, save, reopen, and delete with real catalog courses.
 
-### Mobile scope
+### Completed mobile behavior
 
-- Add plan types and API client methods for every existing plan endpoint.
-- Add a planner entry point from Home and Profile without replacing a core bottom-navigation tab.
-- Build a plan form with destination/regions, dates, party size, maximum green fee, access, difficulty, radius, transportation, preferred tee-time window, and must-haves.
-- Render persisted candidates, reasons, caveats, distances, and itinerary items from the API.
-- Make Regenerate call `PUT /api/v1/me/plans/{id}` with edited constraints.
-- Make Save call `POST /api/v1/me/plans/{id}/save` and show explicit saved state.
-- Add My trips with draft/saved states, reopen, edit, and delete.
-- Include loading, empty, validation, offline/error, and retry states.
+- API client methods and types cover create, update, save, list, get, and delete.
+- Home and Profile link to Planner without replacing a core bottom-navigation tab.
+- The plan form asks for destination/regions, dates, party size, maximum green fee, and must-haves; origin is resolved from the destination instead of exposed as coordinates.
+- Users can refine the same persisted query after the initial result.
+- Candidates, reasons, caveats, distances, and itinerary items come from the API.
+- My trips supports draft/saved states, reopen, edit, and delete.
+- Loading, empty, validation, error, and retry states are explicit.
 
 ### Backend refinements
 

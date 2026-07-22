@@ -103,6 +103,8 @@ describe('RatingFlow', () => {
     expect(await screen.findByText('Which would you play again?')).toBeOnTheScreen()
     expect(screen.queryByRole('button', { name: 'Save rating' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Not sure' })).toBeNull()
+    expect(screen.getByLabelText('Pebble Beach Golf Links image unavailable')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Spyglass Hill image unavailable')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: label }))
 

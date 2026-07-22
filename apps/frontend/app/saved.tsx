@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { getSavedLists } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseCard, ProductScreen, ScreenHeader, Segmented } from '../src/components/ProductUI'
-import { DemoCourse } from '../src/data/demo'
+import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { Course, SavedList } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -50,14 +50,13 @@ export default function Saved() {
       {error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
       {!loading && !error && !selected ? <Text style={styles.empty}>Courses you save will appear here.</Text> : null}
       {!loading && !error && selected && selected.courses.length === 0 ? <Text style={styles.empty}>No courses saved to {selected.name} yet.</Text> : null}
-      {selected?.courses.length ? <View style={styles.grid}>{selected.courses.map(({ course }) => <View key={course.id} style={styles.item}><CourseCard compact course={toDemoCourse(course)} badge="Saved" onPress={() => router.push(`/course/${course.id}` as never)} /></View>)}</View> : null}
+      {selected?.courses.length ? <View style={styles.grid}>{selected.courses.map(({ course }) => <View key={course.id} style={styles.item}><CourseCard compact course={toCoursePresentation(course)} badge="Saved" onPress={() => router.push(`/course/${course.id}` as never)} /></View>)}</View> : null}
     </ProductScreen>
     <BottomNav />
   </>
 }
 
-function toDemoCourse(course: Course): DemoCourse {
-  const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url)
+function toCoursePresentation(course: Course): CoursePresentation {
   return {
     id: String(course.id),
     name: course.name,
@@ -66,9 +65,7 @@ function toDemoCourse(course: Course): DemoCourse {
     reviews: String(course.rating_count ?? 0),
     distance: '',
     price: course.green_fee == null ? '—' : course.green_fee > 500 ? '$$$$' : '$$$',
-    accent: '#6E8B84',
-    secondary: '#AEC3B7',
-    image: hero?.url ? { uri: hero.url } : undefined,
+    image: attributedCourseImage(course),
   }
 }
 

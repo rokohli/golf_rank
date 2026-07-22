@@ -17,7 +17,7 @@ from sqlalchemy import (
     false,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -77,6 +77,12 @@ class Course(Base):
     access: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    images: Mapped[list["CourseImage"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by=lambda: (CourseImage.position, CourseImage.id),
+        passive_deletes=True,
+    )
 
 
 class CourseImage(Base):

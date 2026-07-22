@@ -100,6 +100,8 @@ def test_course_detail_resolves_a_course_by_id() -> None:
                 course_id=pebble.id,
                 storage_key="courses/pebble/second.jpg",
                 alt_text="Pebble Beach green",
+                source_name="GolfRank photographer",
+                source_url="https://golfrank.example/photos/pebble-green",
                 position=1,
             ),
         ])
@@ -112,7 +114,28 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert response.status_code == 200
     assert response.json()["name"] == "Spyglass Hill Golf Course"
 
-    pebble_id = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]["id"]
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+    pebble_id = listed_pebble["id"]
+    assert listed_pebble["images"] == [
+        {
+            "id": 1,
+            "url": "https://images.example/pebble-hero.jpg",
+            "alt_text": "Pebble Beach coastline",
+            "source_name": "Example photographer",
+            "source_url": "https://images.example/license",
+            "position": 0,
+            "is_hero": True,
+        },
+        {
+            "id": 2,
+            "url": "https://cdn.example/assets/courses/pebble/second.jpg",
+            "alt_text": "Pebble Beach green",
+            "source_name": "GolfRank photographer",
+            "source_url": "https://golfrank.example/photos/pebble-green",
+            "position": 1,
+            "is_hero": False,
+        },
+    ]
     pebble_response = client.get(f"/api/v1/courses/{pebble_id}")
     assert pebble_response.status_code == 200
     assert pebble_response.json()["par"] == 72
@@ -132,8 +155,8 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "id": 2,
             "url": "https://cdn.example/assets/courses/pebble/second.jpg",
             "alt_text": "Pebble Beach green",
-            "source_name": None,
-            "source_url": None,
+            "source_name": "GolfRank photographer",
+            "source_url": "https://golfrank.example/photos/pebble-green",
             "position": 1,
             "is_hero": False,
         },
