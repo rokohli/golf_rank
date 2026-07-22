@@ -6,6 +6,7 @@ const mockGetFeed = jest.fn()
 const mockSetReaction = jest.fn()
 const mockMuteUser = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test-token' })
+const mockRouter = { push: jest.fn(), replace: jest.fn() }
 
 jest.mock('@expo/vector-icons', () => {
   const { Text } = require('react-native')
@@ -18,7 +19,7 @@ jest.mock('expo-router', () => {
     Stack: { Screen: () => null },
     useFocusEffect: (callback: () => void) => React.useEffect(callback, [callback]),
     usePathname: () => '/home',
-    useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+    useRouter: () => mockRouter,
   }
 })
 
@@ -59,6 +60,13 @@ describe('Home social feed', () => {
 
     fireEvent.press(screen.getByRole('button', { name: 'Like activity' }))
     await waitFor(() => expect(mockSetReaction).toHaveBeenCalledWith(8, true, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+  })
+
+  it('opens the trip planner from Home', async () => {
+    render(<Home />)
+    await screen.findByText('Plan a golf trip')
+    fireEvent.press(screen.getByRole('button', { name: 'Plan a golf trip' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/planner')
   })
 
   it('shows an honest empty state without demo activity', async () => {

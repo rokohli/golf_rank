@@ -6,7 +6,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 import { getCourseRegions, getProfile, searchCourses, submitCourseCandidate } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, DemoCourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
-import { DemoCourse, demoCourses } from '../src/data/demo'
+import { DemoCourse } from '../src/data/demo'
 import { DEFAULT_COURSE_REGION, resolveCurrentLocation } from '../src/location/currentRegion'
 import { loadSavedRegion, saveRegion } from '../src/location/regionPreference'
 import { Course, CourseRegion } from '../src/types'
@@ -212,7 +212,7 @@ function FilterModal({ visible, onClose, regions, region, setRegion, radius, set
 
 function OptionRow({ options, selected, onSelect, suffix = '' }: { options: (string | number)[]; selected: string | number; onSelect: (value: never) => void; suffix?: string }) { return <View style={styles.chips}>{options.map((option) => <FilterChip key={option} label={`${typeof option === 'string' ? capitalize(option) : option}${suffix}`} active={selected === option} onPress={() => onSelect(option as never)} />)}</View> }
 function FilterChip({ label, active = false, onPress }: { label: string; active?: boolean; onPress?: () => void }) { return <Pressable accessibilityRole={onPress ? 'button' : undefined} onPress={onPress} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text></Pressable> }
-function toDisplayCourse(course: Course, index: number): DemoCourse { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: course.distance_miles == null ? (course.green_fee == null ? 'Fee unavailable' : `$${course.green_fee}`) : `${course.distance_miles.toFixed(1)} mi`, price: course.green_fee != null && course.green_fee > 500 ? '$$$$' : '$$$', accent: '#6E8B84', secondary: '#AEC3B7', image: demoCourses[index % demoCourses.length].image } }
+function toDisplayCourse(course: Course, _index: number): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: course.distance_miles == null ? (course.green_fee == null ? 'Fee unavailable' : `$${course.green_fee}`) : `${course.distance_miles.toFixed(1)} mi`, price: course.green_fee != null && course.green_fee > 500 ? '$$$$' : '$$$', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
 function regionCode(value: string) { return /,\s*([A-Z]{2})\s*$/.exec(value)?.[1] }
 function capitalize(value: string) { return value.charAt(0).toUpperCase() + value.slice(1) }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }

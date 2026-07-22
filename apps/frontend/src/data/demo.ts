@@ -10,7 +10,7 @@ export type DemoCourse = {
   price: string
   accent: string
   secondary: string
-  image: ImageSourcePropType
+  image?: ImageSourcePropType
   personalRank?: number
   personalRating?: number
   tier?: 'green' | 'fairway' | 'rough' | 'bunker'

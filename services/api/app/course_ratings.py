@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, course_identity_ids, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
     Comparison,
@@ -35,9 +35,11 @@ router = APIRouter(prefix="/api/v1/me/course-ratings", tags=["course-ratings"])
 
 
 def _aggregate(session: Session, course_id: int) -> tuple[float | None, int]:
+    course = require_course(session, course_id)
+    identity_ids = course_identity_ids(session, course)
     average, count = session.execute(
         select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id)).where(
-            UserCourseRating.course_id == course_id
+            UserCourseRating.course_id.in_(identity_ids)
         )
     ).one()
     return (round(float(average), 1) if average is not None else None, int(count))
@@ -58,10 +60,14 @@ def _state(
     note = None
     companions = []
     if user_id is not None:
+        identity_ids = course_identity_ids(session, course)
         rating = session.scalar(
             select(UserCourseRating).where(
                 UserCourseRating.user_id == user_id,
-                UserCourseRating.course_id == course.id,
+                UserCourseRating.course_id.in_(identity_ids),
+            ).order_by(
+                (UserCourseRating.course_id == course.id).desc(),
+                UserCourseRating.updated_at.desc(),
             )
         )
         if rating is not None:
@@ -267,7 +273,7 @@ def comparison_candidate(
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> dict | None:
-    require_course(session, course_id)
+    course_id = require_course(session, course_id).id
     user = stored_user(session, current)
     if user is None:
         return None
@@ -322,30 +328,62 @@ def put_course_rating(
     session: Session = Depends(get_session),
 ) -> CourseRatingStateOut:
     course = require_course(session, course_id)
+    course_id = course.id
     try:
         user = require_user(session, current, create=True)
         # Lock before reading or inserting the unique per-user assignment so
         # concurrent first-time ratings cannot race each other.
         _lock_user_for_ranking_update(session, user.id)
+        identity_ids = course_identity_ids(session, course)
+        identity_assignments = list(session.scalars(
+            select(TierAssignment).where(
+                TierAssignment.user_id == user.id,
+                TierAssignment.course_id.in_(identity_ids),
+            ).order_by(
+                (TierAssignment.course_id == course_id).desc(),
+                TierAssignment.id,
+            )
+        ).all())
+        if identity_assignments:
+            assignment = identity_assignments[0]
+            if assignment.course_id != course_id:
+                assignment.course_id = course_id
+            for duplicate in identity_assignments[1:]:
+                session.delete(duplicate)
+            session.flush()
         _place_assignment(session, user.id, course_id, payload.tier)
         session.flush()
         if payload.comparison_course_id is not None and payload.comparison_result is not None:
+            comparison_course_id = require_course(session, payload.comparison_course_id).id
             _stage_comparison(
                 session,
                 user.id,
                 course_id,
                 payload.tier,
-                payload.comparison_course_id,
+                comparison_course_id,
                 payload.comparison_result,
             )
 
         existing_rating = session.scalar(
             select(UserCourseRating).where(
                 UserCourseRating.user_id == user.id,
-                UserCourseRating.course_id == course_id,
+                UserCourseRating.course_id.in_(identity_ids),
+            ).order_by(
+                (UserCourseRating.course_id == course_id).desc(),
+                UserCourseRating.updated_at.desc(),
             )
         )
         round_ = session.get(Round, existing_rating.round_id) if existing_rating else None
+        if existing_rating is not None and existing_rating.course_id != course_id:
+            # The rating-to-round ownership FK includes course_id, so detach the
+            # projection before moving the existing round to its canonical course.
+            # The staged snapshot below recreates the projection without losing
+            # the round's date, score, note, companions, or activity identity.
+            session.delete(existing_rating)
+            session.flush()
+            if round_ is not None:
+                round_.course_id = course_id
+                session.flush()
         if round_ is None:
             round_ = Round(
                 user_id=user.id,
@@ -387,6 +425,7 @@ def patch_rating_details(
     session: Session = Depends(get_session),
 ) -> CourseRatingStateOut:
     course = require_course(session, course_id)
+    course_id = course.id
     user = require_user(session, current)
     rating = session.scalar(
         select(UserCourseRating).where(

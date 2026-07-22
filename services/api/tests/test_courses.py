@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage
+from app.models import Course, CourseImage, CourseReconciliation
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -14,6 +14,46 @@ def test_course_search_filters_by_region_fee_and_access() -> None:
 
     assert response.status_code == 200
     assert [course["name"] for course in response.json()] == ["Pebble Beach Golf Links"]
+
+
+def test_confirmed_course_alias_is_hidden_and_detail_resolves_to_canonical() -> None:
+    app = create_app()
+    with app.state.session_factory() as session:
+        canonical = session.query(Course).filter(Course.source_course_id == "pebble").one()
+        alias = Course(
+            name="Pebble Beach Golf Links",
+            region="Pebble Beach, CA",
+            latitude=36.5681,
+            longitude=-121.9491,
+            is_public=True,
+            source="opengolfapi",
+            source_course_id="open-pebble",
+            country_code="US",
+            admin1_code="CA",
+            city="Pebble Beach",
+            hole_count=18,
+            par=72,
+        )
+        session.add(alias)
+        session.flush()
+        alias_id = alias.id
+        canonical_id = canonical.id
+        session.add(CourseReconciliation(
+            source=alias.source,
+            source_course_id=alias.source_course_id,
+            canonical_course_id=canonical.id,
+            match_status="confirmed",
+            match_data={"reason": "regression fixture"},
+        ))
+        session.commit()
+
+    client = TestClient(app)
+    results = client.get("/api/v1/courses", params={"q": "Pebble"})
+    detail = client.get(f"/api/v1/courses/{alias_id}")
+
+    assert [course["id"] for course in results.json()] == [canonical_id]
+    assert detail.status_code == 200
+    assert detail.json()["id"] == canonical_id
 
 
 def test_course_search_keeps_unknown_difficulty_courses_discoverable() -> None:

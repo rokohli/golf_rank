@@ -9,7 +9,10 @@ import {
   FeedPage,
   Follow,
   GolfRound,
+  GolfPlan,
   OnboardingPreferences,
+  PlanInput,
+  PlanSummary,
   RankingComparison,
   RankingSnapshot,
   FriendRanking,
@@ -347,4 +350,43 @@ export async function getFriends(headers: ApiHeaders): Promise<FriendSummary[]> 
     display_name: user.display_name,
     username: user.username,
   }))
+}
+
+export async function createPlan(input: PlanInput, headers: ApiHeaders): Promise<GolfPlan> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans`, {
+    method: 'POST', headers, body: JSON.stringify(input),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to create this trip. Please try again.')
+  return response.json()
+}
+
+export async function updatePlan(planId: number, input: PlanInput, headers: ApiHeaders): Promise<GolfPlan> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}`, {
+    method: 'PUT', headers, body: JSON.stringify(input),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to regenerate this trip. Please try again.')
+  return response.json()
+}
+
+export async function savePlan(planId: number, headers: ApiHeaders): Promise<GolfPlan> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}/save`, { method: 'POST', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to save this trip. Please try again.')
+  return response.json()
+}
+
+export async function getPlans(headers: ApiHeaders): Promise<PlanSummary[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load your trips. Please try again.')
+  return response.json()
+}
+
+export async function getPlan(planId: number, headers: ApiHeaders): Promise<GolfPlan> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load this trip. Please try again.')
+  return response.json()
+}
+
+export async function deletePlan(planId: number, headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to delete this trip. Please try again.')
 }

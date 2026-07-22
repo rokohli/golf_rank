@@ -8,8 +8,8 @@ import { getProfile, getRoundSummary } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, ProductScreen } from '../src/components/ProductUI'
-import { demoCourses } from '../src/data/demo'
-import { OnboardingPreferences, RoundSummary } from '../src/types'
+import { DemoCourse } from '../src/data/demo'
+import { Course, OnboardingPreferences, RoundSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
 export default function Profile() {
@@ -52,7 +52,7 @@ export default function Profile() {
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen edgeToEdge refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
       <View style={styles.hero}>
-        <CourseVisual course={demoCourses[0]} height={176 + insets.top} squareTop />
+        <CourseVisual course={profileBackdrop} height={176 + insets.top} squareTop />
         <Pressable accessibilityLabel="Profile settings" accessibilityRole="button" hitSlop={10} onPress={() => router.push('/settings' as never)} style={({ pressed }) => [styles.settings, { top: insets.top + 8 }, pressed && styles.pressed]}>
           <Feather name="settings" size={22} color="#FFFFFF" />
         </Pressable>
@@ -80,12 +80,13 @@ export default function Profile() {
         <ProfileAction icon="users" label="Friends" onPress={() => router.push('/friends')} />
         <ProfileAction icon="bookmark" label="Saved" onPress={() => router.push('/saved')} />
         <ProfileAction icon="clock" label="Rounds" onPress={() => router.push('/rounds')} />
+        <ProfileAction icon="map" label="Trips" onPress={() => router.push('/planner' as never)} />
       </View>
 
       <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Recent round</Text></View>
       {latestRound ? <>
         <Pressable accessibilityLabel={`Open ${latestRound.course.name} round`} accessibilityRole="button" onPress={() => router.push(`/round/${latestRound.id}` as never)} style={({ pressed }) => [styles.recent, pressed && styles.pressed]}>
-          <View style={styles.recentImage}><CourseVisual course={demoCourses[0]} height={62} /></View>
+          <View style={styles.recentImage}><CourseVisual course={displayCourse(latestRound.course)} height={62} /></View>
           <View style={styles.recentCopy}>
             <Text numberOfLines={1} style={styles.recentTitle}>{latestRound.course.name}</Text>
             <Text numberOfLines={1} style={styles.recentMeta}>{formatDate(latestRound.played_on)} · {latestRound.course.region}</Text>
@@ -108,6 +109,8 @@ function ProfileAction({ icon, label, onPress }: { icon: keyof typeof Feather.gl
   return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.pressed]}><Feather name={icon} size={20} color={colors.pine} /><Text style={styles.actionText}>{label}</Text></Pressable>
 }
 
+const profileBackdrop: DemoCourse = { id: 'profile', name: 'Profile', location: '', rating: 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7' }
+function displayCourse(course: Course): DemoCourse { const hero = course.images?.find((image) => image.is_hero && image.url) ?? course.images?.find((image) => image.url); return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', accent: '#6E8B84', secondary: '#AEC3B7', image: hero?.url ? { uri: hero.url } : undefined } }
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
 function formatAverage(value: number | null | undefined) { return value == null ? '—' : value.toFixed(1) }
 function formatDate(value: string) { return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) }

@@ -4,12 +4,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_user, stored_user
+from .domain import canonical_courses_only, course_data, require_course, require_user, stored_user
 from .models import (
     Course,
     ItineraryItem,
@@ -126,16 +126,31 @@ def _ranking_signal(session: Session, user_id: int) -> dict[int, tuple[float, fl
 
 
 def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dict]:
-    statement = select(Course)
+    base_statement = select(Course).where(Course.status == "active", canonical_courses_only())
+    region_filter = None
+    if payload.regions:
+        region_filter = or_(*[
+            or_(Course.region.ilike(f"%{region}%"), Course.city.ilike(f"%{region}%"))
+            for region in payload.regions
+        ])
+    statement = base_statement.where(region_filter) if region_filter is not None else base_statement
     if payload.max_green_fee is not None:
-        statement = statement.where(Course.green_fee <= payload.max_green_fee)
+        statement = statement.where(or_(
+            Course.green_fee <= payload.max_green_fee,
+            Course.green_fee.is_(None),
+        ))
     if payload.access != "any":
         statement = statement.where(Course.is_public == (payload.access == "public"))
     if payload.difficulty != "any":
         statement = statement.where(Course.difficulty == payload.difficulty)
-    if payload.regions:
-        statement = statement.where(Course.region.in_(payload.regions))
     courses = list(session.scalars(statement).all())
+    origin_latitude = payload.origin_latitude
+    origin_longitude = payload.origin_longitude
+    if origin_latitude is None and region_filter is not None:
+        destination_courses = list(session.scalars(base_statement.where(region_filter)).all())
+        if destination_courses:
+            origin_latitude = sum(course.latitude for course in destination_courses) / len(destination_courses)
+            origin_longitude = sum(course.longitude for course in destination_courses) / len(destination_courses)
 
     ranking = _ranking_signal(session, user_id)
     saved_ids = set(
@@ -157,10 +172,10 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     candidates: list[dict] = []
     for course in courses:
         distance = None
-        if payload.origin_latitude is not None and payload.origin_longitude is not None:
+        if origin_latitude is not None and origin_longitude is not None:
             distance = _distance_miles(
-                payload.origin_latitude,
-                payload.origin_longitude,
+                origin_latitude,
+                origin_longitude,
                 course.latitude,
                 course.longitude,
             )
@@ -168,7 +183,7 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 continue
         personal_rating, confidence = ranking.get(course.id, (5.0, 0.0))
         budget_fit = 0.0
-        if payload.max_green_fee:
+        if payload.max_green_fee and course.green_fee is not None:
             budget_fit = max(0.0, 10 * (1 - course.green_fee / payload.max_green_fee))
         score = personal_rating * 6 + confidence * 10 + budget_fit
         reasons: list[str] = []
@@ -183,10 +198,12 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
         if course.id not in played_ids:
             score += 5
             reasons.append("This would add a new course to your played list.")
-        if payload.max_green_fee is not None:
+        if payload.max_green_fee is not None and course.green_fee is not None:
             reasons.append(f"The ${course.green_fee} green fee is within your budget.")
+        elif course.green_fee is None:
+            caveats.append("The current green fee is unknown and must be confirmed.")
         if distance is not None:
-            reasons.append(f"Approximately {distance:.0f} miles from your origin.")
+            reasons.append(f"Approximately {distance:.0f} miles from the destination center.")
         if payload.must_haves:
             caveats.append("Requested must-haves require confirmation from a current course source.")
         candidates.append(
@@ -208,6 +225,7 @@ def _replace_plan_data(session: Session, user_id: int, plan: Plan, payload: Plan
     plan.title = payload.title.strip()
     plan.start_date = payload.start_date
     plan.end_date = payload.end_date
+    plan.status = "draft"
     session.add(plan)
     session.flush()
     constraint_data = payload.model_dump(mode="json", exclude={"title", "start_date", "end_date"})
@@ -271,7 +289,10 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
     ).all()
     candidates: list[PlanCandidateOut] = []
     for candidate in candidate_rows:
-        course = session.get(Course, candidate.course_id)
+        try:
+            course = require_course(session, candidate.course_id)
+        except HTTPException:
+            course = None
         if course is not None:
             candidates.append(
                 PlanCandidateOut(
@@ -291,7 +312,10 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
     ).all()
     itinerary: list[ItineraryItemOut] = []
     for item in itinerary_rows:
-        course = session.get(Course, item.course_id) if item.course_id else None
+        try:
+            course = require_course(session, item.course_id) if item.course_id else None
+        except HTTPException:
+            course = None
         itinerary.append(
             ItineraryItemOut(
                 id=item.id,

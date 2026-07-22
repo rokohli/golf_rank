@@ -103,6 +103,8 @@ describe('profile experience', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/profile/edit')
     fireEvent.press(screen.getByRole('button', { name: 'Open Pebble Beach Golf Links round' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/round/42')
+    fireEvent.press(screen.getByRole('button', { name: 'Trips' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/planner')
   })
 
   it('updates Clerk identity and the saved profile from Edit profile', async () => {

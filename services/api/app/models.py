@@ -104,7 +104,7 @@ class CourseImage(Base):
 class CourseReconciliation(Base):
     __tablename__ = "course_reconciliations"
     __table_args__ = (
-        UniqueConstraint("source", "source_course_id", "canonical_course_id", name="uq_course_reconciliation"),
+        UniqueConstraint("source", "source_course_id", name="uq_course_reconciliation"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

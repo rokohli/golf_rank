@@ -135,7 +135,7 @@ class CourseStateOut(BaseModel):
 
 
 def _round_out(session: Session, round_: Round) -> RoundOut:
-    course = session.get(Course, round_.course_id)
+    course = require_course(session, round_.course_id)
     note = session.get(RoundNote, round_.id)
     assert course is not None
     companions = session.scalars(
@@ -274,10 +274,10 @@ def create_round(
     session: Session = Depends(get_session),
 ) -> RoundOut:
     user = require_user(session, current, create=True)
-    require_course(session, payload.course_id)
+    course_id = require_course(session, payload.course_id).id
     round_ = Round(
         user_id=user.id,
-        course_id=payload.course_id,
+        course_id=course_id,
         played_on=payload.played_on,
         score=payload.score,
         favorite_hole=payload.favorite_hole,
@@ -290,7 +290,7 @@ def create_round(
         session.add(RoundNote(round_id=round_.id, body=payload.note))
     friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
     _replace_companions(session, round_.id, friend_ids, payload.guest_names)
-    _refresh_course_state(session, user.id, payload.course_id)
+    _refresh_course_state(session, user.id, course_id)
     session.add(
         ActivityEvent(
             actor_user_id=user.id,
@@ -498,7 +498,10 @@ def list_course_states(
     ).all()
     output: list[CourseStateOut] = []
     for state in states:
-        course = session.get(Course, state.course_id)
+        try:
+            course = require_course(session, state.course_id)
+        except HTTPException:
+            course = None
         if course is not None:
             output.append(
                 CourseStateOut(

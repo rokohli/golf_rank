@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_user, stored_user
+from .domain import course_data, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -276,7 +276,10 @@ def activity_feed(
             course = None
             course_id = event.event_data.get("course_id")
             if isinstance(course_id, int):
-                stored_course = session.get(Course, course_id)
+                try:
+                    stored_course = require_course(session, course_id)
+                except HTTPException:
+                    stored_course = None
                 if stored_course is not None:
                     course = course_data(stored_course)
             reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)

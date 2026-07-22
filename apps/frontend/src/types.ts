@@ -281,3 +281,65 @@ export type FriendRanking = {
   entries: RankedCourse[]
   updated_at: string | null
 }
+
+export type PlanInput = {
+  title: string
+  start_date: string
+  end_date: string
+  party_size: number
+  max_green_fee: number | null
+  access: 'public' | 'private' | 'any'
+  difficulty: 'beginner' | 'intermediate' | 'challenging' | 'any'
+  regions: string[]
+  origin_latitude: number | null
+  origin_longitude: number | null
+  radius_miles: number | null
+  transportation: 'walking' | 'cart' | 'either'
+  tee_time_window: string | null
+  must_haves: string[]
+  max_candidates: number
+}
+
+export type PlanCandidate = {
+  position: number
+  course: Course
+  score: number
+  distance_miles: number | null
+  reasons: string[]
+  caveats: string[]
+  source_checked_at: string
+}
+
+export type PlanItineraryItem = {
+  id: number
+  date: string
+  position: number
+  title: string
+  course: Course | null
+  start_time: string | null
+  details: { tee_time_window?: string | null; availability_verified?: boolean }
+}
+
+export type GolfPlan = {
+  id: number
+  title: string
+  start_date: string
+  end_date: string
+  status: 'draft' | 'saved'
+  constraints: Omit<PlanInput, 'title' | 'start_date' | 'end_date'>
+  candidates: PlanCandidate[]
+  itinerary: PlanItineraryItem[]
+  created_at: string
+  updated_at: string
+}
+
+export type PlanSummary = {
+  id: number
+  title: string
+  start_date: string
+  end_date: string
+  status: 'draft' | 'saved'
+  candidate_count: number
+  created_at: string
+  updated_at: string
+}

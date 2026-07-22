@@ -1,7 +1,9 @@
 import {
   createSavedList,
+  createPlan,
   createRound,
   deleteRound,
+  deletePlan,
   getCourse,
   getCourseRegions,
   getFeed,
@@ -10,6 +12,8 @@ import {
   getFriends,
   getFriendRankings,
   getProfile,
+  getPlan,
+  getPlans,
   getRanking,
   getRatingCandidate,
   getRound,
@@ -21,12 +25,14 @@ import {
   saveCourseRating,
   saveCourseToList,
   savePreferences,
+  savePlan,
   saveRatingDetails,
   saveTierPlacements,
   searchUsers,
   searchCourses,
   setActivityReaction,
   updateRound,
+  updatePlan,
 } from '../client'
 
 describe('api client', () => {
@@ -134,6 +140,35 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/me/rounds', { method: 'POST', headers, body: JSON.stringify(input) })
     expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/me/rounds/42', { method: 'PATCH', headers, body: JSON.stringify(patch) })
     expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/me/rounds/42', { method: 'DELETE', headers })
+  })
+
+  it('supports the complete persisted trip lifecycle', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 9, status: 'draft' }),
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+    const input = {
+      title: 'Monterey', start_date: '2026-08-01', end_date: '2026-08-02', party_size: 4,
+      max_green_fee: 500, access: 'public' as const, difficulty: 'any' as const,
+      regions: ['Monterey, CA'], origin_latitude: null, origin_longitude: null,
+      radius_miles: null, transportation: 'either' as const, tee_time_window: 'Morning',
+      must_haves: ['Walking friendly'], max_candidates: 5,
+    }
+
+    await getPlans(headers)
+    await getPlan(9, headers)
+    await createPlan(input, headers)
+    await updatePlan(9, input, headers)
+    await savePlan(9, headers)
+    await deletePlan(9, headers)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8000/api/v1/me/plans', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/plans/9', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/me/plans', { method: 'POST', headers, body: JSON.stringify(input) })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/me/plans/9', { method: 'PUT', headers, body: JSON.stringify(input) })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/me/plans/9/save', { method: 'POST', headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/me/plans/9', { method: 'DELETE', headers })
   })
 
   it('surfaces API authentication errors during onboarding', async () => {

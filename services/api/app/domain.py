@@ -1,9 +1,9 @@
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import exists, select, tuple_
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser
-from .models import Course, User
+from .models import Course, CourseReconciliation, User
 
 
 def stored_user(session: Session, current: CurrentUser, *, create: bool = False) -> User | None:
@@ -26,7 +26,51 @@ def require_course(session: Session, course_id: int) -> Course:
     course = session.get(Course, course_id)
     if course is None:
         raise HTTPException(404, "Course not found")
-    return course
+    if course.source_course_id is None:
+        return course
+    canonical_id = session.scalar(
+        select(CourseReconciliation.canonical_course_id).where(
+            CourseReconciliation.source == course.source,
+            CourseReconciliation.source_course_id == course.source_course_id,
+            CourseReconciliation.match_status == "confirmed",
+        )
+    )
+    if canonical_id is None or canonical_id == course.id:
+        return course
+    canonical = session.get(Course, canonical_id)
+    if canonical is None:
+        raise HTTPException(404, "Course not found")
+    return canonical
+
+
+def canonical_courses_only():
+    """SQL predicate that hides source rows mapped to another canonical course."""
+
+    return ~exists(
+        select(CourseReconciliation.id).where(
+            CourseReconciliation.source == Course.source,
+            CourseReconciliation.source_course_id == Course.source_course_id,
+            CourseReconciliation.match_status == "confirmed",
+            CourseReconciliation.canonical_course_id != Course.id,
+        )
+    )
+
+
+def course_identity_ids(session: Session, course: Course) -> set[int]:
+    """Return the canonical ID and every confirmed source alias for read aggregation."""
+
+    alias_identities = session.execute(
+        select(CourseReconciliation.source, CourseReconciliation.source_course_id).where(
+            CourseReconciliation.canonical_course_id == course.id,
+            CourseReconciliation.match_status == "confirmed",
+        )
+    ).all()
+    if not alias_identities:
+        return {course.id}
+    aliases = set(session.scalars(select(Course.id).where(
+        tuple_(Course.source, Course.source_course_id).in_(alias_identities)
+    )).all())
+    return {course.id, *aliases}
 
 
 def course_data(course: Course) -> dict:
