@@ -17,6 +17,21 @@ docker compose up --build
 curl http://localhost:8000/health
 ```
 
+Redis-backed rate limiting is enabled by `.env.example`. Public catalog requests
+use IP buckets; authenticated reads and writes use the stable Clerk subject;
+course-candidate submissions use user and IP buckets plus a daily quota. Run the
+real Lua concurrency test with:
+
+```bash
+docker compose up -d redis
+cd services/api
+REDIS_TEST_URL=redis://localhost:6379/15 pytest -q tests/test_rate_limit.py
+```
+
+`FORWARDED_FOR_TRUSTED_HOPS` is `0` by default. Render staging sets it to `1`,
+so the API selects the proxy-appended address from the right side of
+`X-Forwarded-For`; caller-prepended values are never used as the client key.
+
 ### California course catalog
 
 The MVP catalog imports OpenGolfAPI data under ODbL 1.0. Preview and apply an idempotent import with:
@@ -66,3 +81,8 @@ CLERK_ISSUER=<from Clerk dashboard>
 CLERK_JWKS_URL=<issuer>/.well-known/jwks.json
 ALLOW_DEVELOPMENT_IDENTITY=false
 ```
+
+`CLERK_AUDIENCE` is supported when a Clerk JWT template supplies an `aud` claim.
+The default Clerk mobile session token does not include that claim, so configure
+the template and update the mobile `getToken()` call before making audience
+validation mandatory.

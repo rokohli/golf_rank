@@ -36,3 +36,25 @@ def test_readiness_fails_when_database_is_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Database unavailable"}
+
+
+def test_readiness_caches_successful_database_checks() -> None:
+    class CountingSession:
+        executions = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, _statement):
+            type(self).executions += 1
+
+    app = create_app()
+    app.state.session_factory = CountingSession
+    client = TestClient(app)
+
+    assert client.get("/ready").status_code == 200
+    assert client.get("/ready").status_code == 200
+    assert CountingSession.executions == 1

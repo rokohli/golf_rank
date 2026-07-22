@@ -24,3 +24,26 @@ services:
         sync: false
       - key: CLERK_JWKS_URL
         sync: false
+      - key: REDIS_URL
+        fromService:
+          name: fairway-rate-limits
+          type: keyvalue
+          property: connectionString
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_KEY_SALT
+        generateValue: true
+      - key: FORWARDED_FOR_TRUSTED_HOPS
+        value: "1"
+      - key: ALLOWED_HOSTS
+        value: fairway-api-h93s.onrender.com
+      - key: MAX_REQUEST_BODY_BYTES
+        value: "1048576"
+
+  - type: keyvalue
+    name: fairway-rate-limits
+    plan: free
+    region: oregon
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+    persistenceMode: off
