@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
-import Home from '../home'
+import Home, { greetingForHour } from '../home'
 
 const mockGetFeed = jest.fn()
 const mockSetReaction = jest.fn()
@@ -73,5 +73,18 @@ describe('Home social feed', () => {
     render(<Home />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Feed unavailable')
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen()
+  })
+})
+
+describe('home greeting', () => {
+  it.each([
+    [0, 'Good morning'],
+    [11, 'Good morning'],
+    [12, 'Good afternoon'],
+    [16, 'Good afternoon'],
+    [17, 'Good evening'],
+    [23, 'Good evening'],
+  ])('uses the local hour %i for %s', (hour, expected) => {
+    expect(greetingForHour(hour)).toBe(expected)
   })
 })

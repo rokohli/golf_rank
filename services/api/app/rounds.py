@@ -431,14 +431,20 @@ def update_round(
         _replace_companions(session, round_.id, friend_ids, payload.guest_names)
     event = session.scalar(
         select(ActivityEvent).where(
-            ActivityEvent.subject_type == "round",
+            ActivityEvent.subject_type.in_(("round", "rating_round")),
             ActivityEvent.subject_id == round_.id,
             ActivityEvent.actor_user_id == user.id,
         )
     )
     if event is not None:
         event.visibility = round_.visibility
-        event.event_data = _event_data(round_)
+        event_data = _event_data(round_)
+        if event.subject_type == "rating_round":
+            event_data.update({
+                "rating": event.event_data.get("rating"),
+                "tier": event.event_data.get("tier"),
+            })
+        event.event_data = event_data
     _refresh_course_state(session, user.id, round_.course_id)
     session.commit()
     return _round_out(session, round_)

@@ -75,6 +75,32 @@ def test_unrated_state_has_no_invented_personal_or_community_rating() -> None:
     assert response.json()["course"]["rating_count"] == 0
 
 
+def test_course_rating_state_keeps_rating_score_separate_from_other_rounds() -> None:
+    client = TestClient(create_app())
+    _create_profile(client, ALICE, "Alice")
+    assert client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json=_rating(score=91),
+    ).status_code == 200
+    assert client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-02",
+            "score": 82,
+            "visibility": "private",
+        },
+    ).status_code == 201
+
+    state = client.get("/api/v1/me/course-ratings/1", headers=ALICE)
+
+    assert state.status_code == 200
+    assert state.json()["round"]["score"] == 91
+    assert "best_score" not in state.json()
+
+
 def test_candidate_is_deterministic_and_read_only() -> None:
     app = create_app()
     client = TestClient(app)

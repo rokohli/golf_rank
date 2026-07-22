@@ -61,17 +61,21 @@ export default function Discover() {
     return () => { active = false }
   }, [getAuthHeaders])
 
-  const searchFilters = useMemo(() => ({
-    q: query.trim() || undefined,
-    region: !coordinates && region !== DEFAULT_COURSE_REGION ? region : undefined,
-    lat: coordinates?.latitude,
-    lng: coordinates?.longitude,
-    radius_miles: coordinates ? radiusMiles : undefined,
-    access,
-    difficulty,
-    max_green_fee: maxGreenFee,
-    limit: 50,
-  }), [access, coordinates, difficulty, maxGreenFee, query, radiusMiles, region])
+  const searchFilters = useMemo(() => {
+    const normalizedQuery = query.trim() || undefined
+    const searchingCatalog = normalizedQuery !== undefined
+    return {
+      q: normalizedQuery,
+      region: !searchingCatalog && !coordinates && region !== DEFAULT_COURSE_REGION ? region : undefined,
+      lat: !searchingCatalog ? coordinates?.latitude : undefined,
+      lng: !searchingCatalog ? coordinates?.longitude : undefined,
+      radius_miles: !searchingCatalog && coordinates ? radiusMiles : undefined,
+      access,
+      difficulty,
+      max_green_fee: maxGreenFee,
+      limit: 50,
+    }
+  }, [access, coordinates, difficulty, maxGreenFee, query, radiusMiles, region])
 
   const loadCourses = useCallback(async () => {
     const version = ++requestVersion.current
@@ -151,7 +155,7 @@ export default function Discover() {
     if (!last || courses.length < 50 || loadingMore) return
     setLoadingMore(true)
     try {
-      const next = await searchCourses({ ...searchFilters, ...(coordinates ? { offset: courses.length } : { cursor: last.id }) })
+      const next = await searchCourses({ ...searchFilters, ...(searchFilters.lat !== undefined ? { offset: courses.length } : { cursor: last.id }) })
       setCourses((current) => [...current, ...next.filter((course) => !current.some((existing) => existing.id === course.id))])
     } catch (reason) {
       setError(message(reason, 'Unable to load more courses.'))

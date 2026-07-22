@@ -237,7 +237,7 @@ export type RoundInput = {
   is_favorite: boolean
 }
 
-export type RoundPatch = Omit<RoundInput, 'course_id'>
+export type RoundPatch = Partial<Omit<RoundInput, 'course_id'>>
 
 export type RoundSummary = {
   total_rounds: number

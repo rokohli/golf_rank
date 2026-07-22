@@ -10,6 +10,7 @@ const mockGetSavedLists = jest.fn()
 const mockCreateSavedList = jest.fn()
 const mockSaveCourseToList = jest.fn()
 const mockRemoveCourseFromList = jest.fn()
+const mockUpdateRound = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
   Authorization: 'Bearer test-token',
@@ -53,6 +54,7 @@ jest.mock('../../../src/api/client', () => ({
   getSavedLists: (...args: unknown[]) => mockGetSavedLists(...args),
   removeCourseFromList: (...args: unknown[]) => mockRemoveCourseFromList(...args),
   saveCourseToList: (...args: unknown[]) => mockSaveCourseToList(...args),
+  updateRound: (...args: unknown[]) => mockUpdateRound(...args),
 }))
 
 jest.mock('../../../src/auth/useAuthToken', () => ({
@@ -101,6 +103,7 @@ describe('course detail ratings', () => {
     mockGetCourseRating.mockResolvedValue(rating(null))
     mockGetSavedLists.mockResolvedValue([])
     mockRemoveCourseFromList.mockResolvedValue(undefined)
+    mockUpdateRound.mockResolvedValue({})
     mockShare.mockResolvedValue({ action: 'sharedAction' } as never)
     mockOpenUrl.mockResolvedValue(undefined)
   })
@@ -125,14 +128,14 @@ describe('course detail ratings', () => {
     expect(screen.queryByText(/★/)).toBeNull()
   })
 
-  it('renders course facts and keeps share and tee times functional', async () => {
+  it('renders at most two course facts and keeps share and tee times functional', async () => {
     render(<CourseDetail />)
 
     expect(await screen.findByText('Test Links')).toBeOnTheScreen()
     expect(screen.getByText('18')).toBeOnTheScreen()
     expect(screen.getByText('70')).toBeOnTheScreen()
-    expect(screen.getByText('$$$')).toBeOnTheScreen()
-    expect(screen.getByText('141')).toBeOnTheScreen()
+    expect(screen.queryByText('GREEN FEE')).toBeNull()
+    expect(screen.queryByText('SLOPE')).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Share course' }))
     await waitFor(() => expect(mockShare).toHaveBeenCalledWith({ message: 'Test Links\nMonterey, CA' }))
@@ -159,8 +162,27 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('Public shared photos')).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
-    expect(screen.getByText('Fast greens.')).toBeOnTheScreen()
-    expect(screen.getByText('Hole 16')).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Score, 79' })).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Notes, Added' })).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Favorite hole, Hole 16' })).toBeOnTheScreen()
+    expect(screen.getByLabelText('Add photos, coming soon')).toBeOnTheScreen()
+    expect(screen.queryByText('Fast greens.')).toBeNull()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Score, 79' }))
+    fireEvent.changeText(screen.getByLabelText('Edit score'), '74')
+    fireEvent.press(screen.getByRole('button', { name: 'Save score' }))
+    await waitFor(() => expect(mockUpdateRound).toHaveBeenCalledWith(42, { score: 74 }, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+
+    fireEvent.press(screen.getByRole('button', { name: 'Notes, Added' }))
+    fireEvent.changeText(screen.getByLabelText('Edit notes'), 'Firm and fast.')
+    fireEvent.press(screen.getByRole('button', { name: 'Save notes' }))
+    await waitFor(() => expect(mockUpdateRound).toHaveBeenCalledWith(42, { note: 'Firm and fast.' }, expect.any(Object)))
+
+    fireEvent.press(screen.getByRole('button', { name: 'Favorite hole, Hole 16' }))
+    fireEvent.changeText(screen.getByLabelText('Edit favorite hole'), '7')
+    fireEvent.press(screen.getByRole('button', { name: 'Save favorite hole' }))
+    await waitFor(() => expect(mockUpdateRound).toHaveBeenCalledWith(42, { favorite_hole: 7 }, expect.any(Object)))
+    expect(screen.queryByRole('button', { name: /Add photos/ })).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
     expect(screen.getByText('Friends’ thoughts aren’t available yet.')).toBeOnTheScreen()
@@ -357,7 +379,7 @@ describe('course detail ratings', () => {
     expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
     expect(screen.getByText('18')).toBeOnTheScreen()
     expect(screen.getByText('72')).toBeOnTheScreen()
-    expect(screen.getByText('145')).toBeOnTheScreen()
+    expect(screen.queryByText('145')).toBeNull()
     expect(mockGetCourse).toHaveBeenCalledWith(1)
   })
 
