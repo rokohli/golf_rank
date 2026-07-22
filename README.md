@@ -28,9 +28,9 @@ cd services/api
 REDIS_TEST_URL=redis://localhost:6379/15 pytest -q tests/test_rate_limit.py
 ```
 
-`FORWARDED_FOR_TRUSTED_HOPS` is `0` by default. Render staging sets it to `1`,
-so the API selects the proxy-appended address from the right side of
-`X-Forwarded-For`; caller-prepended values are never used as the client key.
+`TRUSTED_CLIENT_IP_HEADER` is empty by default. Render staging sets it to
+`cf-connecting-ip`, which Cloudflare supplies as one validated client address.
+The API does not use the caller-controlled `X-Forwarded-For` chain for buckets.
 
 ### California course catalog
 

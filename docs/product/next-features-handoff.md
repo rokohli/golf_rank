@@ -93,7 +93,7 @@ The application-level limiter foundation is implemented and covered against a re
 - Persistence can remain off because limiter state is temporary and safe to lose during a restart.
 - Add the async `redis` Python client, typed rate-limit settings, connection lifecycle management, and health metrics without logging credentials.
 - Implement a token bucket as one atomic Lua operation. Store only remaining tokens and the last refill timestamp, set an expiry on inactive buckets, and never store tokens, email addresses, request bodies, notes, or other personal data in limiter keys.
-- Key authenticated buckets by the stable Clerk subject and public buckets by the client IP resolved through the explicitly trusted Render proxy chain. Never trust an arbitrary forwarded-IP header from the client.
+- Key authenticated buckets by the stable Clerk subject and public buckets by Cloudflare's single-value `CF-Connecting-IP` header on Render, with strict IP validation and direct-socket fallback. Never key limits from the caller-controlled `X-Forwarded-For` chain.
 - Support weighted request costs so expensive operations consume more tokens than ordinary reads.
 - Add a separate atomic fixed-period counter for hard quotas such as maximum AI generations or uploads per day. Token buckets control bursts; quota counters control total cost.
 

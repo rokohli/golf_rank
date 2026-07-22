@@ -51,3 +51,8 @@ def test_development_can_run_with_local_identity_without_clerk() -> None:
         clerk_issuer=None,
         clerk_jwks_url=None,
     ).validate_security()
+
+
+def test_only_cloudflare_client_ip_header_can_be_trusted() -> None:
+    with pytest.raises(ValueError, match="TRUSTED_CLIENT_IP_HEADER"):
+        Settings(trusted_client_ip_header="x-forwarded-for").validate_security()
