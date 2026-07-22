@@ -6,7 +6,7 @@ GolfRank continues to use Clerk for authentication and FastAPI as its only publi
 
 1. Create a staging project in the same region as the staging API.
 2. Store the generated database password in the deployment provider's secret manager.
-3. Disable the Supabase Data API under **Project Settings → API**. GolfRank does not use PostgREST or GraphQL.
+3. Disable the Supabase Data API under **Project Settings → API** when the plan and dashboard expose that control. GolfRank does not use PostgREST or GraphQL. Migration `0012_data_api_hardening` also enables RLS and revokes Data API role grants as a database-level backstop.
 4. Keep Clerk Auth as the sole identity provider; do not enable a parallel Supabase Auth flow.
 5. Use the direct database connection for Alembic and administrative commands. Use the direct connection for a persistent IPv6-capable API host, or Supavisor session mode for a persistent IPv4-only host.
 
@@ -38,7 +38,7 @@ DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA --dry-run
 DATABASE_URL='<direct-url>' python -m app.catalog_import --state CA
 ```
 
-The expected migration head is `0011_seed_course_facts`. Confirm `/health` and `/ready` before pointing a preview build at the API.
+The expected migration head is `0012_data_api_hardening`. Confirm `/health` and `/ready` before pointing a preview build at the API.
 
 ## Verification
 
@@ -49,5 +49,7 @@ The expected migration head is `0011_seed_course_facts`. Confirm `/health` and `
 - Confirm a database connection failure makes `/ready` return `503` while `/health` remains a process-liveness check.
 
 ## Backups and promotion
+
+The Free Plan does not include managed downloadable backups. Keep Free projects limited to reproducible staging data, and regularly create an off-platform logical dump with `supabase db dump` or `pg_dump` if staging begins collecting data that cannot be recreated.
 
 Use a paid plan with managed daily backups before storing production data. Before production cutover, restore a backup into a separate project and repeat the verification flow. Database backups do not restore deleted Supabase Storage objects; establish a separate object retention and recovery policy before golfer photo uploads launch.
