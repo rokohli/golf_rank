@@ -105,12 +105,12 @@ def test_candidate_submission_checks_user_ip_and_daily_quota() -> None:
     assert limiter.quota_calls[0]["identity"] == "dev:missing-user"
 
 
-def test_forwarded_header_uses_trusted_hops_from_right_and_ignores_spoofed_prefix() -> None:
+def test_client_ip_uses_only_explicitly_trusted_single_ip_header() -> None:
     untrusted_app = create_app(ENABLED_SETTINGS)
     untrusted_limiter = RecordingLimiter()
     untrusted_app.state.rate_limiter = untrusted_limiter
     trusted_settings = ENABLED_SETTINGS.model_copy(
-        update={"forwarded_for_trusted_hops": 1}
+        update={"trusted_client_ip_header": "cf-connecting-ip"}
     )
     trusted_app = create_app(trusted_settings)
     trusted_limiter = RecordingLimiter()
@@ -118,34 +118,23 @@ def test_forwarded_header_uses_trusted_hops_from_right_and_ignores_spoofed_prefi
 
     TestClient(untrusted_app).get(
         "/api/v1/courses",
-        headers={"X-Forwarded-For": "203.0.113.99, 198.51.100.2"},
+        headers={"CF-Connecting-IP": "198.51.100.2"},
     )
     TestClient(trusted_app).get(
         "/api/v1/courses",
-        headers={"X-Forwarded-For": "203.0.113.99, 198.51.100.2"},
+        headers={
+            "CF-Connecting-IP": "198.51.100.2",
+            "X-Forwarded-For": "203.0.113.99",
+        },
     )
 
     assert untrusted_limiter.token_calls[0]["identity"] == "testclient"
     assert trusted_limiter.token_calls[0]["identity"] == "198.51.100.2"
 
-    two_hop_settings = ENABLED_SETTINGS.model_copy(
-        update={"forwarded_for_trusted_hops": 2}
-    )
-    two_hop_app = create_app(two_hop_settings)
-    two_hop_limiter = RecordingLimiter()
-    two_hop_app.state.rate_limiter = two_hop_limiter
-    TestClient(two_hop_app).get(
-        "/api/v1/courses",
-        headers={
-            "X-Forwarded-For": "203.0.113.99, 198.51.100.2, 10.0.0.1"
-        },
-    )
-    assert two_hop_limiter.token_calls[0]["identity"] == "198.51.100.2"
-
     invalid_limiter = RecordingLimiter()
     trusted_app.state.rate_limiter = invalid_limiter
     TestClient(trusted_app).get(
-        "/api/v1/courses", headers={"X-Forwarded-For": "not-an-ip"}
+        "/api/v1/courses", headers={"CF-Connecting-IP": "not-an-ip, 10.0.0.1"}
     )
     assert invalid_limiter.token_calls[0]["identity"] == "testclient"
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     rate_limit_enabled: bool = False
     rate_limit_key_salt: str = "development-rate-limit-key"
-    forwarded_for_trusted_hops: int = 0
+    trusted_client_ip_header: str = ""
     allowed_hosts: str = "testserver,localhost,127.0.0.1"
     max_request_body_bytes: int = 1_048_576
     readiness_cache_seconds: float = 5.0
@@ -46,8 +46,10 @@ class Settings(BaseSettings):
             raise ValueError("RATE_LIMIT_KEY_SALT must contain at least 32 characters")
         if self.max_request_body_bytes < 1024:
             raise ValueError("MAX_REQUEST_BODY_BYTES must be at least 1024")
-        if not 0 <= self.forwarded_for_trusted_hops <= 10:
-            raise ValueError("FORWARDED_FOR_TRUSTED_HOPS must be between 0 and 10")
+        if self.trusted_client_ip_header not in {"", "cf-connecting-ip"}:
+            raise ValueError(
+                "TRUSTED_CLIENT_IP_HEADER must be empty or cf-connecting-ip"
+            )
 
     @property
     def allowed_host_list(self) -> list[str]:
