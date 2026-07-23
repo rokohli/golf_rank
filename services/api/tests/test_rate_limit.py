@@ -12,6 +12,7 @@ from app.core.rate_limit import (
     RateLimitPolicy,
     RateLimiter,
 )
+from app.core.rate_limit_alerts import RateLimitAlertObserver
 from app.main import create_app
 
 
@@ -189,6 +190,114 @@ def test_limiter_keys_are_hmac_hashed() -> None:
     asyncio.run(exercise())
 
 
+def test_denial_observation_receives_only_a_truncated_identity_digest() -> None:
+    async def exercise() -> None:
+        limiter = RateLimiter(ENABLED_SETTINGS)
+        limiter._redis = DenyingRedis()  # type: ignore[assignment]
+        alerts = RecordingAlerts()
+        limiter._alerts = alerts  # type: ignore[assignment]
+
+        decision = await limiter.token_bucket(
+            policy=RateLimitPolicy("private", 10, 1),
+            identity_type="user",
+            identity="clerk:user-secret-123",
+        )
+
+        assert decision is not None and not decision.allowed
+        assert alerts.denials == [
+            {
+                "policy": "private",
+                "identity_type": "user",
+                "abuse_id": limiter._identity_digest("clerk:user-secret-123")[:12],
+            }
+        ]
+        assert "clerk:user-secret-123" not in str(alerts.denials)
+
+    asyncio.run(exercise())
+
+
+def test_denial_alerts_are_thresholded_deduplicated_and_privacy_safe(caplog) -> None:
+    async def exercise() -> None:
+        now = [100.0]
+        payloads: list[dict[str, object]] = []
+
+        async def send(payload: dict[str, object]) -> None:
+            payloads.append(payload)
+
+        settings = ENABLED_SETTINGS.model_copy(
+            update={
+                "app_env": "staging",
+                "operations_alert_webhook_url": "https://alerts.example.test/fairway",
+                "rate_limit_denial_alert_threshold": 2,
+                "rate_limit_identity_alert_threshold": 2,
+                "rate_limit_alert_window_seconds": 30,
+                "rate_limit_alert_cooldown_seconds": 60,
+            }
+        )
+        observer = RateLimitAlertObserver(
+            settings,
+            clock=lambda: now[0],
+            sender=send,
+        )
+
+        for _ in range(3):
+            await observer.record_denial(
+                policy="authenticated-read",
+                identity_type="user",
+                abuse_id="a1b2c3d4e5f6",
+            )
+
+        assert {payload["event"] for payload in payloads} == {
+            "rate_limit_denial_volume",
+            "rate_limit_repeated_abuse",
+        }
+        assert all(payload["count"] == 2 for payload in payloads)
+        assert payloads[1]["abuse_id"] == "a1b2c3d4e5f6"
+        assert "clerk:user-secret" not in caplog.text
+        assert len(payloads) == 2
+
+    asyncio.run(exercise())
+
+
+def test_backend_failure_alert_contains_only_bounded_error_metadata() -> None:
+    async def exercise() -> None:
+        payloads: list[dict[str, object]] = []
+
+        async def send(payload: dict[str, object]) -> None:
+            payloads.append(payload)
+
+        settings = ENABLED_SETTINGS.model_copy(
+            update={
+                "app_env": "staging",
+                "operations_alert_webhook_url": "https://alerts.example.test/fairway",
+                "rate_limit_backend_failure_alert_threshold": 2,
+            }
+        )
+        observer = RateLimitAlertObserver(settings, sender=send)
+
+        for _ in range(2):
+            await observer.record_backend_failure(
+                policy="public",
+                fail_closed=False,
+                error_type="ConnectionError",
+            )
+
+        assert payloads == [
+            {
+                "source": "fairway-api",
+                "environment": "staging",
+                "event": "rate_limit_backend_failures",
+                "policy": "public",
+                "count": 2,
+                "window_seconds": 300,
+                "fail_closed": False,
+                "error_type": "ConnectionError",
+            }
+        ]
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.skipif(not os.getenv("REDIS_TEST_URL"), reason="REDIS_TEST_URL is not configured")
 def test_lua_bucket_is_atomic_weighted_and_isolated_across_identities() -> None:
     async def exercise() -> None:
@@ -291,3 +400,16 @@ class RecordingRedis:
     async def eval(self, _script, _key_count, key, *_args):
         self.key = key
         return [1, 9, 0, 1000]
+
+
+class DenyingRedis:
+    async def eval(self, *_args):
+        return [0, 0, 1000, 10_000]
+
+
+class RecordingAlerts:
+    def __init__(self) -> None:
+        self.denials: list[dict] = []
+
+    async def record_denial(self, **kwargs) -> None:
+        self.denials.append(kwargs)
