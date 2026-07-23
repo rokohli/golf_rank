@@ -1,5 +1,4 @@
-from urllib.parse import urlsplit
-
+import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,9 +76,16 @@ class Settings(BaseSettings):
             if value <= 0:
                 raise ValueError(f"{name} must be greater than zero")
         if self.operations_alert_webhook_url:
-            alert_url = urlsplit(self.operations_alert_webhook_url)
-            if not alert_url.scheme or not alert_url.netloc:
-                raise ValueError("OPERATIONS_ALERT_WEBHOOK_URL must be an absolute URL")
+            try:
+                alert_url = httpx.URL(self.operations_alert_webhook_url)
+            except httpx.InvalidURL as error:
+                raise ValueError(
+                    "OPERATIONS_ALERT_WEBHOOK_URL must be a valid absolute URL"
+                ) from error
+            if not alert_url.is_absolute_url:
+                raise ValueError(
+                    "OPERATIONS_ALERT_WEBHOOK_URL must be a valid absolute URL"
+                )
             if self.app_env != "development" and alert_url.scheme != "https":
                 raise ValueError(
                     "OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS outside development"

@@ -2,6 +2,7 @@ import asyncio
 import os
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -293,6 +294,43 @@ def test_backend_failure_alert_contains_only_bounded_error_metadata() -> None:
                 "fail_closed": False,
                 "error_type": "ConnectionError",
             }
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_alert_delivery_invalid_url_is_logged_without_escaping(monkeypatch) -> None:
+    logged_errors: list[tuple] = []
+    monkeypatch.setattr(
+        "app.core.rate_limit_alerts.logger.error",
+        lambda *args: logged_errors.append(args),
+    )
+
+    async def exercise() -> None:
+        async def fail_delivery(_payload: dict[str, object]) -> None:
+            raise httpx.InvalidURL("invalid receiver")
+
+        settings = ENABLED_SETTINGS.model_copy(
+            update={
+                "app_env": "staging",
+                "operations_alert_webhook_url": "https://alerts.example.test/fairway",
+                "rate_limit_backend_failure_alert_threshold": 1,
+            }
+        )
+        observer = RateLimitAlertObserver(settings, sender=fail_delivery)
+
+        await observer.record_backend_failure(
+            policy="public",
+            fail_closed=False,
+            error_type="ConnectionError",
+        )
+
+        assert logged_errors == [
+            (
+                "rate_limit_alert_delivery_failed event=%s error_type=%s",
+                "rate_limit_backend_failures",
+                "InvalidURL",
+            )
         ]
 
     asyncio.run(exercise())

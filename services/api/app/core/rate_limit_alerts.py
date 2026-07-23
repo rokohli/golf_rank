@@ -117,7 +117,7 @@ class RateLimitAlertObserver:
         if self.settings.operations_alert_webhook_url:
             try:
                 await self._sender(payload)
-            except (httpx.HTTPError, OSError) as error:
+            except (httpx.HTTPError, httpx.InvalidURL, OSError) as error:
                 logger.error(
                     "rate_limit_alert_delivery_failed event=%s error_type=%s",
                     event,
