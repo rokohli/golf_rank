@@ -1,5 +1,6 @@
 import { ApiHeaders } from '../auth/useAuthToken'
 import {
+  AIGolfPlan,
   Course,
   CourseRegion,
   CourseSearchFilters,
@@ -371,6 +372,17 @@ export async function updatePlan(planId: number, input: PlanInput, headers: ApiH
 export async function savePlan(planId: number, headers: ApiHeaders): Promise<GolfPlan> {
   const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}/save`, { method: 'POST', headers })
   if (!response.ok) throw await responseError(response, 'Unable to save this trip. Please try again.')
+  return response.json()
+}
+
+export async function generateAIItinerary(
+  planId: number,
+  headers: ApiHeaders,
+): Promise<AIGolfPlan> {
+  const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}/ai-itinerary`, {
+    method: 'POST', headers,
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to organize this trip with AI. Please try again.')
   return response.json()
 }
 

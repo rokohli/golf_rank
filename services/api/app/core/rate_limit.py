@@ -291,6 +291,40 @@ async def candidate_rate_limit(
     apply_rate_limit(response, quota)
 
 
+async def ai_planner_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    settings = request.app.state.settings
+    if not settings.ai_planner_enabled:
+        return
+    policy = RateLimitPolicy(
+        "ai-planner",
+        settings.ai_planner_rate_limit_capacity,
+        settings.ai_planner_rate_limit_refill_per_second,
+        fail_closed=True,
+    )
+    for identity_type, identity in (
+        ("user", user.provider_subject),
+        ("ip", client_ip(request, settings)),
+    ):
+        decision = await request.app.state.rate_limiter.token_bucket(
+            policy=policy,
+            identity_type=identity_type,
+            identity=identity,
+        )
+        apply_rate_limit(response, decision)
+    quota = await request.app.state.rate_limiter.daily_quota(
+        name="ai-planner",
+        limit=settings.ai_planner_daily_quota,
+        identity_type="user",
+        identity=user.provider_subject,
+        fail_closed=True,
+    )
+    apply_rate_limit(response, quota)
+
+
 def client_ip(request: Request, settings: Settings) -> str:
     direct = request.client.host if request.client is not None else "unknown"
     if settings.trusted_client_ip_header:

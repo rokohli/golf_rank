@@ -502,3 +502,44 @@ def test_provider_first_catalog_rejects_conflicting_manual_mapping(
     assert courses == [(2, "seed"), (919, "opengolfapi")]
     assert canonical_course_id == 4
     engine.dispose()
+
+
+def test_ai_plan_generation_migration_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "ai-plan-generations.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    api_root = Path(__file__).parents[1]
+    config = Config(str(api_root / "alembic.ini"))
+    config.set_main_option("script_location", str(api_root / "alembic"))
+
+    command.upgrade(config, "head")
+    engine = make_engine(database_url)
+    inspector = inspect(engine)
+    assert "plan_generations" in inspector.get_table_names()
+    columns = {column["name"] for column in inspector.get_columns("plan_generations")}
+    assert {
+        "plan_id",
+        "status",
+        "provider",
+        "model_identifier",
+        "prompt_version",
+        "latency_ms",
+        "input_tokens",
+        "output_tokens",
+        "estimated_cost_micros",
+        "fallback_reason",
+        "generated_summary",
+    } <= columns
+    assert {index["name"] for index in inspector.get_indexes("plan_generations")} == {
+        "ix_plan_generations_plan_id",
+        "ix_plan_generations_status",
+    }
+    engine.dispose()
+
+    command.downgrade(config, "0014_provider_first_catalog")
+    engine = make_engine(database_url)
+    assert "plan_generations" not in inspect(engine).get_table_names()
+    engine.dispose()

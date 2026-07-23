@@ -6,6 +6,7 @@ const mockCreatePlan = jest.fn()
 const mockDeletePlan = jest.fn()
 const mockGetPlan = jest.fn()
 const mockGetPlans = jest.fn()
+const mockGenerateAIItinerary = jest.fn()
 const mockSavePlan = jest.fn()
 const mockUpdatePlan = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
@@ -33,6 +34,7 @@ jest.mock('../../src/api/client', () => ({
   deletePlan: (...args: unknown[]) => mockDeletePlan(...args),
   getPlan: (...args: unknown[]) => mockGetPlan(...args),
   getPlans: (...args: unknown[]) => mockGetPlans(...args),
+  generateAIItinerary: (...args: unknown[]) => mockGenerateAIItinerary(...args),
   savePlan: (...args: unknown[]) => mockSavePlan(...args),
   updatePlan: (...args: unknown[]) => mockUpdatePlan(...args),
 }))
@@ -63,6 +65,21 @@ describe('trip planner', () => {
     mockGetPlans.mockResolvedValue([])
     mockCreatePlan.mockResolvedValue(plan)
     mockSavePlan.mockResolvedValue({ ...plan, status: 'saved' })
+    mockGenerateAIItinerary.mockResolvedValue({
+      ...plan,
+      generation_status: 'generated',
+      generated_summary: 'A validated AI-organized Monterey itinerary.',
+      fallback_reason: null,
+      itinerary: [{
+        ...plan.itinerary[0],
+        details: {
+          availability_verified: false,
+          ai_generated: true,
+          rationale: ['This would add a new course to your played list.'],
+          caveats: ['Tee-time availability has not been verified.'],
+        },
+      }],
+    })
   })
 
   it('creates, renders, and saves a persisted deterministic trip', async () => {
@@ -119,5 +136,23 @@ describe('trip planner', () => {
       }),
       expect.anything(),
     ))
+  })
+
+  it('organizes a persisted candidate set with AI and shows generation status', async () => {
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Monterey weekend')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+    await screen.findByRole('button', { name: 'Organize itinerary with AI' })
+
+    fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
+
+    await waitFor(() => expect(mockGenerateAIItinerary).toHaveBeenCalledWith(
+      9,
+      expect.objectContaining({ Authorization: 'Bearer test' }),
+    ))
+    expect(await screen.findByText('AI ORGANIZED')).toBeOnTheScreen()
+    expect(screen.getByText('A validated AI-organized Monterey itinerary.')).toBeOnTheScreen()
   })
 })

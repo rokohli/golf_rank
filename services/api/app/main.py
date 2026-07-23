@@ -32,6 +32,7 @@ from .models import (
     UserCourseRating,
 )
 from .plans import router as plans_router
+from .planner_narrative import build_planner_narrative_provider
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.settings = settings
     app.state.rate_limiter = rate_limiter
+    app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
     app.state.session_factory = make_session_factory(
         engine, course_image_base_url=settings.course_image_base_url
     )

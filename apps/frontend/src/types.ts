@@ -317,7 +317,13 @@ export type PlanItineraryItem = {
   title: string
   course: Course | null
   start_time: string | null
-  details: { tee_time_window?: string | null; availability_verified?: boolean }
+  details: {
+    tee_time_window?: string | null
+    availability_verified?: boolean
+    ai_generated?: boolean
+    rationale?: string[]
+    caveats?: string[]
+  }
 }
 
 export type GolfPlan = {
@@ -331,6 +337,12 @@ export type GolfPlan = {
   itinerary: PlanItineraryItem[]
   created_at: string
   updated_at: string
+}
+
+export type AIGolfPlan = GolfPlan & {
+  generation_status: 'generated' | 'fallback'
+  generated_summary: string
+  fallback_reason: string | null
 }
 
 export type PlanSummary = {

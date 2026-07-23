@@ -57,6 +57,30 @@ services:
         value: "900"
       - key: RATE_LIMIT_ALERT_MAX_TRACKED_KEYS
         value: "10000"
+      - key: AI_PLANNER_ENABLED
+        value: "false"
+      - key: AI_PLANNER_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AI_PLANNER_MODEL
+        value: gemini-2.5-flash
+      - key: AI_PLANNER_TIMEOUT_SECONDS
+        value: "12"
+      - key: AI_PLANNER_MAX_OUTPUT_TOKENS
+        value: "1200"
+      - key: AI_PLANNER_RATE_LIMIT_CAPACITY
+        value: "3"
+      - key: AI_PLANNER_RATE_LIMIT_REFILL_PER_SECOND
+        value: "0.008333333333333333"
+      - key: AI_PLANNER_DAILY_QUOTA
+        value: "25"
+      - key: AI_PLANNER_MONTHLY_COST_LIMIT_CENTS
+        value: "1000"
+      - key: AI_PLANNER_INPUT_COST_MICROS_PER_MILLION_TOKENS
+        value: "540000"
+      - key: AI_PLANNER_OUTPUT_COST_MICROS_PER_MILLION_TOKENS
+        value: "4500000"
 
   - type: keyvalue
     name: fairway-rate-limits

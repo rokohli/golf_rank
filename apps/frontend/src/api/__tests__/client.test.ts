@@ -4,6 +4,7 @@ import {
   createRound,
   deleteRound,
   deletePlan,
+  generateAIItinerary,
   getCourse,
   getCourseRegions,
   getFeed,
@@ -160,6 +161,7 @@ describe('api client', () => {
     await getPlan(9, headers)
     await createPlan(input, headers)
     await updatePlan(9, input, headers)
+    await generateAIItinerary(9, headers)
     await savePlan(9, headers)
     await deletePlan(9, headers)
 
@@ -167,8 +169,9 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/plans/9', { headers })
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/me/plans', { method: 'POST', headers, body: JSON.stringify(input) })
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/me/plans/9', { method: 'PUT', headers, body: JSON.stringify(input) })
-    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/me/plans/9/save', { method: 'POST', headers })
-    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/me/plans/9', { method: 'DELETE', headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/me/plans/9/ai-itinerary', { method: 'POST', headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/me/plans/9/save', { method: 'POST', headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(7, 'http://localhost:8000/api/v1/me/plans/9', { method: 'DELETE', headers })
   })
 
   it('surfaces API authentication errors during onboarding', async () => {

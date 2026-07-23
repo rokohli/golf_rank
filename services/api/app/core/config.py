@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     candidate_daily_quota: int = 5
     readiness_rate_limit_capacity: int = 10
     readiness_rate_limit_refill_per_second: float = 0.1
+    ai_planner_enabled: bool = False
+    ai_planner_provider: str = "gemini"
+    gemini_api_key: str | None = None
+    ai_planner_model: str = "gemini-2.5-flash"
+    ai_planner_timeout_seconds: float = 12.0
+    ai_planner_max_output_tokens: int = 1200
+    ai_planner_rate_limit_capacity: int = 3
+    ai_planner_rate_limit_refill_per_second: float = 1 / 120
+    ai_planner_daily_quota: int = 25
+    ai_planner_monthly_cost_limit_cents: int = 1000
+    ai_planner_input_cost_micros_per_million_tokens: int = 540_000
+    ai_planner_output_cost_micros_per_million_tokens: int = 4_500_000
 
     def validate_security(self) -> None:
         if self.app_env != "development" and self.allow_development_identity:
@@ -59,6 +71,36 @@ class Settings(BaseSettings):
             raise ValueError(
                 "TRUSTED_CLIENT_IP_HEADER must be empty or cf-connecting-ip"
             )
+        if self.ai_planner_enabled:
+            if self.ai_planner_provider != "gemini":
+                raise ValueError("AI_PLANNER_PROVIDER must be gemini")
+            if not self.gemini_api_key:
+                raise ValueError("GEMINI_API_KEY is required when AI planner is enabled")
+            if self.app_env != "development" and not self.rate_limit_enabled:
+                raise ValueError(
+                    "RATE_LIMIT_ENABLED must be true when AI planner is enabled outside development"
+                )
+        positive_ai_settings = {
+            "AI_PLANNER_TIMEOUT_SECONDS": self.ai_planner_timeout_seconds,
+            "AI_PLANNER_MAX_OUTPUT_TOKENS": self.ai_planner_max_output_tokens,
+            "AI_PLANNER_RATE_LIMIT_CAPACITY": self.ai_planner_rate_limit_capacity,
+            "AI_PLANNER_RATE_LIMIT_REFILL_PER_SECOND": (
+                self.ai_planner_rate_limit_refill_per_second
+            ),
+            "AI_PLANNER_DAILY_QUOTA": self.ai_planner_daily_quota,
+            "AI_PLANNER_MONTHLY_COST_LIMIT_CENTS": (
+                self.ai_planner_monthly_cost_limit_cents
+            ),
+            "AI_PLANNER_INPUT_COST_MICROS_PER_MILLION_TOKENS": (
+                self.ai_planner_input_cost_micros_per_million_tokens
+            ),
+            "AI_PLANNER_OUTPUT_COST_MICROS_PER_MILLION_TOKENS": (
+                self.ai_planner_output_cost_micros_per_million_tokens
+            ),
+        }
+        for name, value in positive_ai_settings.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
         positive_alert_settings = {
             "OPERATIONS_ALERT_WEBHOOK_TIMEOUT_SECONDS": (
                 self.operations_alert_webhook_timeout_seconds

@@ -1,6 +1,14 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.core.config import Settings
 from app.main import create_app
+from app.models import PlanGeneration
+from app.planner_narrative import (
+    PlannerNarrativeOutput,
+    PlannerNarrativeRequest,
+    PlannerNarrativeResult,
+)
 
 
 ALICE = {"X-Development-Subject": "dev:plan-alice"}
@@ -14,6 +22,61 @@ def _plan_payload(title: str = "Private plan") -> dict:
         "end_date": "2026-08-02",
         "regions": ["Monterey, CA"],
     }
+
+
+class RecordingNarrativeProvider:
+    def __init__(self, *, invalid_course: bool = False, timeout: bool = False) -> None:
+        self.invalid_course = invalid_course
+        self.timeout = timeout
+        self.requests: list[PlannerNarrativeRequest] = []
+
+    async def generate(self, request: PlannerNarrativeRequest) -> PlannerNarrativeResult:
+        self.requests.append(request)
+        if self.timeout:
+            raise TimeoutError
+        expected_count = min(
+            len(request.candidates), (request.end_date - request.start_date).days + 1
+        )
+        selected = request.candidates[:expected_count]
+        course_ids = [candidate.course_id for candidate in selected]
+        if self.invalid_course:
+            course_ids[0] = 999_999
+        output = PlannerNarrativeOutput.model_validate({
+            "summary": request.summary_options[-1],
+            "ordered_course_ids": course_ids,
+            "itinerary": [
+                {
+                    "date": request.start_date.fromordinal(
+                        request.start_date.toordinal() + index
+                    ),
+                    "course_id": course_id,
+                    "reason_indices": [0] if selected[index].reasons else [],
+                }
+                for index, course_id in enumerate(course_ids)
+            ],
+        })
+        return PlannerNarrativeResult(
+            output=output,
+            provider="test-provider",
+            model_identifier="test-model",
+            input_tokens=100,
+            output_tokens=40,
+            estimated_cost_micros=340,
+        )
+
+
+def _ai_app(
+    provider: RecordingNarrativeProvider,
+    *,
+    monthly_cost_limit_cents: int = 1000,
+):
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="test-key",
+        ai_planner_monthly_cost_limit_cents=monthly_cost_limit_cents,
+    ))
+    app.state.planner_narrative_provider = provider
+    return app
 
 
 def test_plan_reads_and_mutations_are_owner_scoped() -> None:
@@ -45,6 +108,128 @@ def test_plan_reads_and_mutations_are_owner_scoped() -> None:
     assert retained.json()["status"] == "draft"
     assert retained.json()["candidates"]
     assert retained.json()["itinerary"]
+
+
+def test_ai_itinerary_uses_only_validated_candidates_and_persists_metadata() -> None:
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json=_plan_payload("AI Monterey"),
+    ).json()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_status"] == "generated"
+    assert body["status"] == "draft"
+    assert body["fallback_reason"] is None
+    assert len(provider.requests) == 1
+    sent = provider.requests[0].model_dump(mode="json")
+    assert "provider_subject" not in str(sent)
+    assert "email" not in str(sent)
+    allowed_ids = {candidate["course_id"] for candidate in sent["candidates"]}
+    assert {item["course"]["id"] for item in body["itinerary"]} <= allowed_ids
+    assert all(item["details"]["availability_verified"] is False for item in body["itinerary"])
+    assert all(
+        "availability" in " ".join(item["details"]["caveats"]).lower()
+        for item in body["itinerary"]
+    )
+
+    with app.state.session_factory() as session:
+        generation = session.scalar(select(PlanGeneration))
+        assert generation is not None
+        assert generation.status == "succeeded"
+        assert generation.provider == "test-provider"
+        assert generation.model_identifier == "test-model"
+        assert generation.input_tokens == 100
+        assert generation.output_tokens == 40
+        assert generation.estimated_cost_micros == 340
+
+    assert client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=BOB,
+    ).status_code == 404
+    assert len(provider.requests) == 1
+
+
+def test_invalid_ai_output_and_timeout_fall_back_without_replacing_itinerary() -> None:
+    for provider, expected_reason in (
+        (RecordingNarrativeProvider(invalid_course=True), "invalid_output"),
+        (RecordingNarrativeProvider(timeout=True), "timeout"),
+    ):
+        app = _ai_app(provider)
+        client = TestClient(app)
+        created = client.post(
+            "/api/v1/me/plans",
+            headers=ALICE,
+            json=_plan_payload(f"Fallback {expected_reason}"),
+        ).json()
+        original_ids = [item["course"]["id"] for item in created["itinerary"]]
+
+        response = client.post(
+            f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+            headers=ALICE,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["generation_status"] == "fallback"
+        assert response.json()["fallback_reason"] == expected_reason
+        assert [item["course"]["id"] for item in response.json()["itinerary"]] == original_ids
+
+
+def test_disabled_ai_planner_returns_deterministic_plan() -> None:
+    app = create_app()
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans", headers=ALICE, json=_plan_payload("Disabled AI")
+    ).json()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary", headers=ALICE
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation_status"] == "fallback"
+    assert response.json()["fallback_reason"] == "disabled"
+    assert response.json()["itinerary"] == created["itinerary"]
+
+
+def test_ai_planner_monthly_cost_ceiling_prevents_provider_spend() -> None:
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider, monthly_cost_limit_cents=1)
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans", headers=ALICE, json=_plan_payload("Cost ceiling")
+    ).json()
+    with app.state.session_factory() as session:
+        session.add(PlanGeneration(
+            plan_id=created["id"],
+            status="succeeded",
+            provider="test-provider",
+            model_identifier="test-model",
+            prompt_version="planner-narrative-v1",
+            input_tokens=1000,
+            output_tokens=1000,
+            estimated_cost_micros=10_000,
+            generated_summary="Prior generation",
+        ))
+        session.commit()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary", headers=ALICE
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation_status"] == "fallback"
+    assert response.json()["fallback_reason"] == "monthly_cost_limit"
+    assert provider.requests == []
 
 
 def test_plan_hard_filters_and_uses_ranking_and_saved_signals() -> None:

@@ -107,6 +107,50 @@ def test_candidate_submission_checks_user_ip_and_daily_quota() -> None:
     assert limiter.quota_calls[0]["identity"] == "dev:missing-user"
 
 
+def test_ai_planner_checks_user_ip_and_fail_closed_daily_quota() -> None:
+    settings = ENABLED_SETTINGS.model_copy(update={
+        "ai_planner_enabled": True,
+        "gemini_api_key": "test-key",
+    })
+    app = create_app(settings)
+    limiter = RecordingLimiter()
+    app.state.rate_limiter = limiter
+    app.state.planner_narrative_provider = None
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans",
+        headers={"X-Development-Subject": "dev:ai-limit"},
+        json={
+            "title": "AI limit",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-01",
+            "regions": ["Monterey"],
+        },
+    ).json()
+    limiter.token_calls.clear()
+    limiter.quota_calls.clear()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers={"X-Development-Subject": "dev:ai-limit"},
+    )
+
+    assert response.status_code == 200
+    assert [call["policy"].name for call in limiter.token_calls] == [
+        "authenticated-write",
+        "ai-planner",
+        "ai-planner",
+    ]
+    assert [call["identity_type"] for call in limiter.token_calls[1:]] == ["user", "ip"]
+    assert limiter.quota_calls == [{
+        "name": "ai-planner",
+        "limit": 25,
+        "identity_type": "user",
+        "identity": "dev:ai-limit",
+        "fail_closed": True,
+    }]
+
+
 def test_client_ip_uses_only_explicitly_trusted_single_ip_header() -> None:
     untrusted_app = create_app(ENABLED_SETTINGS)
     untrusted_limiter = RecordingLimiter()
