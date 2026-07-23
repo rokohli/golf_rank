@@ -24,6 +24,8 @@ services:
         sync: false
       - key: CLERK_JWKS_URL
         sync: false
+      - key: CLERK_AUDIENCE
+        sync: false
       - key: REDIS_URL
         fromService:
           name: fairway-rate-limits
@@ -39,6 +41,22 @@ services:
         value: fairway-api-h93s.onrender.com
       - key: MAX_REQUEST_BODY_BYTES
         value: "1048576"
+      - key: OPERATIONS_ALERT_WEBHOOK_URL
+        sync: false
+      - key: OPERATIONS_ALERT_WEBHOOK_TIMEOUT_SECONDS
+        value: "2"
+      - key: RATE_LIMIT_ALERT_WINDOW_SECONDS
+        value: "300"
+      - key: RATE_LIMIT_BACKEND_FAILURE_ALERT_THRESHOLD
+        value: "3"
+      - key: RATE_LIMIT_DENIAL_ALERT_THRESHOLD
+        value: "50"
+      - key: RATE_LIMIT_IDENTITY_ALERT_THRESHOLD
+        value: "10"
+      - key: RATE_LIMIT_ALERT_COOLDOWN_SECONDS
+        value: "900"
+      - key: RATE_LIMIT_ALERT_MAX_TRACKED_KEYS
+        value: "10000"
 
   - type: keyvalue
     name: fairway-rate-limits

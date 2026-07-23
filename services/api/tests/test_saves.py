@@ -7,6 +7,49 @@ ALICE = {"X-Development-Subject": "dev:saves-alice"}
 BOB = {"X-Development-Subject": "dev:saves-bob"}
 
 
+def test_saved_list_and_nested_course_mutations_are_owner_scoped() -> None:
+    client = TestClient(create_app())
+    created = client.post(
+        "/api/v1/me/saved-lists",
+        headers=ALICE,
+        json={"name": "Private list", "visibility": "private"},
+    )
+    assert created.status_code == 201
+    list_id = created.json()["id"]
+    assert client.put(
+        f"/api/v1/me/saved-lists/{list_id}/courses/1",
+        headers=ALICE,
+        json={"note": "Alice only"},
+    ).status_code == 200
+
+    assert client.get("/api/v1/me/saved-lists", headers=BOB).json() == []
+    assert client.patch(
+        f"/api/v1/me/saved-lists/{list_id}",
+        headers=BOB,
+        json={"name": "Stolen"},
+    ).status_code == 404
+    assert client.put(
+        f"/api/v1/me/saved-lists/{list_id}/courses/2",
+        headers=BOB,
+        json={"note": "Injected"},
+    ).status_code == 404
+    assert client.delete(
+        f"/api/v1/me/saved-lists/{list_id}/courses/1",
+        headers=BOB,
+    ).status_code == 404
+    assert client.delete(
+        f"/api/v1/me/saved-lists/{list_id}",
+        headers=BOB,
+    ).status_code == 404
+
+    retained = client.get("/api/v1/me/saved-lists", headers=ALICE).json()
+    assert len(retained) == 1
+    assert retained[0]["name"] == "Private list"
+    assert [(item["course"]["id"], item["note"]) for item in retained[0]["courses"]] == [
+        (1, "Alice only")
+    ]
+
+
 def test_saved_lists_are_owned_defaulted_and_idempotent() -> None:
     client = TestClient(create_app())
     created = client.post(

@@ -38,6 +38,9 @@
     "react-test-renderer": "19.0.0",
     "typescript": "~5.8.0"
   },
+  "overrides": {
+    "postcss": "8.5.22"
+  },
   "jest": {
     "preset": "jest-expo"
   }

@@ -44,6 +44,30 @@ def test_enabled_rate_limiting_requires_redis_and_a_strong_nondevelopment_salt()
         ).validate_security()
 
 
+def test_staging_alert_webhook_requires_https_and_positive_thresholds() -> None:
+    base = Settings(
+        app_env="staging",
+        allow_development_identity=False,
+        clerk_issuer="https://clerk.example.test",
+        clerk_jwks_url="https://clerk.example.test/.well-known/jwks.json",
+    )
+
+    with pytest.raises(ValueError, match="OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS"):
+        base.model_copy(
+            update={"operations_alert_webhook_url": "http://alerts.example.test"}
+        ).validate_security()
+    with pytest.raises(
+        ValueError, match="RATE_LIMIT_DENIAL_ALERT_THRESHOLD must be greater than zero"
+    ):
+        base.model_copy(update={"rate_limit_denial_alert_threshold": 0}).validate_security()
+    with pytest.raises(ValueError, match="must be a valid absolute URL"):
+        base.model_copy(
+            update={
+                "operations_alert_webhook_url": "https://alerts.example.test:abc/hook"
+            }
+        ).validate_security()
+
+
 def test_development_can_run_with_local_identity_without_clerk() -> None:
     Settings(
         app_env="development",

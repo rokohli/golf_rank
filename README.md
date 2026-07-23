@@ -79,10 +79,35 @@ EXPO_PUBLIC_AUTH_MODE=clerk
 EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=<from Clerk dashboard>
 CLERK_ISSUER=<from Clerk dashboard>
 CLERK_JWKS_URL=<issuer>/.well-known/jwks.json
+CLERK_AUDIENCE=fairway-api-staging
 ALLOW_DEVELOPMENT_IDENTITY=false
 ```
 
-`CLERK_AUDIENCE` is supported when a Clerk JWT template supplies an `aud` claim.
-The default Clerk mobile session token does not include that claim, so configure
-the template and update the mobile `getToken()` call before making audience
-validation mandatory.
+Before setting `CLERK_AUDIENCE`, customize Clerk's normal session token under
+**Clerk Dashboard > Sessions** with the matching static claim:
+
+```json
+{ "aud": "fairway-api-staging" }
+```
+
+Enable the Clerk claim first, confirm a fresh token contains the expected `aud`,
+and only then set `CLERK_AUDIENCE` on the API. The mobile app continues using its
+existing `getToken()` call; no Clerk JWT template is needed. Use a distinct
+audience value for each environment.
+
+### Rate-limit operational alerts
+
+The API aggregates limiter backend failures, overall denials, and repeated
+denials from the same HMAC-derived abuse identifier. Threshold crossings emit a
+critical structured log and are deduplicated with a cooldown. Set
+`OPERATIONS_ALERT_WEBHOOK_URL` to an HTTPS endpoint to also receive a minimal
+JSON alert containing the environment, event, policy, count, and bounded error
+or hashed abuse metadata. Alerts never include bearer tokens, raw Clerk IDs,
+raw IP addresses, request URLs, or request bodies.
+
+The default thresholds are three backend failures, 50 denials for one policy,
+or 10 denials for one hashed identity within five minutes, with a 15-minute
+cooldown. Keep the webhook unset during local development unless you are testing
+delivery to a controlled receiver. Per-process tracking is capped at 10,000
+least-recently-used policy and identity keys so monitoring cannot grow memory
+without bound under distributed abuse.

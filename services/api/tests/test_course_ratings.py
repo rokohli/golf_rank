@@ -311,6 +311,17 @@ def test_details_replace_private_data_validate_friends_and_never_accept_phone() 
     ]
     assert "phone" not in str(saved.json()).lower()
     assert client.get("/api/v1/me/course-ratings/1", headers=BOB).json()["round"] is None
+    assert client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=BOB,
+        json={
+            "note": "Stolen",
+            "favorite_hole": None,
+            "friend_user_ids": [],
+            "guest_names": [],
+            "visibility": "private",
+        },
+    ).status_code == 404
     phone = client.patch(
         "/api/v1/me/course-ratings/1/details",
         headers=ALICE,

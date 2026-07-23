@@ -7,6 +7,46 @@ ALICE = {"X-Development-Subject": "dev:plan-alice"}
 BOB = {"X-Development-Subject": "dev:plan-bob"}
 
 
+def _plan_payload(title: str = "Private plan") -> dict:
+    return {
+        "title": title,
+        "start_date": "2026-08-01",
+        "end_date": "2026-08-02",
+        "regions": ["Monterey, CA"],
+    }
+
+
+def test_plan_reads_and_mutations_are_owner_scoped() -> None:
+    client = TestClient(create_app())
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json=_plan_payload(),
+    )
+    assert created.status_code == 201
+    plan_id = created.json()["id"]
+
+    assert client.get("/api/v1/me/plans", headers=BOB).json() == []
+    assert client.get(f"/api/v1/me/plans/{plan_id}", headers=BOB).status_code == 404
+    assert client.put(
+        f"/api/v1/me/plans/{plan_id}",
+        headers=BOB,
+        json=_plan_payload("Stolen plan"),
+    ).status_code == 404
+    assert client.post(
+        f"/api/v1/me/plans/{plan_id}/save",
+        headers=BOB,
+    ).status_code == 404
+    assert client.delete(f"/api/v1/me/plans/{plan_id}", headers=BOB).status_code == 404
+
+    retained = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE)
+    assert retained.status_code == 200
+    assert retained.json()["title"] == "Private plan"
+    assert retained.json()["status"] == "draft"
+    assert retained.json()["candidates"]
+    assert retained.json()["itinerary"]
+
+
 def test_plan_hard_filters_and_uses_ranking_and_saved_signals() -> None:
     client = TestClient(create_app())
     client.put(

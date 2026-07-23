@@ -1,3 +1,4 @@
+import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,14 @@ class Settings(BaseSettings):
     allowed_hosts: str = "testserver,localhost,127.0.0.1"
     max_request_body_bytes: int = 1_048_576
     readiness_cache_seconds: float = 5.0
+    operations_alert_webhook_url: str | None = None
+    operations_alert_webhook_timeout_seconds: float = 2.0
+    rate_limit_alert_window_seconds: int = 300
+    rate_limit_backend_failure_alert_threshold: int = 3
+    rate_limit_denial_alert_threshold: int = 50
+    rate_limit_identity_alert_threshold: int = 10
+    rate_limit_alert_cooldown_seconds: int = 900
+    rate_limit_alert_max_tracked_keys: int = 10_000
 
     public_rate_limit_capacity: int = 60
     public_rate_limit_refill_per_second: float = 1.0
@@ -50,6 +59,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "TRUSTED_CLIENT_IP_HEADER must be empty or cf-connecting-ip"
             )
+        positive_alert_settings = {
+            "OPERATIONS_ALERT_WEBHOOK_TIMEOUT_SECONDS": (
+                self.operations_alert_webhook_timeout_seconds
+            ),
+            "RATE_LIMIT_ALERT_WINDOW_SECONDS": self.rate_limit_alert_window_seconds,
+            "RATE_LIMIT_BACKEND_FAILURE_ALERT_THRESHOLD": (
+                self.rate_limit_backend_failure_alert_threshold
+            ),
+            "RATE_LIMIT_DENIAL_ALERT_THRESHOLD": self.rate_limit_denial_alert_threshold,
+            "RATE_LIMIT_IDENTITY_ALERT_THRESHOLD": self.rate_limit_identity_alert_threshold,
+            "RATE_LIMIT_ALERT_COOLDOWN_SECONDS": self.rate_limit_alert_cooldown_seconds,
+            "RATE_LIMIT_ALERT_MAX_TRACKED_KEYS": self.rate_limit_alert_max_tracked_keys,
+        }
+        for name, value in positive_alert_settings.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        if self.operations_alert_webhook_url:
+            try:
+                alert_url = httpx.URL(self.operations_alert_webhook_url)
+            except httpx.InvalidURL as error:
+                raise ValueError(
+                    "OPERATIONS_ALERT_WEBHOOK_URL must be a valid absolute URL"
+                ) from error
+            if not alert_url.is_absolute_url:
+                raise ValueError(
+                    "OPERATIONS_ALERT_WEBHOOK_URL must be a valid absolute URL"
+                )
+            if self.app_env != "development" and alert_url.scheme != "https":
+                raise ValueError(
+                    "OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS outside development"
+                )
 
     @property
     def allowed_host_list(self) -> list[str]:

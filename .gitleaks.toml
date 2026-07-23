@@ -1,0 +1,12 @@
+title = "GolfRank Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "OpenGolfAPI course UUIDs used as reconciliation test fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^services/api/tests/(test_models|test_course_reconciliation)\.py$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$''']

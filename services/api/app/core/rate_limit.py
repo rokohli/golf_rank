@@ -13,6 +13,7 @@ from redis.exceptions import RedisError
 
 from .auth import CurrentUser, current_user
 from .config import Settings
+from .rate_limit_alerts import RateLimitAlertObserver
 
 
 logger = logging.getLogger("fairway.rate_limit")
@@ -81,6 +82,7 @@ class RateLimiter:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._redis: Redis | None = None
+        self._alerts = RateLimitAlertObserver(settings)
 
     async def close(self) -> None:
         if self._redis is not None:
@@ -108,14 +110,21 @@ class RateLimiter:
                 ttl_ms,
             )
         except (RedisError, OSError) as error:
-            return self._failure(policy, error)
-        return RateLimitDecision(
+            return await self._failure(policy, error)
+        decision = RateLimitDecision(
             allowed=bool(int(result[0])),
             limit=policy.capacity,
             remaining=max(0, int(result[1])),
             retry_after=max(0, int(result[2])) / 1000,
             reset_after=max(0, int(result[3])) / 1000,
         )
+        if not decision.allowed:
+            await self._alerts.record_denial(
+                policy=policy.name,
+                identity_type=identity_type,
+                abuse_id=self._identity_digest(identity)[:12],
+            )
+        return decision
 
     async def daily_quota(
         self,
@@ -140,16 +149,23 @@ class RateLimiter:
             )
         except (RedisError, OSError) as error:
             policy = RateLimitPolicy(name, limit, 1 / 86_400, fail_closed=fail_closed)
-            return self._failure(policy, error)
+            return await self._failure(policy, error)
         used = int(result[1])
         reset_after = max(0, int(result[2])) / 1000
-        return RateLimitDecision(
+        decision = RateLimitDecision(
             allowed=bool(int(result[0])),
             limit=limit,
             remaining=max(0, limit - used),
             retry_after=reset_after if used > limit else 0,
             reset_after=reset_after,
         )
+        if not decision.allowed:
+            await self._alerts.record_denial(
+                policy=name,
+                identity_type=identity_type,
+                abuse_id=self._identity_digest(identity)[:12],
+            )
+        return decision
 
     def _client(self) -> Redis:
         if self._redis is None:
@@ -164,22 +180,29 @@ class RateLimiter:
 
     def _key(self, namespace: str, *parts: str) -> str:
         raw_identity = parts[-1]
-        digest = hmac.new(
-            self.settings.rate_limit_key_salt.encode(),
-            raw_identity.encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        digest = self._identity_digest(raw_identity)
         return ":".join(("fairway", namespace, *parts[:-1], digest))
 
-    @staticmethod
-    def _failure(
-        policy: RateLimitPolicy, error: Exception
+    def _identity_digest(self, identity: str) -> str:
+        return hmac.new(
+            self.settings.rate_limit_key_salt.encode(),
+            identity.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    async def _failure(
+        self, policy: RateLimitPolicy, error: Exception
     ) -> RateLimitDecision | None:
         logger.error(
             "rate_limit_backend_unavailable policy=%s fail_closed=%s error_type=%s",
             policy.name,
             policy.fail_closed,
             type(error).__name__,
+        )
+        await self._alerts.record_backend_failure(
+            policy=policy.name,
+            fail_closed=policy.fail_closed,
+            error_type=type(error).__name__,
         )
         if policy.fail_closed:
             raise HTTPException(503, "Request capacity is temporarily unavailable") from error

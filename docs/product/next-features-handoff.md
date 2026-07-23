@@ -8,7 +8,7 @@ The next work should harden the real product flows before adding broad new surfa
 
 ## Recommended implementation order
 
-1. Finish API security operations and the Clerk audience-template migration.
+1. Finish API security operations, especially limiter and unusual-traffic alerting.
 2. Add the AI planning layer with strict factual guardrails.
 3. Add private round and course-memory photos.
 4. Make Friends' thoughts real on course pages.
@@ -81,10 +81,13 @@ The mobile planner calls the persisted API, is linked from Home and Profile, acc
 - Pydantic input constraints and pagination caps limit many individual payload and response sizes.
 - Render terminates HTTPS, secrets remain in provider secret stores, and the Expo client receives no database or Supabase service-role credential.
 - Redis-backed token buckets protect public catalog reads, authenticated reads and writes, readiness checks, and course-candidate submissions. Candidate submissions also have a per-user daily quota.
+- The private Oregon Render Key Value service is deployed and connected through its internal URL. Staging verification covers shared bucket behavior, spoofed forwarding headers, `429` and `Retry-After`, recovery, and the `/ready` deployment gate.
 - Non-development deployments disable interactive API docs, validate hosts, reject oversized request bodies, return security headers, and never reflect malformed request IDs.
 - `/health` remains database-free and exempt from user limits; `/ready` is independently rate-limited and caches its database result briefly.
+- Cross-user authorization regression coverage protects profiles, rankings, plans and their generated children, saved lists and nested courses, rounds and nested private details, per-user rating details, social relationships, feed visibility, and reactions.
+- Pull-request CI audits frontend and production Python dependencies, runs Python static analysis, and scans the complete Git history for secrets. GitHub Actions are pinned to immutable commits, and Dependabot checks npm, pip, and Actions weekly.
 
-The application-level limiter foundation is implemented and covered against a real Redis service in CI. Remaining security work is operational: deploy and alert on the private Render Key Value service, complete the Clerk audience-template migration, expand cross-user authorization auditing, and add dependency, secret, and static-analysis checks. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
+The application-level limiter foundation is implemented, covered against a real Redis service in CI, and deployed to staging with a private Render Key Value service. The Clerk session-token audience is also enforced in staging. Privacy-safe alert aggregation and optional webhook delivery are implemented locally; publishing the worktree and configuring an HTTPS alert receiver remain before delivery can be verified in staging. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
 
 ### Redis and Lua token-bucket limiter, implemented
 
@@ -118,11 +121,50 @@ Treat these as environment-backed defaults that can be tuned without changing en
 - Fail closed with `503 Service Unavailable` for AI generation, uploads, and other directly cost-bearing operations if their limiter cannot be checked.
 - Add alerts for sustained limiter failures, unusual `429` volume, and repeated abuse from one user or address. Logs must use hashed or truncated abuse identifiers and must not include bearer tokens or private content.
 
+#### Rate-limit operational alerting, implementation ready
+
+- Aggregate limiter-backend failures, per-policy denials, and repeated denials from the same HMAC-derived abuse identifier over a configurable five-minute window.
+- Emit a critical structured log after three backend failures, 50 denials for one policy, or 10 denials for one hashed identity. Deduplicate matching alerts for 15 minutes.
+- Optionally send the same minimal event to `OPERATIONS_ALERT_WEBHOOK_URL`. Require HTTPS outside development and never include tokens, raw Clerk subjects, raw IP addresses, request URLs, request bodies, or Redis connection details.
+- Bound in-process tracking to 10,000 least-recently-used keys. The current single-instance staging topology can use this directly; if the API scales horizontally, move aggregation into shared infrastructure or the downstream log provider.
+- Before marking delivery complete, publish and deploy the implementation, configure a controlled HTTPS receiver or log-stream alert rule, trigger one synthetic threshold crossing, and verify receipt without using a real user's identity or traffic.
+
 ### Authentication and API hardening
 
-- Continue verifying Clerk token signature, issuer, expiry, and subject. Before requiring `CLERK_AUDIENCE`, create a Clerk JWT template with the intended `aud` claim and update the Expo `getToken()` call to request that template; Clerk's default mobile session token does not include `aud`. Keep the development identity path impossible to enable in staging or production.
-- Audit every private read and mutation for owner scoping, including nested resources such as round companions, plan candidates, saved-list courses, reactions, and future photos.
-- Add cross-user authorization tests proving private resources return `404` or `403` consistently and cannot be inferred through response differences.
+- Continue verifying Clerk token signature, issuer, expiry, subject, and intended audience. Keep the development identity path impossible to enable in staging or production.
+
+#### Clerk session-token audience rollout, implemented
+
+Purpose: bind a valid Clerk token to the Fairway API as its intended recipient. Signature and issuer checks prove that Clerk issued a token for a user; the `aud` check additionally prevents a valid token intended for a different service from being accepted by this API.
+
+Decision: customize Clerk's normal session token with a small static `aud` claim instead of creating a separate JWT template. The mobile client should continue using its existing `getToken()` call. A custom JWT template would add a token-generation network request and would omit session-bound claims such as `sid`; neither tradeoff is needed solely to add audience binding. Clerk's default session-token claims do not include `aud`, but Clerk supports adding custom claims to the session token.
+
+Use one stable, environment-specific value. For staging, use `fairway-api-staging` consistently in Clerk and Render; reserve a different value such as `fairway-api-production` for the future production environment.
+
+Completed staging rollout:
+
+1. In the staging Clerk Dashboard, open Sessions and add `"aud": "fairway-api-staging"` to the customized session-token claims. Do not add email, profile metadata, or other unnecessary claims.
+2. With a real staging user, obtain a fresh token through the existing Expo `getToken()` path and confirm only that its decoded `aud` equals `fairway-api-staging`; never log or commit the token itself.
+3. Add backend tests proving the configured audience accepts the expected value and rejects missing, malformed, and different `aud` values with the same generic `401` response.
+4. Set Render `CLERK_AUDIENCE=fairway-api-staging` and redeploy only after the Clerk claim is live. The backend already enables JWT audience verification when this setting is present.
+5. Sign out and back in or otherwise force a fresh mobile token, then verify authenticated profile, planner, rating, round, save, and social requests against staging.
+6. Update `.env.example` and `README.md` to describe the session-token claim rather than a JWT template.
+
+On July 23, 2026, a fresh token from the Clerk development instance was verified to contain `aud=fairway-api-staging` without logging or storing the token. Render service `fairway-api` was then configured with the matching `CLERK_AUDIENCE`, deployed successfully as `dep-d9gs6mbeo5us73cnk9tg`, and verified live. `/health` and `/ready` returned `200`; authenticated planner, saved-list, round, ranking, and feed reads succeeded; and missing or malformed credentials returned generic `401` responses. The authenticated profile read returned its expected domain `404` for the verification user, demonstrating that audience authentication passed before profile lookup.
+
+Rollout safety: enable the Clerk claim before requiring it in Render so existing clients do not enter a `401` outage. If rollback is necessary, remove `CLERK_AUDIENCE` from Render first; removing the extra Clerk claim can happen afterward. Do not reuse the staging audience in production.
+
+References: [Clerk custom session tokens](https://clerk.com/docs/guides/sessions/customize-session-tokens), [Clerk default session-token claims](https://clerk.com/docs/guides/sessions/session-tokens), and [Clerk JWT templates](https://clerk.com/docs/guides/sessions/jwt-templates).
+
+#### Cross-user authorization audit, implemented
+
+- Non-owner plan reads, regeneration, save, and delete return `404`; list results expose only the caller's plans, candidates, and itinerary.
+- Non-owner saved-list update, delete, course add, and course removal return `404`; another user's list contents and private notes remain absent from list results.
+- Non-owner round read, update, and delete return `404`; round lists, summaries, course state, notes, and companions remain scoped to the caller.
+- Rating state and rating-detail mutation remain per-user, while profile and ranking projections expose only the caller unless the explicit mutual-friend ranking policy applies.
+- Follow, mute, and block removals affect only relationships owned by the caller. Feed tests cover public, mutual-friend, private, blocked, and muted visibility, and invisible events cannot be reacted to even when their IDs are known.
+- Keep this matrix current for every new private resource, especially future photo metadata and objects. Prefer `404` for owner-scoped identifiers so response differences do not reveal whether another user's resource exists.
+
 - Disable `/docs`, `/redoc`, and `/openapi.json` outside development unless an authenticated operational need is established.
 - Keep `/health` lightweight and database-free. Cache or tightly protect `/ready` so repeated anonymous requests do not execute an unlimited number of database queries.
 - Add trusted-host validation, explicit proxy trust configuration, request-body size limits, database and outbound-request timeouts, and conservative server timeouts.
@@ -142,8 +184,13 @@ Treat these as environment-backed defaults that can be tuned without changing en
 
 ### CI and operational verification
 
-- Add dependency vulnerability checks for Python and npm lockfiles, secret scanning, and static security analysis to pull-request CI.
-- Pin security-sensitive GitHub Actions and production dependencies to reviewed versions and enable automated dependency update pull requests.
+#### Security automation, implemented
+
+- `npm audit --audit-level=high` blocks high and critical frontend advisories. The non-breaking audit fix removed the current high and critical findings; remaining moderate `postcss` and `uuid` advisory paths require a breaking Expo upgrade and are tracked rather than force-upgraded.
+- `pip-audit` resolves and checks the backend project's production dependency set separately from CI tooling, and Bandit blocks medium-or-higher findings in `services/api/app`.
+- Gitleaks scans complete repository history. Its only allowlist is restricted to UUID-shaped OpenGolfAPI record identifiers in two reconciliation test files under the `generic-api-key` rule.
+- All third-party Actions use reviewed immutable commit SHAs. Dependabot checks npm, pip, and GitHub Actions weekly with bounded pull-request volume.
+
 - Maintain the implemented tests for token-bucket refill, burst capacity, weighted cost, daily quotas, separate user/IP buckets, reset behavior, `Retry-After`, spoofed proxy headers, Redis failure modes, and concurrency atomicity.
 - Test that public routes have intended limits, private routes reject missing/invalid Clerk tokens, and health checks remain available under normal limiter load.
 - Run a database privilege and RLS audit after every schema change and before production launch.
@@ -155,6 +202,7 @@ Treat these as environment-backed defaults that can be tuned without changing en
 - Concurrent requests cannot exceed the configured burst because the decision and update are atomic in Redis/Lua.
 - Spoofing forwarding headers does not create a fresh client identity or bypass an IP limit.
 - A Redis outage does not take down ordinary reads, but it cannot permit unmetered AI or upload spend.
+- When `CLERK_AUDIENCE` is configured, only a fresh Clerk session token with the expected environment-specific `aud` is accepted; missing or different audiences receive the same generic `401` response.
 - Every private resource has a cross-user denial test, and direct Supabase Data API roles cannot read application tables.
 - Production secrets and database credentials remain absent from the mobile bundle, repository, logs, and limiter storage.
 

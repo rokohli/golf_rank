@@ -43,6 +43,47 @@ def _profile(client: TestClient, headers: dict[str, str], first_name: str, usern
     assert response.status_code == 200
 
 
+def test_round_reads_mutations_and_nested_private_details_are_owner_scoped() -> None:
+    client = TestClient(create_app())
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "score": 84,
+            "note": "Alice only",
+            "guest_names": ["Private Guest"],
+            "visibility": "private",
+        },
+    )
+    assert created.status_code == 201
+    round_id = created.json()["id"]
+
+    assert client.get("/api/v1/me/rounds", headers=BOB).json() == []
+    assert client.get("/api/v1/me/rounds/summary", headers=BOB).json()["total_rounds"] == 0
+    assert client.get("/api/v1/me/course-states", headers=BOB).json() == []
+    assert client.get(f"/api/v1/me/rounds/{round_id}", headers=BOB).status_code == 404
+    assert client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=BOB,
+        json={"score": 72, "note": "Stolen", "guest_names": [], "friend_user_ids": []},
+    ).status_code == 404
+    assert client.delete(f"/api/v1/me/rounds/{round_id}", headers=BOB).status_code == 404
+
+    retained = client.get(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    assert retained.status_code == 200
+    assert retained.json()["score"] == 84
+    assert retained.json()["note"] == "Alice only"
+    assert retained.json()["companions"] == [
+        {
+            "friend_user_id": None,
+            "display_name": None,
+            "guest_name": "Private Guest",
+        }
+    ]
+
+
 def test_round_crud_keeps_notes_private_and_updates_course_state() -> None:
     client = TestClient(create_app())
     created = client.post(

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.main import create_app
-from app.models import ActivityEvent, User
+from app.models import ActivityEvent, User, UserMute
 
 
 def _profile(client: TestClient, subject: str, first_name: str, username: str, visibility: str = "public") -> dict[str, str]:
@@ -111,6 +111,35 @@ def test_feed_reactions_are_idempotent_and_private_events_are_not_reactable() ->
     removed = client.delete(f"/api/v1/feed/{event['id']}/reactions/like", headers=alice)
     assert removed.json()["reaction_count"] == 0
 
+    private_round = client.post(
+        "/api/v1/me/rounds",
+        headers=bob,
+        json={
+            "course_id": 2,
+            "played_on": "2026-07-02",
+            "visibility": "private",
+        },
+    )
+    assert private_round.status_code == 201
+    with client.app.state.session_factory() as session:
+        private_event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_id == private_round.json()["id"],
+            )
+        )
+        assert private_event is not None
+        private_event_id = private_event.id
+
+    assert client.put(
+        f"/api/v1/feed/{private_event_id}/reactions/like",
+        headers=alice,
+    ).status_code == 404
+    assert client.delete(
+        f"/api/v1/feed/{private_event_id}/reactions/like",
+        headers=alice,
+    ).status_code == 404
+
 
 def test_block_removes_relationship_and_hides_users_and_feed() -> None:
     client = TestClient(create_app())
@@ -129,6 +158,42 @@ def test_block_removes_relationship_and_hides_users_and_feed() -> None:
     assert client.get("/api/v1/feed", headers=alice).json()["items"] == []
     assert client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json() == []
     assert client.get("/api/v1/me/follows", headers=alice).json() == []
+
+
+def test_relationship_removals_cannot_change_another_users_state() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:relationship-alice", "Alice", "relationshipalice")
+    bob = _profile(client, "dev:relationship-bob", "Bob", "relationshipbob")
+    charlie = _profile(client, "dev:relationship-charlie", "Charlie", "relationshipcharlie")
+    bob_id = client.get(
+        "/api/v1/users", headers=alice, params={"q": "relationshipbob"}
+    ).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.delete(f"/api/v1/me/follows/{bob_id}", headers=charlie).status_code == 204
+    assert [item["user"]["id"] for item in client.get(
+        "/api/v1/me/follows", headers=alice
+    ).json()] == [bob_id]
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=charlie).status_code == 204
+    with client.app.state.session_factory() as session:
+        alice_record = session.scalar(
+            select(User).where(User.provider_subject == "dev:relationship-alice")
+        )
+        assert alice_record is not None
+        assert session.scalar(
+            select(UserMute.id).where(
+                UserMute.muter_id == alice_record.id,
+                UserMute.muted_id == bob_id,
+            )
+        ) is not None
+
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.delete(f"/api/v1/me/blocks/{bob_id}", headers=charlie).status_code == 204
+    assert client.get(
+        "/api/v1/users", headers=alice, params={"q": "relationshipbob"}
+    ).json() == []
 
 
 def test_course_ratings_and_reratings_appear_but_refinement_does_not() -> None:
