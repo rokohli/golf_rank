@@ -87,7 +87,7 @@ The mobile planner calls the persisted API, is linked from Home and Profile, acc
 - Cross-user authorization regression coverage protects profiles, rankings, plans and their generated children, saved lists and nested courses, rounds and nested private details, per-user rating details, social relationships, feed visibility, and reactions.
 - Pull-request CI audits frontend and production Python dependencies, runs Python static analysis, and scans the complete Git history for secrets. GitHub Actions are pinned to immutable commits, and Dependabot checks npm, pip, and Actions weekly.
 
-The application-level limiter foundation is implemented, covered against a real Redis service in CI, and deployed to staging with a private Render Key Value service. The Clerk session-token audience is also enforced in staging. Privacy-safe alert aggregation and optional webhook delivery are implemented locally; publishing the worktree and configuring an HTTPS alert receiver remain before delivery can be verified in staging. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
+The application-level limiter foundation is implemented, covered against a real Redis service in CI, and deployed to staging with a private Render Key Value service. The Clerk session-token audience is also enforced in staging. Privacy-safe alert aggregation and optional webhook delivery are implemented locally; publishing the worktree and configuring an HTTPS alert receiver remain before delivery can be verified in staging. The guarded AI planner layer and mobile invocation are now implemented locally and validated, but its migration, provider secret, kill switch, and live fallback/generation behavior have not yet been deployed to staging. Security still depends heavily on consistent FastAPI ownership checks because the shared runtime database role can access application records.
 
 ### Redis and Lua token-bucket limiter, implemented
 
@@ -208,6 +208,30 @@ References: [Clerk custom session tokens](https://clerk.com/docs/guides/sessions
 
 ## 4. AI planner layer
 
+### Implementation ready locally
+
+- `POST /api/v1/me/plans/{plan_id}/ai-itinerary` is owner-scoped and returns the updated plan plus `generation_status`, `generated_summary`, and an optional `fallback_reason`.
+- `PlannerNarrativeProvider` is provider-neutral. The Gemini adapter uses `gemini-2.5-flash` through `generateContent` with strict JSON Schema; the API key remains server-only.
+- Provider input contains only persisted trip preferences and the server-selected candidate IDs, names, reasons, and caveats. It excludes Clerk subjects, email addresses, friend data, private notes, and raw origin coordinates.
+- The response schema restricts IDs and dates before output is returned. A second server-side pass rejects unknown or duplicate courses, out-of-range or duplicate dates, mismatched ordering, unknown rationale indices, incomplete itineraries, and unsupported summaries.
+- AI selects ordering and known rationale signals. The server renders rationale from the selected candidate's existing reasons and always carries forward every deterministic caveat, so the model cannot introduce a price, tee-time, availability, restaurant, lodging, or travel-duration fact.
+- Timeout, provider error, malformed output, concurrent plan changes, no candidates, a disabled kill switch, or an exhausted monthly cost ceiling preserves and returns the deterministic itinerary.
+- Migration `0015_ai_plan_generations` persists status, provider/model, prompt version, latency, token usage, conservative estimated cost, fallback reason, summary, and timestamps without storing prompts, credentials, or user identifiers. PostgreSQL RLS is enabled and direct Supabase Data API roles are revoked.
+- Cost-bearing generation uses fail-closed Redis user/IP token buckets, a per-user daily quota, a configurable monthly estimated-cost ceiling, a bounded provider timeout, and environment-backed model pricing estimates.
+- The mobile Planner exposes **Organize itinerary with AI**, displays generated versus deterministic-fallback status, and returns a changed itinerary to draft state before it can be saved.
+
+Local verification on July 23, 2026: 119 backend tests passed; all 20 frontend suites (124 tests) passed; `npx tsc --noEmit` and `git diff --check` passed; the exact Alembic upgrade-head, downgrade-base, upgrade-head cycle passed against a fresh PostgreSQL/PostGIS database; and all 12 limiter tests passed against real Redis.
+
+### Staging delivery remaining
+
+1. Publish the branch and run CI, including dependency/static analysis and the clean PostGIS migration cycle.
+2. Deploy with the checked-in Render defaults, including `AI_PLANNER_ENABLED=false`, so migration `0015` and deterministic fallback behavior land before provider spend is possible.
+3. Add `GEMINI_API_KEY` from a paid-tier Google project in Render secrets so submitted data is not used to improve Google's products. Keep `AI_PLANNER_MODEL=gemini-2.5-flash`, confirm the current conservative input/output micro-dollar rates per million tokens, and set `AI_PLANNER_MONTHLY_COST_LIMIT_CENTS`; never put the key in Expo configuration.
+4. Confirm Redis is healthy, then enable `AI_PLANNER_ENABLED=true`. Trigger one controlled generation and verify only supplied course IDs appear, dates remain in range, all unknown-price and availability caveats survive, metadata is written, and the mobile summary shows **AI ORGANIZED**.
+5. Exercise disabled-provider, provider-error, invalid-output, `429`, Redis-unavailable `503`, cross-user `404`, and monthly-ceiling fallbacks with synthetic accounts before calling the feature delivered.
+
+Rollback: set `AI_PLANNER_ENABLED=false` first. The endpoint will continue returning the deterministic itinerary without provider spend. The additive metadata table can remain deployed; do not downgrade the production database merely to disable the feature.
+
 ### Product rule
 
 The deterministic planner remains the authority for hard constraints and allowed courses. AI may organize and explain validated candidates; it must not create courses, claim live availability, or invent prices.
@@ -240,6 +264,8 @@ The deterministic planner remains the authority for hard constraints and allowed
 - Unknown tee-time availability and prices remain visibly unverified.
 - Provider credentials exist only in Render secrets.
 - Tests cover invalid model output, timeout, rate limiting, fallback, and user isolation.
+
+All acceptance criteria above have local automated coverage. Staging provider credentials and live acceptance remain outstanding.
 
 ## 5. Private golf-memory photos
 

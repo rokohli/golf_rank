@@ -80,3 +80,22 @@ def test_development_can_run_with_local_identity_without_clerk() -> None:
 def test_only_cloudflare_client_ip_header_can_be_trusted() -> None:
     with pytest.raises(ValueError, match="TRUSTED_CLIENT_IP_HEADER"):
         Settings(trusted_client_ip_header="x-forwarded-for").validate_security()
+
+
+def test_enabled_ai_planner_requires_provider_key_and_positive_cost_controls() -> None:
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        Settings(ai_planner_enabled=True, gemini_api_key=None).validate_security()
+
+    with pytest.raises(ValueError, match="AI_PLANNER_MONTHLY_COST_LIMIT_CENTS"):
+        Settings(ai_planner_monthly_cost_limit_cents=0).validate_security()
+
+    with pytest.raises(ValueError, match="RATE_LIMIT_ENABLED"):
+        Settings(
+            app_env="staging",
+            allow_development_identity=False,
+            clerk_issuer="https://clerk.example.test",
+            clerk_jwks_url="https://clerk.example.test/.well-known/jwks.json",
+            ai_planner_enabled=True,
+            gemini_api_key="test-key",
+            rate_limit_enabled=False,
+        ).validate_security()

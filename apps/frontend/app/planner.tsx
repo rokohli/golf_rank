@@ -3,11 +3,11 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-rou
 import { useCallback, useState } from 'react'
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { createPlan, deletePlan, getPlan, getPlans, savePlan, updatePlan } from '../src/api/client'
+import { createPlan, deletePlan, generateAIItinerary, getPlan, getPlans, savePlan, updatePlan } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { CourseVisual, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
-import { GolfPlan, PlanInput, PlanSummary } from '../src/types'
+import { AIGolfPlan, GolfPlan, PlanInput, PlanSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
 const today = new Date()
@@ -34,6 +34,7 @@ export default function Planner() {
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [refining, setRefining] = useState(false)
+  const [aiGeneration, setAIGeneration] = useState<AIGolfPlan | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -58,6 +59,7 @@ export default function Planner() {
 
   function showPlan(next: GolfPlan) {
     setPlan(next)
+    setAIGeneration(null)
     const nextInput = { ...next.constraints, title: next.title, start_date: next.start_date, end_date: next.end_date }
     setInput(nextInput)
     setStartDateText(usDate(next.start_date))
@@ -119,6 +121,23 @@ export default function Planner() {
     }
   }
 
+  async function organizeWithAI() {
+    if (!plan) return
+    setWorking(true)
+    setError(null)
+    try {
+      const headers = await getAuthHeaders()
+      const generated = await generateAIItinerary(plan.id, headers)
+      showPlan(generated)
+      setAIGeneration(generated)
+      setTrips(await getPlans(headers))
+    } catch (reason) {
+      setError(message(reason, 'Unable to organize this trip with AI.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
   async function remove() {
     if (!plan) return
     Alert.alert('Delete trip?', 'This removes the saved itinerary from your account.', [
@@ -134,6 +153,7 @@ export default function Planner() {
       const headers = await getAuthHeaders()
       await deletePlan(plan.id, headers)
       setPlan(null)
+      setAIGeneration(null)
       setInput(initialInput)
       setStartDateText(usDate(initialInput.start_date))
       setEndDateText(usDate(initialInput.end_date))
@@ -165,7 +185,7 @@ export default function Planner() {
         <Pressable accessibilityRole="button" disabled={working} onPress={() => void generate()} style={styles.primary}>{working ? <ActivityIndicator color="#FFF" /> : <><Feather name="map" size={17} color="#FFF" /><Text style={styles.primaryText}>{plan ? 'Update trip' : 'Build trip'}</Text></>}</Pressable>
       </> : <Pressable accessibilityRole="button" onPress={() => setRefining(true)} style={styles.refine}><Feather name="sliders" size={15} color={colors.pine} /><Text style={styles.refineText}>Refine trip</Text></Pressable>}
 
-      {plan ? <PlanResult plan={plan} onSave={() => void save()} onDelete={() => void remove()} working={working} /> : null}
+      {plan ? <PlanResult plan={plan} aiGeneration={aiGeneration} onAI={() => void organizeWithAI()} onSave={() => void save()} onDelete={() => void remove()} working={working} /> : null}
 
       <SectionTitle title="MY TRIPS" />
       {!loading && !trips.length ? <View style={styles.empty}><Feather name="map-pin" size={22} color={colors.muted} /><Text style={styles.muted}>Draft and saved trips will appear here.</Text></View> : null}
@@ -174,12 +194,14 @@ export default function Planner() {
   </>
 }
 
-function PlanResult({ plan, onSave, onDelete, working }: { plan: GolfPlan; onSave: () => void; onDelete: () => void; working: boolean }) {
+function PlanResult({ plan, aiGeneration, onAI, onSave, onDelete, working }: { plan: GolfPlan; aiGeneration: AIGolfPlan | null; onAI: () => void; onSave: () => void; onDelete: () => void; working: boolean }) {
   return <View style={styles.result}>
     <View style={styles.resultHeader}><View><Text style={styles.resultTitle}>{plan.title}</Text><Text style={styles.resultDates}>{formatDateRange(plan.start_date, plan.end_date)}</Text></View><View style={styles.status}><Text style={styles.statusText}>{plan.status}</Text></View></View>
+    {aiGeneration ? <View style={aiGeneration.generation_status === 'generated' ? styles.aiSummary : styles.aiFallback}><Text style={styles.aiLabel}>{aiGeneration.generation_status === 'generated' ? 'AI ORGANIZED' : 'DETERMINISTIC PLAN KEPT'}</Text><Text style={styles.aiSummaryText}>{aiGeneration.generated_summary}</Text></View> : null}
     {!plan.candidates.length ? <View style={styles.empty}><Text style={styles.muted}>No courses match this request. Try another destination, budget, or set of must-haves.</Text></View> : null}
     {plan.candidates.map((candidate) => <View key={candidate.course.id} style={styles.candidate}><View style={styles.thumb}><CourseVisual course={displayCourse(candidate.course)} height={64} /></View><View style={styles.flex}><Text style={styles.courseTitle}>{candidate.course.name}</Text><Text style={styles.muted}>{candidate.distance_miles == null ? candidate.course.region : `${candidate.distance_miles.toFixed(1)} mi · ${candidate.course.region}`}</Text>{candidate.reasons.map((reason) => <Text key={reason} style={styles.reason}>• {reason}</Text>)}{candidate.caveats.map((caveat) => <Text key={caveat} style={styles.caveat}>• {caveat}</Text>)}</View></View>)}
     {plan.itinerary.length ? <><Text style={styles.itineraryTitle}>ITINERARY</Text>{plan.itinerary.map((item) => <View key={item.id} style={styles.itineraryRow}><Text style={styles.itineraryDate}>{formatDate(item.date)}</Text><View style={styles.flex}><Text style={styles.courseTitle}>{item.title}</Text><Text style={styles.muted}>{item.details.availability_verified ? 'Availability verified' : 'Tee-time availability unverified'}{item.course?.tee_time_url ? ' · Official booking link available' : ''}</Text></View></View>)}</> : null}
+    {plan.candidates.length ? <Pressable accessibilityRole="button" accessibilityLabel="Organize itinerary with AI" disabled={working} onPress={onAI} style={styles.aiAction}>{working ? <ActivityIndicator color={colors.pine} /> : <><Feather name="cpu" size={15} color={colors.pine} /><Text style={styles.aiActionText}>Organize itinerary with AI</Text></>}</Pressable> : null}
     <View style={styles.actions}><Pressable accessibilityRole="button" disabled={working || plan.status === 'saved'} onPress={onSave} style={[styles.secondary, plan.status === 'saved' && styles.disabled]}><Feather name="bookmark" size={15} color={colors.pine} /><Text style={styles.secondaryText}>{plan.status === 'saved' ? 'Saved' : 'Save trip'}</Text></Pressable><Pressable accessibilityRole="button" disabled={working} onPress={onDelete} style={styles.delete}><Text style={styles.deleteText}>Delete</Text></Pressable></View>
   </View>
 }
@@ -202,4 +224,5 @@ const styles = StyleSheet.create({
   result: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, gap: 12, padding: 14 }, resultHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, resultTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 20 }, resultDates: { color: colors.muted, fontSize: 10, marginTop: 4 }, status: { backgroundColor: colors.pineSoft, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 5 }, statusText: { color: colors.pine, fontSize: 8, fontWeight: '800', textTransform: 'uppercase' }, candidate: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, paddingTop: 12 }, thumb: { borderRadius: 8, overflow: 'hidden', width: 76 }, courseTitle: { color: colors.ink, fontSize: 11, fontWeight: '800' }, muted: { color: colors.muted, fontSize: 9, lineHeight: 14 }, reason: { color: colors.pineDark, fontSize: 9, lineHeight: 14, marginTop: 3 }, caveat: { color: '#8A6844', fontSize: 9, lineHeight: 14, marginTop: 2 }, itineraryTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1 }, itineraryRow: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, paddingTop: 10 }, itineraryDate: { color: colors.pine, fontSize: 9, fontWeight: '800', width: 46 }, actions: { flexDirection: 'row', gap: 10 }, secondary: { alignItems: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, flex: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 40 }, secondaryText: { color: colors.pine, fontSize: 10, fontWeight: '800' }, delete: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 }, deleteText: { color: colors.error, fontSize: 10, fontWeight: '800' }, disabled: { opacity: 0.55 },
   empty: { alignItems: 'center', gap: 8, padding: 18 }, tripRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }, tripTitle: { color: colors.ink, fontSize: 12, fontWeight: '800', marginBottom: 4 },
   refine: { alignItems: 'center', alignSelf: 'flex-start', borderColor: colors.pine, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, paddingHorizontal: 13, paddingVertical: 8 }, refineText: { color: colors.pine, fontSize: 10, fontWeight: '800' },
+  aiSummary: { backgroundColor: colors.pineSoft, borderRadius: 10, gap: 4, padding: 11 }, aiFallback: { backgroundColor: '#F6F1E8', borderRadius: 10, gap: 4, padding: 11 }, aiLabel: { color: colors.pine, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 }, aiSummaryText: { color: colors.ink, fontSize: 10, lineHeight: 15 }, aiAction: { alignItems: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 40 }, aiActionText: { color: colors.pine, fontSize: 10, fontWeight: '800' },
 })

@@ -111,3 +111,23 @@ cooldown. Keep the webhook unset during local development unless you are testing
 delivery to a controlled receiver. Per-process tracking is capped at 10,000
 least-recently-used policy and identity keys so monitoring cannot grow memory
 without bound under distributed abuse.
+
+### Guarded AI planner
+
+`POST /api/v1/me/plans/{plan_id}/ai-itinerary` can organize an existing
+deterministic plan when `AI_PLANNER_ENABLED=true`. The server sends only the
+persisted plan preferences and validated candidate facts to the configured
+provider. Strict structured output and a second server-side validation pass
+limit results to the supplied course IDs and requested dates; rationale and
+caveats are rendered only from server-owned candidate facts. Provider errors,
+timeouts, invalid output, the kill switch, and the monthly ceiling all return
+the unchanged deterministic itinerary with `generation_status=fallback`.
+
+The Gemini adapter uses `gemini-2.5-flash` with native structured JSON output.
+Keep `GEMINI_API_KEY` only in the API secret store and use a paid-tier project
+so submitted data is not used to improve Google's products. The default Redis
+policy is a three-request burst, one token every two minutes, and 25 generations
+per user per day; Redis failure is fail-closed for this cost-bearing route.
+Configure the model's conservative per-million-token micro-dollar rates and
+monthly cost ceiling alongside the model so persisted generation metadata can
+stop new spend.

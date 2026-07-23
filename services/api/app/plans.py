@@ -1,13 +1,16 @@
+import logging
+import time
 from datetime import UTC, date, datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
+from .core.rate_limit import ai_planner_rate_limit
 from .db import get_session
 from .domain import canonical_courses_only, course_data, require_course, require_user, stored_user
 from .models import (
@@ -16,15 +19,25 @@ from .models import (
     Plan,
     PlanCandidate,
     PlanConstraint,
+    PlanGeneration,
     RankingSnapshot,
     SavedCourse,
     SavedList,
     UserCourseState,
 )
+from .planner_narrative import (
+    PROMPT_VERSION,
+    NarrativeCandidate,
+    PlannerNarrativeOutput,
+    PlannerNarrativeProviderError,
+    PlannerNarrativeRequest,
+    PlannerNarrativeResult,
+)
 from .schemas import CourseOut
 
 
 router = APIRouter(prefix="/api/v1/me/plans", tags=["plans"])
+logger = logging.getLogger("fairway.planner")
 
 
 class PlanIn(BaseModel):
@@ -100,6 +113,12 @@ class PlanSummaryOut(BaseModel):
     candidate_count: int
     created_at: datetime
     updated_at: datetime
+
+
+class AIPlanOut(PlanOut):
+    generation_status: Literal["generated", "fallback"]
+    generated_summary: str
+    fallback_reason: str | None = None
 
 
 def _distance_miles(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
@@ -280,6 +299,166 @@ def _require_plan(session: Session, user_id: int, plan_id: int) -> Plan:
     return plan
 
 
+def _candidate_records(session: Session, plan_id: int) -> list[PlanCandidate]:
+    return list(session.scalars(
+        select(PlanCandidate)
+        .where(PlanCandidate.plan_id == plan_id)
+        .order_by(PlanCandidate.position)
+    ).all())
+
+
+def _deterministic_summary(plan: Plan, candidate_count: int) -> str:
+    if candidate_count == 0:
+        return f"No validated course candidates are currently available for {plan.title}."
+    noun = "candidate" if candidate_count == 1 else "candidates"
+    return (
+        f"Using Fairway's {candidate_count} validated course {noun} for {plan.title}; "
+        "prices and tee-time availability remain subject to the listed caveats."
+    )
+
+
+def _narrative_request(
+    session: Session,
+    plan: Plan,
+    constraint_data: dict,
+    candidate_rows: list[PlanCandidate],
+) -> PlannerNarrativeRequest:
+    candidates: list[NarrativeCandidate] = []
+    has_personal_signal = False
+    for candidate in candidate_rows:
+        course = require_course(session, candidate.course_id)
+        has_personal_signal = has_personal_signal or any(
+            "your" in reason.lower() for reason in candidate.reasons
+        )
+        candidates.append(NarrativeCandidate(
+            course_id=course.id,
+            name=course.name,
+            reasons=candidate.reasons,
+            caveats=candidate.caveats,
+        ))
+    summary_options = [
+        (
+            f"A {min(len(candidates), (plan.end_date - plan.start_date).days + 1)}-course "
+            f"itinerary for {plan.title}, organized from Fairway's validated candidates."
+        ),
+        (
+            f"A candidate-led itinerary for {plan.title}; prices and tee-time availability "
+            "remain subject to the listed caveats."
+        ),
+    ]
+    if has_personal_signal:
+        summary_options.append(
+            f"A personalized itinerary for {plan.title}, ordered from Fairway's known user signals."
+        )
+    preference_keys = {
+        "party_size",
+        "max_green_fee",
+        "access",
+        "difficulty",
+        "regions",
+        "radius_miles",
+        "transportation",
+        "tee_time_window",
+        "must_haves",
+    }
+    return PlannerNarrativeRequest(
+        title=plan.title,
+        start_date=plan.start_date,
+        end_date=plan.end_date,
+        preferences={
+            key: value for key, value in constraint_data.items() if key in preference_keys
+        },
+        candidates=candidates,
+        summary_options=summary_options,
+    )
+
+
+def _validated_items(
+    output: PlannerNarrativeOutput,
+    request: PlannerNarrativeRequest,
+) -> list[tuple[date, NarrativeCandidate, list[str]]]:
+    candidate_by_id = {candidate.course_id: candidate for candidate in request.candidates}
+    expected_count = min(
+        len(candidate_by_id), (request.end_date - request.start_date).days + 1
+    )
+    if output.summary not in request.summary_options:
+        raise ValueError("unsupported summary")
+    if len(output.itinerary) != expected_count:
+        raise ValueError("incomplete itinerary")
+    if output.ordered_course_ids != [item.course_id for item in output.itinerary]:
+        raise ValueError("course order does not match itinerary")
+    if len(set(output.ordered_course_ids)) != len(output.ordered_course_ids):
+        raise ValueError("duplicate course")
+    itinerary_dates = [item.date for item in output.itinerary]
+    if len(set(itinerary_dates)) != len(output.itinerary):
+        raise ValueError("duplicate date")
+    if itinerary_dates != sorted(itinerary_dates):
+        raise ValueError("dates are not ordered")
+
+    validated: list[tuple[date, NarrativeCandidate, list[str]]] = []
+    for item in output.itinerary:
+        if not request.start_date <= item.date <= request.end_date:
+            raise ValueError("date outside plan")
+        candidate = candidate_by_id.get(item.course_id)
+        if candidate is None:
+            raise ValueError("unknown course")
+        if len(set(item.reason_indices)) != len(item.reason_indices):
+            raise ValueError("duplicate reason")
+        if any(index < 0 or index >= len(candidate.reasons) for index in item.reason_indices):
+            raise ValueError("unknown reason")
+        validated.append((
+            item.date,
+            candidate,
+            [candidate.reasons[index] for index in item.reason_indices],
+        ))
+    return validated
+
+
+def _generation_response(
+    session: Session,
+    plan: Plan,
+    *,
+    status: Literal["generated", "fallback"],
+    summary: str,
+    fallback_reason: str | None = None,
+) -> AIPlanOut:
+    return AIPlanOut(
+        **_plan_out(session, plan).model_dump(),
+        generation_status=status,
+        generated_summary=summary,
+        fallback_reason=fallback_reason,
+    )
+
+
+def _record_generation(
+    session: Session,
+    plan_id: int,
+    *,
+    status: Literal["succeeded", "fallback"],
+    provider: str,
+    model_identifier: str | None,
+    summary: str,
+    latency_ms: int | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    estimated_cost_micros: int | None = None,
+    fallback_reason: str | None = None,
+) -> None:
+    session.add(PlanGeneration(
+        plan_id=plan_id,
+        status=status,
+        provider=provider,
+        model_identifier=model_identifier,
+        prompt_version=PROMPT_VERSION,
+        latency_ms=latency_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        estimated_cost_micros=estimated_cost_micros,
+        fallback_reason=fallback_reason,
+        generated_summary=summary,
+    ))
+
+
 def _plan_out(session: Session, plan: Plan) -> PlanOut:
     constraints = session.get(PlanConstraint, plan.id)
     candidate_rows = session.scalars(
@@ -386,6 +565,170 @@ def save_plan(
     plan.status = "saved"
     session.commit()
     return _plan_out(session, plan)
+
+
+@router.post("/{plan_id}/ai-itinerary", response_model=AIPlanOut)
+async def generate_ai_itinerary(
+    plan_id: int,
+    request: Request,
+    _ai_limit: None = Depends(ai_planner_rate_limit),
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> AIPlanOut:
+    user = require_user(session, current)
+    plan = _require_plan(session, user.id, plan_id)
+    settings = request.app.state.settings
+    candidate_rows = _candidate_records(session, plan.id)
+    deterministic_summary = _deterministic_summary(plan, len(candidate_rows))
+
+    def fallback(reason: str, *, latency_ms: int | None = None) -> AIPlanOut:
+        _record_generation(
+            session,
+            plan.id,
+            status="fallback",
+            provider=settings.ai_planner_provider,
+            model_identifier=(settings.ai_planner_model if settings.ai_planner_enabled else None),
+            summary=deterministic_summary,
+            latency_ms=latency_ms,
+            fallback_reason=reason,
+        )
+        session.commit()
+        return _generation_response(
+            session,
+            plan,
+            status="fallback",
+            summary=deterministic_summary,
+            fallback_reason=reason,
+        )
+
+    provider = request.app.state.planner_narrative_provider
+    if not settings.ai_planner_enabled or provider is None:
+        return fallback("disabled")
+    if not candidate_rows:
+        return fallback("no_candidates")
+
+    now = datetime.now(UTC)
+    month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    monthly_cost = session.scalar(
+        select(func.coalesce(func.sum(PlanGeneration.estimated_cost_micros), 0)).where(
+            PlanGeneration.created_at >= month_start,
+        )
+    )
+    if int(monthly_cost or 0) >= settings.ai_planner_monthly_cost_limit_cents * 10_000:
+        return fallback("monthly_cost_limit")
+
+    constraints = session.get(PlanConstraint, plan.id)
+    narrative_request = _narrative_request(
+        session,
+        plan,
+        constraints.constraint_data if constraints else {},
+        candidate_rows,
+    )
+    session.commit()
+    started_at = time.perf_counter()
+    try:
+        result: PlannerNarrativeResult = await provider.generate(narrative_request)
+    except TimeoutError:
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+        logger.warning("planner_generation_fallback reason=timeout")
+        return fallback("timeout", latency_ms=latency_ms)
+    except PlannerNarrativeProviderError as error:
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+        logger.warning(
+            "planner_generation_fallback reason=provider_error error_type=%s",
+            type(error).__name__,
+        )
+        return fallback("provider_error", latency_ms=latency_ms)
+    except Exception as error:
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+        logger.warning(
+            "planner_generation_fallback reason=provider_error error_type=%s",
+            type(error).__name__,
+        )
+        return fallback("provider_error", latency_ms=latency_ms)
+
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
+    session.expire_all()
+    plan = _require_plan(session, user.id, plan_id)
+    current_candidates = _candidate_records(session, plan.id)
+    current_constraints = session.get(PlanConstraint, plan.id)
+    current_narrative_request = _narrative_request(
+        session,
+        plan,
+        current_constraints.constraint_data if current_constraints else {},
+        current_candidates,
+    )
+    if current_narrative_request != narrative_request:
+        return fallback("plan_changed", latency_ms=latency_ms)
+    try:
+        validated_items = _validated_items(result.output, current_narrative_request)
+    except ValueError:
+        logger.warning("planner_generation_fallback reason=invalid_output")
+        _record_generation(
+            session,
+            plan.id,
+            status="fallback",
+            provider=result.provider,
+            model_identifier=result.model_identifier,
+            summary=deterministic_summary,
+            latency_ms=latency_ms,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            estimated_cost_micros=result.estimated_cost_micros,
+            fallback_reason="invalid_output",
+        )
+        session.commit()
+        return _generation_response(
+            session,
+            plan,
+            status="fallback",
+            summary=deterministic_summary,
+            fallback_reason="invalid_output",
+        )
+
+    course_by_id = {
+        candidate.course_id: require_course(session, candidate.course_id)
+        for candidate in current_candidates
+    }
+    session.execute(delete(ItineraryItem).where(ItineraryItem.plan_id == plan.id))
+    for position, (item_date, candidate, reasons) in enumerate(validated_items, start=1):
+        course = course_by_id[candidate.course_id]
+        session.add(ItineraryItem(
+            plan_id=plan.id,
+            course_id=course.id,
+            item_date=item_date,
+            position=position,
+            title=f"Play {course.name}",
+            start_time=None,
+            details={
+                "ai_generated": True,
+                "availability_verified": False,
+                "tee_time_window": narrative_request.preferences.get("tee_time_window"),
+                "rationale": reasons,
+                "caveats": candidate.caveats,
+            },
+        ))
+    plan.status = "draft"
+    plan.updated_at = datetime.now(UTC)
+    _record_generation(
+        session,
+        plan.id,
+        status="succeeded",
+        provider=result.provider,
+        model_identifier=result.model_identifier,
+        summary=result.output.summary,
+        latency_ms=latency_ms,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        estimated_cost_micros=result.estimated_cost_micros,
+    )
+    session.commit()
+    return _generation_response(
+        session,
+        plan,
+        status="generated",
+        summary=result.output.summary,
+    )
 
 
 @router.get("", response_model=list[PlanSummaryOut])
