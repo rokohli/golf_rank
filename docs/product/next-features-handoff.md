@@ -220,7 +220,7 @@ References: [Clerk custom session tokens](https://clerk.com/docs/guides/sessions
 - Cost-bearing generation uses fail-closed Redis user/IP token buckets, a per-user daily quota, a configurable monthly estimated-cost ceiling, a bounded provider timeout, and environment-backed model pricing estimates.
 - The mobile Planner exposes **Organize itinerary with AI**, displays generated versus deterministic-fallback status, and returns a changed itinerary to draft state before it can be saved.
 
-Local verification on July 23, 2026: 117 backend tests passed; all 20 frontend suites (124 tests) passed; `npx tsc --noEmit` and `git diff --check` passed; the exact Alembic upgrade-head, downgrade-base, upgrade-head cycle passed against a fresh PostgreSQL/PostGIS database; and all 12 limiter tests passed against real Redis.
+Local verification on July 23, 2026: 119 backend tests passed; all 20 frontend suites (124 tests) passed; `npx tsc --noEmit` and `git diff --check` passed; the exact Alembic upgrade-head, downgrade-base, upgrade-head cycle passed against a fresh PostgreSQL/PostGIS database; and all 12 limiter tests passed against real Redis.
 
 ### Staging delivery remaining
 

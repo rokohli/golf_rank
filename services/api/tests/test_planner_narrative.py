@@ -12,6 +12,22 @@ from app.planner_narrative import (
 )
 
 
+def _request() -> PlannerNarrativeRequest:
+    return PlannerNarrativeRequest(
+        title="Monterey",
+        start_date=date(2026, 8, 1),
+        end_date=date(2026, 8, 1),
+        preferences={"party_size": 4},
+        candidates=[NarrativeCandidate(
+            course_id=7,
+            name="Validated Course",
+            reasons=["You saved this course."],
+            caveats=["Tee-time availability has not been verified."],
+        )],
+        summary_options=["A validated itinerary."],
+    )
+
+
 def test_gemini_provider_uses_strict_structured_output(
     monkeypatch,
 ) -> None:
@@ -54,21 +70,7 @@ def test_gemini_provider_uses_strict_structured_output(
         ai_planner_enabled=True,
         gemini_api_key="test-key",
     ))
-    request = PlannerNarrativeRequest(
-        title="Monterey",
-        start_date=date(2026, 8, 1),
-        end_date=date(2026, 8, 1),
-        preferences={"party_size": 4},
-        candidates=[NarrativeCandidate(
-            course_id=7,
-            name="Validated Course",
-            reasons=["You saved this course."],
-            caveats=["Tee-time availability has not been verified."],
-        )],
-        summary_options=["A validated itinerary."],
-    )
-
-    result = asyncio.run(provider.generate(request))
+    result = asyncio.run(provider.generate(_request()))
 
     assert result.output.ordered_course_ids == [7]
     assert result.input_tokens == 80
@@ -80,3 +82,28 @@ def test_gemini_provider_uses_strict_structured_output(
         "A validated itinerary."
     ]
     assert "test-key" not in json.dumps(captured)
+
+
+def test_gemini_provider_preserves_timeout_reason(monkeypatch) -> None:
+    original_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    monkeypatch.setattr(
+        "app.planner_narrative.httpx.AsyncClient",
+        lambda **kwargs: original_async_client(
+            **kwargs, transport=httpx.MockTransport(handler)
+        ),
+    )
+    provider = GeminiPlannerNarrativeProvider(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="test-key",
+    ))
+
+    try:
+        asyncio.run(provider.generate(_request()))
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("Gemini timeouts must remain timeout fallbacks")

@@ -157,6 +157,8 @@ class GeminiPlannerNarrativeProvider:
                     json=payload,
                 )
                 response.raise_for_status()
+        except httpx.TimeoutException as error:
+            raise TimeoutError from error
         except (httpx.HTTPError, OSError) as error:
             raise PlannerNarrativeProviderError(type(error).__name__) from error
 

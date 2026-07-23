@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import PlanGeneration
+from app.models import Plan, PlanGeneration
 from app.planner_narrative import (
     PlannerNarrativeOutput,
     PlannerNarrativeRequest,
@@ -182,6 +182,40 @@ def test_invalid_ai_output_and_timeout_fall_back_without_replacing_itinerary() -
         assert response.json()["generation_status"] == "fallback"
         assert response.json()["fallback_reason"] == expected_reason
         assert [item["course"]["id"] for item in response.json()["itinerary"]] == original_ids
+
+
+def test_ai_itinerary_rejects_stale_output_after_plan_dates_change() -> None:
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json=_plan_payload("Plan changes in flight"),
+    ).json()
+    original_generate = provider.generate
+
+    async def generate_after_edit(
+        request: PlannerNarrativeRequest,
+    ) -> PlannerNarrativeResult:
+        with app.state.session_factory() as editing_session:
+            plan = editing_session.get(Plan, created["id"])
+            assert plan is not None
+            plan.start_date = plan.start_date.fromordinal(plan.start_date.toordinal() + 2)
+            plan.end_date = plan.end_date.fromordinal(plan.end_date.toordinal() + 2)
+            editing_session.commit()
+        return await original_generate(request)
+
+    provider.generate = generate_after_edit
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation_status"] == "fallback"
+    assert response.json()["fallback_reason"] == "plan_changed"
 
 
 def test_disabled_ai_planner_returns_deterministic_plan() -> None:

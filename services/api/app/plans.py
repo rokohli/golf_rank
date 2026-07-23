@@ -624,7 +624,6 @@ async def generate_ai_itinerary(
         constraints.constraint_data if constraints else {},
         candidate_rows,
     )
-    candidate_signature = [candidate.course_id for candidate in candidate_rows]
     session.commit()
     started_at = time.perf_counter()
     try:
@@ -649,12 +648,20 @@ async def generate_ai_itinerary(
         return fallback("provider_error", latency_ms=latency_ms)
 
     latency_ms = round((time.perf_counter() - started_at) * 1000)
+    session.expire_all()
     plan = _require_plan(session, user.id, plan_id)
     current_candidates = _candidate_records(session, plan.id)
-    if [candidate.course_id for candidate in current_candidates] != candidate_signature:
+    current_constraints = session.get(PlanConstraint, plan.id)
+    current_narrative_request = _narrative_request(
+        session,
+        plan,
+        current_constraints.constraint_data if current_constraints else {},
+        current_candidates,
+    )
+    if current_narrative_request != narrative_request:
         return fallback("plan_changed", latency_ms=latency_ms)
     try:
-        validated_items = _validated_items(result.output, narrative_request)
+        validated_items = _validated_items(result.output, current_narrative_request)
     except ValueError:
         logger.warning("planner_generation_fallback reason=invalid_output")
         _record_generation(
