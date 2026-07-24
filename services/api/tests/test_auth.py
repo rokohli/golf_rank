@@ -99,3 +99,20 @@ def test_enabled_ai_planner_requires_provider_key_and_positive_cost_controls() -
             gemini_api_key="test-key",
             rate_limit_enabled=False,
         ).validate_security()
+
+    with pytest.raises(ValueError, match="AI_PLANNER_ALLOWED_SUBJECTS"):
+        Settings(
+            ai_planner_enabled=True,
+            gemini_api_key="test-key",
+            ai_planner_data_tier="unpaid",
+        ).validate_security()
+
+    Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="test-key",
+        ai_planner_data_tier="unpaid",
+        ai_planner_allowed_subjects="dev:plan-alice",
+    ).validate_security()
+
+    with pytest.raises(ValueError, match="AI_PLANNER_DATA_TIER"):
+        Settings(ai_planner_data_tier="unknown").validate_security()

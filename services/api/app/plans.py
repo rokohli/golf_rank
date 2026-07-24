@@ -604,6 +604,9 @@ async def generate_ai_itinerary(
     provider = request.app.state.planner_narrative_provider
     if not settings.ai_planner_enabled or provider is None:
         return fallback("disabled")
+    allowed_subjects = settings.ai_planner_allowed_subject_set
+    if allowed_subjects and current.provider_subject not in allowed_subjects:
+        return fallback("restricted")
     if not candidate_rows:
         return fallback("no_candidates")
 

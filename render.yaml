@@ -63,6 +63,10 @@ services:
         value: gemini
       - key: GEMINI_API_KEY
         sync: false
+      - key: AI_PLANNER_DATA_TIER
+        value: paid
+      - key: AI_PLANNER_ALLOWED_SUBJECTS
+        value: ""
       - key: AI_PLANNER_MODEL
         value: gemini-2.5-flash
       - key: AI_PLANNER_TIMEOUT_SECONDS

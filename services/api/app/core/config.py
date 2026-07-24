@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     ai_planner_enabled: bool = False
     ai_planner_provider: str = "gemini"
     gemini_api_key: str | None = None
+    ai_planner_data_tier: str = "paid"
+    ai_planner_allowed_subjects: str = ""
     ai_planner_model: str = "gemini-2.5-flash"
     ai_planner_timeout_seconds: float = 12.0
     ai_planner_max_output_tokens: int = 1200
@@ -80,6 +82,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "RATE_LIMIT_ENABLED must be true when AI planner is enabled outside development"
                 )
+            if self.ai_planner_data_tier == "unpaid" and not self.ai_planner_allowed_subject_set:
+                raise ValueError(
+                    "AI_PLANNER_ALLOWED_SUBJECTS is required for unpaid Gemini usage"
+                )
+        if self.ai_planner_data_tier not in {"paid", "unpaid"}:
+            raise ValueError("AI_PLANNER_DATA_TIER must be paid or unpaid")
         positive_ai_settings = {
             "AI_PLANNER_TIMEOUT_SECONDS": self.ai_planner_timeout_seconds,
             "AI_PLANNER_MAX_OUTPUT_TOKENS": self.ai_planner_max_output_tokens,
@@ -136,3 +144,11 @@ class Settings(BaseSettings):
     @property
     def allowed_host_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @property
+    def ai_planner_allowed_subject_set(self) -> set[str]:
+        return {
+            subject.strip()
+            for subject in self.ai_planner_allowed_subjects.split(",")
+            if subject.strip()
+        }
