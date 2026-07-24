@@ -235,6 +235,31 @@ def test_disabled_ai_planner_returns_deterministic_plan() -> None:
     assert response.json()["itinerary"] == created["itinerary"]
 
 
+def test_ai_planner_allowlist_keeps_other_users_on_deterministic_fallback() -> None:
+    provider = RecordingNarrativeProvider()
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="test-key",
+        ai_planner_data_tier="unpaid",
+        ai_planner_allowed_subjects="dev:plan-alice",
+    ))
+    app.state.planner_narrative_provider = provider
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/plans", headers=BOB, json=_plan_payload("Restricted AI")
+    ).json()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary", headers=BOB
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation_status"] == "fallback"
+    assert response.json()["fallback_reason"] == "restricted"
+    assert response.json()["itinerary"] == created["itinerary"]
+    assert provider.requests == []
+
+
 def test_ai_planner_monthly_cost_ceiling_prevents_provider_spend() -> None:
     provider = RecordingNarrativeProvider()
     app = _ai_app(provider, monthly_cost_limit_cents=1)

@@ -131,3 +131,11 @@ per user per day; Redis failure is fail-closed for this cost-bearing route.
 Configure the model's conservative per-million-token micro-dollar rates and
 monthly cost ceiling alongside the model so persisted generation metadata can
 stop new spend.
+
+For controlled free-tier QA only, set `AI_PLANNER_DATA_TIER=unpaid` and list
+the synthetic-test Clerk subjects (including the `clerk:` prefix) in
+`AI_PLANNER_ALLOWED_SUBJECTS`. When unpaid generation is enabled the API refuses
+to start without that allowlist; non-allowlisted users receive the unchanged
+deterministic itinerary and no request is sent to Gemini. Replace the key with a
+paid-tier key, set `AI_PLANNER_DATA_TIER=paid`, and clear the allowlist only
+after completing the privacy-safe rollout.

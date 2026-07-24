@@ -230,6 +230,14 @@ Local verification on July 23, 2026: 119 backend tests passed; all 20 frontend s
 4. Confirm Redis is healthy, then enable `AI_PLANNER_ENABLED=true`. Trigger one controlled generation and verify only supplied course IDs appear, dates remain in range, all unknown-price and availability caveats survive, metadata is written, and the mobile summary shows **AI ORGANIZED**.
 5. Exercise disabled-provider, provider-error, invalid-output, `429`, Redis-unavailable `503`, cross-user `404`, and monthly-ceiling fallbacks with synthetic accounts before calling the feature delivered.
 
+Temporary free-tier QA exception: set `AI_PLANNER_DATA_TIER=unpaid` and
+`AI_PLANNER_ALLOWED_SUBJECTS` to only the controlled synthetic-test Clerk
+subjects. Enabled unpaid usage fails startup without the allowlist, and all
+other users receive a `restricted` deterministic fallback without provider
+spend or data transmission. Do not send real-user, personal, confidential, or
+sensitive plan data. Before broader staging, replace the key with a paid-tier
+key, set `AI_PLANNER_DATA_TIER=paid`, and clear the allowlist.
+
 Rollback: set `AI_PLANNER_ENABLED=false` first. The endpoint will continue returning the deterministic itinerary without provider spend. The additive metadata table can remain deployed; do not downgrade the production database merely to disable the feature.
 
 ### Product rule

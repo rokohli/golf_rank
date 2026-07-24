@@ -299,6 +299,9 @@ async def ai_planner_rate_limit(
     settings = request.app.state.settings
     if not settings.ai_planner_enabled:
         return
+    allowed_subjects = settings.ai_planner_allowed_subject_set
+    if allowed_subjects and user.provider_subject not in allowed_subjects:
+        return
     policy = RateLimitPolicy(
         "ai-planner",
         settings.ai_planner_rate_limit_capacity,
