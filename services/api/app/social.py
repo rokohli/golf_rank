@@ -67,6 +67,10 @@ class ReactionOut(BaseModel):
     viewer_reacted: bool
 
 
+class BlockedUserOut(UserSummaryOut):
+    blocked_at: datetime
+
+
 def _summary(session: Session, user: User) -> UserSummaryOut:
     preferences = session.get(OnboardingPreference, user.id)
     profile = session.get(Profile, user.id)
@@ -372,6 +376,19 @@ def unblock_user(target_user_id: int, current: CurrentUser = Depends(current_use
     session.execute(delete(UserBlock).where(UserBlock.blocker_id == user.id, UserBlock.blocked_id == target_user_id))
     session.commit()
     return Response(status_code=204)
+
+
+@router.get("/api/v1/me/blocks", response_model=list[BlockedUserOut])
+def list_blocked_users(
+    current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
+) -> list[BlockedUserOut]:
+    user = require_user(session, current)
+    blocks = session.scalars(
+        select(UserBlock)
+        .where(UserBlock.blocker_id == user.id)
+        .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+    ).all()
+    return [BlockedUserOut(**_summary(session, session.get(User, block.blocked_id)).model_dump(), blocked_at=block.created_at) for block in blocks]
 
 
 @router.put("/api/v1/me/mutes/{target_user_id}", status_code=204)

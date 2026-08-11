@@ -64,6 +64,8 @@ export type Course = {
   distance_miles?: number | null
 }
 
+export type BlockedUser = UserSummary & { blocked_at: string }
+
 export type RatingTier = 'green' | 'fairway' | 'rough' | 'bunker'
 
 export type RankingTier = RatingTier

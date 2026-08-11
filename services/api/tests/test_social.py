@@ -160,6 +160,23 @@ def test_block_removes_relationship_and_hides_users_and_feed() -> None:
     assert client.get("/api/v1/me/follows", headers=alice).json() == []
 
 
+def test_blocked_account_list_is_owner_scoped_and_can_be_unblocked() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:blocked-list-alice", "Alice", "blockedlistalice")
+    bob = _profile(client, "dev:blocked-list-bob", "Bob", "blockedlistbob")
+    charlie = _profile(client, "dev:blocked-list-charlie", "Charlie", "blockedlistcharlie")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "blockedlistbob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+
+    listed = client.get("/api/v1/me/blocks", headers=alice)
+    assert listed.status_code == 200
+    assert listed.json()[0]["username"] == "blockedlistbob"
+    assert client.get("/api/v1/me/blocks", headers=charlie).json() == []
+
+    assert client.delete(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.get("/api/v1/me/blocks", headers=alice).json() == []
+
+
 def test_relationship_removals_cannot_change_another_users_state() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:relationship-alice", "Alice", "relationshipalice")

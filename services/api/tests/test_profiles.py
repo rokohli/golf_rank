@@ -72,3 +72,41 @@ def test_profile_is_scoped_to_current_user() -> None:
     response = client.get("/api/v1/me/profile", headers={"X-Development-Subject": "dev:bob"})
 
     assert response.status_code == 404
+
+
+def test_data_export_contains_only_the_authenticated_users_application_data() -> None:
+    client = TestClient(create_app())
+    alice = {"X-Development-Subject": "dev:export-alice"}
+    bob = {"X-Development-Subject": "dev:export-bob"}
+    for headers, first_name, username in ((alice, "Alice", "exportalice"), (bob, "Bob", "exportbob")):
+        assert client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": "Monterey, CA", "max_green_fee": 250,
+                "difficulty": "any", "access": "any",
+                "onboarding_data": {
+                    "first_name": first_name, "last_name": "Golfer", "username": username,
+                    "home_course_search": "Pebble Beach", "travel_distance": "Any",
+                    "preferred_tee_time": "Morning",
+                },
+            },
+        ).status_code == 200
+    assert client.post(
+        "/api/v1/me/rounds", headers=alice,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 80, "visibility": "private"},
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 2, "played_on": "2026-07-02", "score": 90, "visibility": "private"},
+    ).status_code == 201
+
+    response = client.get("/api/v1/me/data-export", headers=alice)
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="golfrank-data-export.json"'
+    exported = response.json()
+    assert exported["export_version"] == 1
+    assert exported["profile"]["onboarding_data"]["username"] == "exportalice"
+    assert [round_["score"] for round_ in exported["rounds"]] == [80]
+    assert "provider_subject" not in str(exported)

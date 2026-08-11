@@ -26,6 +26,7 @@ import {
   SavedList,
   TierPlacement,
   UserSummary,
+  BlockedUser,
 } from '../types'
 
 const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
@@ -342,6 +343,18 @@ export async function muteUser(userId: number, muted: boolean, headers: ApiHeade
 export async function blockUser(userId: number, blocked: boolean, headers: ApiHeaders): Promise<void> {
   const response = await fetch(`${baseUrl}/api/v1/me/blocks/${userId}`, { method: blocked ? 'PUT' : 'DELETE', headers })
   if (!response.ok) throw await responseError(response, 'Unable to update block settings. Please try again.')
+}
+
+export async function getBlockedUsers(headers: ApiHeaders): Promise<BlockedUser[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/blocks`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load blocked accounts. Please try again.')
+  return response.json()
+}
+
+export async function getDataExport(headers: ApiHeaders): Promise<object> {
+  const response = await fetch(`${baseUrl}/api/v1/me/data-export`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to prepare your data export. Please try again.')
+  return response.json()
 }
 
 export async function getFriends(headers: ApiHeaders): Promise<FriendSummary[]> {

@@ -54,11 +54,12 @@ export default function Settings() {
       <SettingsSection title="APP">
         <SettingsRow icon="bell" label="Notifications" meta={profile?.onboarding_data?.notifications === false ? 'Off' : 'On'} onPress={() => router.push('/notifications')} />
         <SettingsRow icon="lock" label="Privacy & visibility" meta={visibilitySummary(profile)} onPress={() => router.push('/privacy' as never)} />
-        <SettingsRow icon="slash" label="Blocked accounts" onPress={() => router.push('/friends')} />
+        <SettingsRow icon="slash" label="Blocked accounts" onPress={() => router.push('/blocked' as never)} />
       </SettingsSection>
 
       <SettingsSection title="ACCOUNT">
         <SettingsRow icon="shield" label="Email & security" meta="Managed by Clerk" />
+        <SettingsRow icon="download" label="Download my data" meta="JSON export" onPress={() => router.push('/data-export' as never)} />
         <SettingsRow icon="help-circle" label="Help & support" onPress={() => void Linking.openURL('mailto:support@golfrank.app?subject=GolfRank%20support')} />
       </SettingsSection>
 

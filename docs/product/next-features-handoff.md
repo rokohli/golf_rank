@@ -345,12 +345,38 @@ The app persists one notification preference, but it does not register device to
 
 ## 8. Distribution and operational readiness
 
-- Add EAS project configuration with development, staging preview, and production profiles.
+- EAS build profiles now exist in `apps/frontend/eas.json` for development, iOS Simulator development, staging preview, and production. The project is not yet linked to EAS, and final store identifiers, signing, EAS variables, and production services remain external cutover work. Follow `docs/deployment/mobile-production.md`; do not point a public binary at staging.
 - Keep staging pointed at the current Render/Supabase/Clerk staging environment.
 - Create separate production Render, Supabase, and Clerk resources before inviting real users.
-- Add backend error reporting, structured request IDs, uptime checks on `/ready`, and alerts for deployment or database failures.
+- Selected but not integrated: Sentry for privacy-minimized FastAPI and React Native errors; Better Stack for external `/health` and `/ready` alerting; and encrypted private Cloudflare R2 daily logical backup copies. Supabase Pro and PITR are deliberately deferred as uneconomical. The existing Supabase Free project is controlled-beta only because it has neither automatic backups nor an inactivity availability guarantee. The beta target is RPO 24 hours / best-effort RTO four hours; run an R2 restore drill before inviting users. See `docs/deployment/mobile-production.md` for the decision, limits, and implementation contract.
 - Add mobile crash reporting and a minimal privacy-aware analytics plan for onboarding completion, search success, first rating, first round, first friend, saved trip, and planner fallback rate.
-- Move production to managed daily backups and perform a cloud restore drill before launch.
+- Before a public launch, select a costed database availability plan and perform a cloud restore drill. Do not treat the controlled-beta Supabase Free/R2 setup as a production availability guarantee.
+
+## 9. Safe user controls and course sharing
+
+This slice is safe to build before legal copy or consent enforcement because it improves the user's control over existing data and public course discovery without making a new retention or policy promise.
+
+### Blocked-account management
+
+- Implemented locally: owner-scoped blocked-accounts list endpoint and Settings screen.
+- A user can unblock an account from that screen; it exposes only the blocked account's existing display summary, never private profile or activity details.
+- Keep the existing block behavior in search, follows, feed visibility, and reactions intact.
+
+### Public course sharing
+
+The current course-page Share action opens the native sheet but sends only a course name and location. It is not useful recipient navigation.
+
+- Share a canonical HTTPS public-course URL, not the `golfrank://` custom scheme.
+- Before exposing the action as complete, configure a production web fallback that renders the public course name, location, source attribution, and an app-install/open call to action for users without the app.
+- Configure iOS Universal Links and Android App Links only after the final owned production domain is selected and verified. An installed app should open the matching in-app course route; an uninstalled recipient should see the same real course on the web.
+- The shared page must use the public catalog only. Never include a sender identity, personal rating, round, saved state, friend activity, private notes, or an unverified price/availability claim.
+- Test native sharing, installed-app opening, web fallback, invalid/retired course IDs, and the course data attribution requirement.
+
+### Explicitly deferred
+
+- Implemented locally: Download-my-data produces a shareable JSON file containing GolfRank-owned profile, rounds, ratings, rankings, plans, saves, relationships, activity, and course-submission data. Clerk identity/security data and another user's private data are excluded.
+- “Delete GolfRank data” requires a separate product decision on retention and whether Clerk identity deletion belongs in the same action.
+- User/content reporting remains deferred until there is a moderation queue and named response owner.
 
 ## Definition of done for every feature
 
