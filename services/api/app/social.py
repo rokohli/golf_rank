@@ -106,6 +106,16 @@ def _profile_visibility(session: Session, user_id: int) -> str:
     return onboarding.get("profile_visibility", "public")
 
 
+def _profile_is_visible_to(session: Session, viewer_id: int, target_user_id: int) -> bool:
+    visibility = _profile_visibility(session, target_user_id)
+    if visibility == "public":
+        return True
+    if visibility != "friends":
+        return False
+    _, mutual_ids = _relationship_sets(session, viewer_id)
+    return target_user_id in mutual_ids
+
+
 def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
     return (
         event.actor_user_id == viewer_id
@@ -356,6 +366,8 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     target = session.get(User, target_user_id)
     if target is None:
         raise HTTPException(404, "User not found")
+    if not _profile_is_visible_to(session, user_id, target_user_id):
+        raise HTTPException(404, "User not found")
     return target
 
 
@@ -388,7 +400,24 @@ def list_blocked_users(
         .where(UserBlock.blocker_id == user.id)
         .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
     ).all()
-    return [BlockedUserOut(**_summary(session, session.get(User, block.blocked_id)).model_dump(), blocked_at=block.created_at) for block in blocks]
+    output: list[BlockedUserOut] = []
+    for block in blocks:
+        target = session.get(User, block.blocked_id)
+        if target is None:
+            continue
+        if _profile_is_visible_to(session, user.id, target.id):
+            summary = _summary(session, target)
+        else:
+            summary = UserSummaryOut(
+                id=target.id,
+                username=None,
+                display_name="Blocked account",
+                home_region=None,
+                follower_count=0,
+                following_count=0,
+            )
+        output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
+    return output
 
 
 @router.put("/api/v1/me/mutes/{target_user_id}", status_code=204)

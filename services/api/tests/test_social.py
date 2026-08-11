@@ -177,6 +177,29 @@ def test_blocked_account_list_is_owner_scoped_and_can_be_unblocked() -> None:
     assert client.get("/api/v1/me/blocks", headers=alice).json() == []
 
 
+def test_blocking_respects_profile_visibility_and_masks_later_private_profiles() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:block-privacy-alice", "Alice", "blockprivacyalice")
+    bob = _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "blockprivacybob"}).json()[0]["id"]
+
+    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob", "private")
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 404
+
+    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob")
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob", "private")
+
+    blocked = client.get("/api/v1/me/blocks", headers=alice)
+    assert blocked.status_code == 200
+    assert blocked.json()[0]["id"] == bob_id
+    assert blocked.json()[0]["username"] is None
+    assert blocked.json()[0]["display_name"] == "Blocked account"
+    assert blocked.json()[0]["home_region"] is None
+    assert blocked.json()[0]["follower_count"] == 0
+    assert blocked.json()[0]["following_count"] == 0
+
+
 def test_relationship_removals_cannot_change_another_users_state() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:relationship-alice", "Alice", "relationshipalice")
