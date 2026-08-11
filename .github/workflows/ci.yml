@@ -102,12 +102,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/frontend
         run: npm ci
-      # Expo SDK 53 currently inherits high-severity Metro/React Native findings
-      # with no compatible upstream fix. Keep critical vulnerabilities merge-blocking
-      # until the planned SDK upgrade can remediate that baseline.
-      - name: Audit frontend dependencies for critical vulnerabilities
+      - name: Audit frontend dependencies
         working-directory: apps/frontend
-        run: npm audit --audit-level=critical
+        run: node scripts/audit-high-severity.js
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"

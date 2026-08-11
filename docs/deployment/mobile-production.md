@@ -68,7 +68,7 @@ Supabase backups cover database contents, not objects deleted from Storage. If p
 - The release owner has completed the daily encrypted R2 backup and the weekly restore drill. A public launch cannot proceed while the application is on a Supabase Free project; select a costed database/availability plan at that point.
 - Production `/health` and `/ready` are healthy; missing, malformed, and wrong-audience tokens are rejected.
 - Rate-limit alerts, uptime monitoring, backend error reporting, and mobile crash reporting have each delivered one controlled test event.
-- `npm audit --omit=dev --audit-level=high` has no unreviewed high or critical findings. As of this initial EAS setup, the Expo 53 / React Native 0.79 dependency tree reports high findings without a non-breaking remediation; treat the required Expo SDK upgrade or an explicitly time-bounded risk acceptance as a separate release gate.
+- `npm audit --omit=dev --audit-level=high` has no unreviewed high or critical findings. CI allows only nine individually reviewed Expo 53 / React Native 0.79 advisory IDs through 2026-11-30; it blocks every new high or critical finding. Remove that time-bounded baseline through the required Expo SDK upgrade or a renewed explicit review.
 - Privacy Policy, Terms, account-deletion, data-export, support, and reporting paths are available in the release candidate.
 - App Store Connect/TestFlight and Google Play internal testing have accepted the first store-signed production builds.
 - A named release owner has approved the production configuration and rollback plan.
