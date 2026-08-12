@@ -467,7 +467,7 @@ def activity_feed(
 
 def _require_visible_event(session: Session, user_id: int, event_id: int) -> ActivityEvent:
     event = session.get(ActivityEvent, event_id)
-    if event is None or event.actor_user_id in _blocked_ids(session, user_id):
+    if event is None or event.actor_user_id in _blocked_ids(session, user_id) | _muted_ids(session, user_id):
         raise HTTPException(404, "Activity not found")
     followed_ids, mutual_ids = _relationship_sets(session, user_id)
     if not _event_visible(event, user_id, followed_ids, mutual_ids):

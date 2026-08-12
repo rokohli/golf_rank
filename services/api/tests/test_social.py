@@ -488,6 +488,24 @@ def test_feed_cursor_is_stable_and_mute_hides_followed_activity() -> None:
     assert client.get("/api/v1/feed", headers=alice).json()["items"] == []
 
 
+def test_direct_activity_read_respects_mutes() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:direct-mute-alice", "Alice", "alice")
+    bob = _profile(client, "dev:direct-mute-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    created = client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 1, "played_on": "2026-08-12", "score": 80, "visibility": "public"},
+    )
+    assert created.status_code == 201
+    event_id = client.get("/api/v1/feed", headers=alice).json()["items"][0]["id"]
+    assert client.get(f"/api/v1/feed/{event_id}", headers=alice).status_code == 200
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.get(f"/api/v1/feed/{event_id}", headers=alice).status_code == 404
+
+
 def test_feed_cursor_pages_through_many_events_with_the_same_timestamp() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:same-time-alice", "Alice", "alice")
