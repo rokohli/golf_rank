@@ -221,6 +221,19 @@ def course_friend_thoughts(
         note.round_id: note
         for note in session.scalars(select(RoundNote).where(RoundNote.round_id.in_(rating_round_ids))).all()
     }
+    activity_ids = {
+        (event.actor_user_id, event.subject_id): event.id
+        for event in session.scalars(
+            select(ActivityEvent)
+            .where(
+                ActivityEvent.actor_user_id.in_(friend_ids),
+                ActivityEvent.subject_type == "rating_round",
+                ActivityEvent.subject_id.in_(rating_round_ids),
+                ActivityEvent.visibility == "friends",
+            )
+            .order_by(ActivityEvent.id.desc())
+        ).all()
+    }
 
     entries: list[FriendCourseThoughtOut] = []
     for rating in ratings:
@@ -236,6 +249,9 @@ def course_friend_thoughts(
             favorite_hole = round_.favorite_hole
         entries.append(FriendCourseThoughtOut(
             user=_thought_identity(session, friend),
+            # A previously shared rating activity is not a target for a later
+            # private round; the current round's visibility remains authoritative.
+            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_ is not None and round_.visibility == "friends" else None,
             rating=rating.rating,
             tier=rating.tier,
             note=note,
@@ -458,6 +474,38 @@ def _require_visible_event(session: Session, user_id: int, event_id: int) -> Act
     return event
 
 
+def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> ActivityOut:
+    actor = session.get(User, event.actor_user_id)
+    if actor is None:
+        raise HTTPException(404, "Activity not found")
+    course = None
+    course_id = event.event_data.get("course_id")
+    if isinstance(course_id, int):
+        try:
+            stored_course = require_course(session, course_id)
+        except HTTPException:
+            stored_course = None
+        if stored_course is not None:
+            course = course_data(stored_course)
+    reaction_count, viewer_reacted = _reaction_state(session, event.id, viewer_id)
+    return ActivityOut(
+        id=event.id, event_type=event.event_type, subject_type=event.subject_type,
+        subject_id=event.subject_id, actor=_summary(session, actor), course=course,
+        data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+        is_own_activity=event.actor_user_id == viewer_id, created_at=event.created_at,
+    )
+
+
+@router.get("/api/v1/feed/{event_id}", response_model=ActivityOut)
+def get_activity(
+    event_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ActivityOut:
+    user = require_user(session, current)
+    return _activity_out(session, _require_visible_event(session, user.id, event_id), user.id)
+
+
 @router.put("/api/v1/feed/{event_id}/reactions/{reaction}", response_model=ReactionOut)
 def add_reaction(
     event_id: int,
@@ -498,7 +546,11 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     target = session.get(User, target_user_id)
     if target is None:
         raise HTTPException(404, "User not found")
-    if not _profile_is_visible_to(session, user_id, target_user_id):
+    followed_ids, _ = _relationship_sets(session, user_id)
+    # A relationship may predate a target's switch to private visibility. Keep
+    # safety controls available for that known target, without making private
+    # profiles discoverable to strangers.
+    if target_user_id not in followed_ids and not _profile_is_visible_to(session, user_id, target_user_id):
         raise HTTPException(404, "User not found")
     return target
 

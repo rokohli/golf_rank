@@ -128,6 +128,7 @@ export type RatingCandidate = Course | null
 
 export type FriendCourseThought = {
   user: FriendSummary
+  activity_id: number | null
   rating: number
   tier: RatingTier
   note: string | null

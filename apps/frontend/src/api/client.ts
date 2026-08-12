@@ -1,6 +1,7 @@
 import { ApiHeaders } from '../auth/useAuthToken'
 import {
   AIGolfPlan,
+  Activity,
   Course,
   CourseRegion,
   CourseSearchFilters,
@@ -161,6 +162,12 @@ export async function getRounds(
   const query = params.toString()
   const response = await fetch(`${baseUrl}/api/v1/me/rounds${query ? `?${query}` : ''}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load your rounds. Please try again.')
+  return response.json()
+}
+
+export async function getActivity(eventId: number, headers: ApiHeaders): Promise<Activity> {
+  const response = await fetch(`${baseUrl}/api/v1/feed/${eventId}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load this activity. Please try again.')
   return response.json()
 }
 

@@ -79,12 +79,14 @@ def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared
         "rating_count": 1,
         "entries": [{
             "user": {"id": 2, "display_name": "Bob Golfer", "username": "bob"},
+            "activity_id": 1,
             "rating": 9.2,
             "tier": "green",
             "note": "Windy but fun.",
             "favorite_hole": 7,
         }],
     }
+    assert client.get("/api/v1/feed/1", headers=alice).status_code == 200
 
     # The rating remains a social projection, but a private round never leaks
     # its memories, score, companions, or round identifier.
@@ -92,6 +94,7 @@ def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared
     private_memory = client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()
     assert private_memory["entries"][0] == {
         "user": {"id": 2, "display_name": "Bob Golfer", "username": "bob"},
+        "activity_id": None,
         "rating": 9.2,
         "tier": "green",
         "note": None,
@@ -126,6 +129,17 @@ def test_course_friend_thoughts_excludes_one_way_private_blocked_and_muted_relat
     assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
     assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["entries"] == []
+
+
+def test_known_private_follow_target_can_still_be_blocked_or_muted() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:private-controls-alice", "Alice", "alice")
+    bob = _profile(client, "dev:private-controls-bob", "Bob", "bob")
+    bob_id = _mutual_friend(client, alice, bob, "bob")
+    _profile(client, "dev:private-controls-bob", "Bob", "bob", "private")
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
 
 
 def test_course_friend_thoughts_uses_canonical_course_identity_and_cannot_open_friend_rounds() -> None:

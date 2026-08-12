@@ -217,6 +217,7 @@ class FriendCourseThoughtUserOut(BaseModel):
 
 class FriendCourseThoughtOut(BaseModel):
     user: FriendCourseThoughtUserOut
+    activity_id: int | None = None
     rating: float = Field(ge=1, le=10)
     tier: RankingTier
     note: str | None = None

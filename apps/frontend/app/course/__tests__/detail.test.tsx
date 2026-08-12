@@ -202,8 +202,8 @@ describe('course detail ratings', () => {
       average_rating: 8.6,
       rating_count: 2,
       entries: [
-        { user: { id: 4, display_name: 'Avery Green', username: 'avery' }, rating: 9.1, tier: 'green', note: 'Great closing stretch.', favorite_hole: 18 },
-        { user: { id: 5, display_name: 'Blair Tee', username: 'blair' }, rating: 8.1, tier: 'fairway', note: null, favorite_hole: null },
+        { user: { id: 4, display_name: 'Avery Green', username: 'avery' }, activity_id: 44, rating: 9.1, tier: 'green', note: 'Great closing stretch.', favorite_hole: 18 },
+        { user: { id: 5, display_name: 'Blair Tee', username: 'blair' }, activity_id: null, rating: 8.1, tier: 'fairway', note: null, favorite_hole: null },
       ],
     }))
     expect(await screen.findByLabelText('Friends rating 8.6 out of 10')).toBeOnTheScreen()
@@ -213,6 +213,8 @@ describe('course detail ratings', () => {
     expect(screen.getByText('Blair Tee')).toBeOnTheScreen()
     expect(screen.queryByText('Favorite hole null')).toBeNull()
     expect(screen.queryByText('null')).toBeNull()
+    fireEvent.press(screen.getByRole('button', { name: "Open Avery Green's shared activity" }))
+    expect(mockPush).toHaveBeenLastCalledWith('/activity/44')
 
     mockGetFriendsCourseThoughts.mockRejectedValueOnce(new Error('Friends service unavailable'))
     fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
