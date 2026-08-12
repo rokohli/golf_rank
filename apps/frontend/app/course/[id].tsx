@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Linking, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-import { createSavedList, getCourse, getCourseRating, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
+import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
-import { Course, CourseRatingState, RoundPatch, SavedList } from '../../src/types'
+import { Course, CourseRatingState, FriendsCourseThoughts, RoundPatch, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
 export default function CourseDetail() {
@@ -19,6 +19,7 @@ export default function CourseDetail() {
   const mounted = useRef(true)
   const ratingRequestVersion = useRef(0)
   const savedRequestVersion = useRef(0)
+  const friendsRequestVersion = useRef(0)
   const isNumericRoute = Boolean(id && /^\d+$/.test(id))
   const numericCourseId = isNumericRoute ? Number(id) : null
   const [course, setCourse] = useState<CoursePresentation | null>(null)
@@ -28,6 +29,9 @@ export default function CourseDetail() {
   const [rating, setRating] = useState<CourseRatingState | null>(null)
   const [ratingError, setRatingError] = useState<string | null>(null)
   const [ratingLoading, setRatingLoading] = useState(Boolean(numericCourseId))
+  const [friendsThoughts, setFriendsThoughts] = useState<FriendsCourseThoughts | null>(null)
+  const [friendsThoughtsError, setFriendsThoughtsError] = useState<string | null>(null)
+  const [friendsThoughtsLoading, setFriendsThoughtsLoading] = useState(Boolean(numericCourseId))
   const [savedLists, setSavedLists] = useState<SavedList[] | null>(null)
   const [saveLoading, setSaveLoading] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -40,6 +44,7 @@ export default function CourseDetail() {
       mounted.current = false
       ratingRequestVersion.current += 1
       savedRequestVersion.current += 1
+      friendsRequestVersion.current += 1
     }
   }, [])
 
@@ -77,6 +82,13 @@ export default function CourseDetail() {
     setRating(null)
     setRatingError(null)
     setRatingLoading(Boolean(numericCourseId))
+  }, [numericCourseId])
+
+  useEffect(() => {
+    friendsRequestVersion.current += 1
+    setFriendsThoughts(null)
+    setFriendsThoughtsError(null)
+    setFriendsThoughtsLoading(Boolean(numericCourseId))
   }, [numericCourseId])
 
   const refreshRating = useCallback(async () => {
@@ -122,6 +134,28 @@ export default function CourseDetail() {
       if (mounted.current && requestVersion === savedRequestVersion.current) {
         setSaveError(errorMessage(reason, 'Unable to load saved courses.'))
       }
+    }
+  }, [getAuthHeaders, numericCourseId])
+
+  const refreshFriendsThoughts = useCallback(async () => {
+    const requestVersion = ++friendsRequestVersion.current
+    if (!numericCourseId) {
+      if (mounted.current && requestVersion === friendsRequestVersion.current) {
+        setFriendsThoughts(null)
+        setFriendsThoughtsError(null)
+        setFriendsThoughtsLoading(false)
+      }
+      return
+    }
+    setFriendsThoughtsError(null)
+    setFriendsThoughtsLoading(true)
+    try {
+      const nextThoughts = await getFriendsCourseThoughts(numericCourseId, await getAuthHeaders())
+      if (mounted.current && requestVersion === friendsRequestVersion.current) setFriendsThoughts(nextThoughts)
+    } catch (reason) {
+      if (mounted.current && requestVersion === friendsRequestVersion.current) setFriendsThoughtsError(errorMessage(reason, 'Unable to load friends’ thoughts.'))
+    } finally {
+      if (mounted.current && requestVersion === friendsRequestVersion.current) setFriendsThoughtsLoading(false)
     }
   }, [getAuthHeaders, numericCourseId])
 
@@ -191,11 +225,13 @@ export default function CourseDetail() {
   useFocusEffect(useCallback(() => {
     void refreshRating()
     void refreshSavedState()
+    void refreshFriendsThoughts()
     return () => {
       ratingRequestVersion.current += 1
       savedRequestVersion.current += 1
+      friendsRequestVersion.current += 1
     }
-  }, [refreshRating, refreshSavedState]))
+  }, [refreshFriendsThoughts, refreshRating, refreshSavedState]))
 
   if (!course) {
     return <>
@@ -263,7 +299,7 @@ export default function CourseDetail() {
         <DisclosureRow expanded={openDetails === 'personal'} icon="edit-3" label="Your thoughts & details" onPress={() => setOpenDetails((current) => current === 'personal' ? null : 'personal')} />
         {openDetails === 'personal' ? <PersonalDetails onSave={updatePersonalDetail} rating={rating} /> : null}
         <DisclosureRow expanded={openDetails === 'friends'} icon="users" label="Friends’ thoughts & details" onPress={() => setOpenDetails((current) => current === 'friends' ? null : 'friends')} />
-        {openDetails === 'friends' ? <View style={styles.disclosureBody}><Text style={styles.emptyText}>Friends’ thoughts aren’t available yet.</Text></View> : null}
+        {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
       </View>
     </ProductScreen>
   </>
@@ -276,6 +312,15 @@ function CourseAction({ disabled = false, icon, label, onPress }: { disabled?: b
 }
 
 function DisclosureRow({ expanded, icon, label, onPress }: { expanded: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ expanded }} onPress={onPress} style={styles.disclosureRow}><Feather name={icon} size={18} color={colors.pineDark} /><Text style={styles.disclosureLabel}>{label}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={18} color={colors.pineDark} /></Pressable> }
+function FriendsThoughts({ error, loading, onRetry, thoughts }: { error: string | null; loading: boolean; onRetry: () => Promise<void>; thoughts: FriendsCourseThoughts | null }) {
+  if (loading) return <View style={styles.disclosureBody}><ActivityIndicator accessibilityLabel="Loading friends’ thoughts" color={colors.pine} /><Text style={styles.emptyText}>Loading friends’ thoughts…</Text></View>
+  if (error) return <View style={styles.disclosureBody}><Text accessibilityRole="alert" style={styles.detailError}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void onRetry()}><Text style={styles.retryText}>Retry friends’ thoughts</Text></Pressable></View>
+  if (!thoughts || thoughts.rating_count === 0) return <View style={styles.disclosureBody}><Text style={styles.emptyText}>No friends have rated this course yet.</Text></View>
+  return <View style={styles.friendsThoughts}>
+    <View style={styles.friendAggregate}><Text accessibilityLabel={`Friends rating ${thoughts.average_rating?.toFixed(1)} out of 10`} style={styles.friendAggregateValue}>{thoughts.average_rating?.toFixed(1)}<Text style={styles.ratingScale}>/10</Text></Text><Text style={styles.friendAggregateLabel}>Friends’ rating · {thoughts.rating_count === 1 ? '1 rating' : `${thoughts.rating_count} ratings`}</Text></View>
+    {thoughts.entries.map((entry) => <View key={entry.user.id} style={styles.friendThought}><View style={styles.friendThoughtHeader}><Text style={styles.friendName}>{entry.user.display_name}</Text><Text style={styles.friendRating}>{entry.rating.toFixed(1)}/10 · {titleCase(entry.tier)}</Text></View>{entry.note ? <Text style={styles.friendNote}>{entry.note}</Text> : null}{entry.favorite_hole != null ? <Text style={styles.friendHole}>Favorite hole {entry.favorite_hole}</Text> : null}</View>)}
+  </View>
+}
 type EditableDetail = 'score' | 'note' | 'favorite_hole'
 
 function PersonalDetails({ onSave, rating }: { onSave: (field: EditableDetail, value: number | string | null) => Promise<void>; rating: CourseRatingState | null }) {
@@ -342,6 +387,7 @@ const styles = StyleSheet.create({
   teeTimes: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 46 }, teeTimesText: { color: colors.pineDark, fontSize: 13, fontWeight: '700' }, pressed: { opacity: 0.7 },
   photoSection: { gap: 12 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, photoRow: { flexDirection: 'row', gap: 8 }, photo: { aspectRatio: 1.25, borderRadius: 7, flex: 1 }, photoCredit: { color: colors.muted, fontSize: 9 }, emptyPhotos: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, minHeight: 58 }, emptyText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
   disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailDisabledRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 52, opacity: 0.65, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDisabledValue: { color: colors.muted, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  friendsThoughts: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, friendAggregate: { alignItems: 'center', backgroundColor: '#F1EEE5', paddingVertical: 16 }, friendAggregateValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 28 }, friendAggregateLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.7, marginTop: 5, textTransform: 'uppercase' }, friendThought: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, gap: 6, paddingHorizontal: 14, paddingVertical: 13 }, friendThoughtHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, friendName: { color: colors.ink, flex: 1, fontFamily: 'Georgia', fontSize: 15 }, friendRating: { color: colors.pineDark, fontSize: 10, fontWeight: '800' }, friendNote: { color: colors.ink, fontSize: 12, lineHeight: 18 }, friendHole: { color: colors.muted, fontSize: 10, fontWeight: '700' },
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })
 

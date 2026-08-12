@@ -7,6 +7,7 @@ import {
   CourseRatingInput,
   CourseRatingState,
   FriendSummary,
+  FriendsCourseThoughts,
   FeedPage,
   Follow,
   GolfRound,
@@ -107,6 +108,12 @@ export async function submitCourseCandidate(
 export async function getCourse(courseId: number): Promise<Course> {
   const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}`)
   if (!response.ok) throw await responseError(response, 'Unable to load this course. Please try again.')
+  return response.json()
+}
+
+export async function getFriendsCourseThoughts(courseId: number, headers: ApiHeaders): Promise<FriendsCourseThoughts> {
+  const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}/friends-thoughts`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load friends’ thoughts. Please try again.')
   return response.json()
 }
 

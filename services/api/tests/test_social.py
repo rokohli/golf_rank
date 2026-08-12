@@ -4,7 +4,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.main import create_app
-from app.models import ActivityEvent, User, UserMute
+from app.models import (
+    ActivityEvent,
+    Course,
+    CourseReconciliation,
+    Follow,
+    Round,
+    RoundNote,
+    User,
+    UserCourseRating,
+    UserMute,
+)
 
 
 def _profile(client: TestClient, subject: str, first_name: str, username: str, visibility: str = "public") -> dict[str, str]:
@@ -30,6 +40,115 @@ def _profile(client: TestClient, subject: str, first_name: str, username: str, v
     )
     assert response.status_code == 200
     return headers
+
+
+def _mutual_friend(client: TestClient, alice: dict[str, str], bob: dict[str, str], username: str) -> int:
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": username}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "alice"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    return bob_id
+
+
+def _rate_course(client: TestClient, headers: dict[str, str], course_id: int, *, visibility: str, note: str | None = None, favorite_hole: int | None = None) -> dict:
+    response = client.put(
+        f"/api/v1/me/course-ratings/{course_id}", headers=headers,
+        json={"tier": "green", "played_on": "2026-07-01", "score": 80},
+    )
+    assert response.status_code == 200
+    details = client.patch(
+        f"/api/v1/me/course-ratings/{course_id}/details", headers=headers,
+        json={"note": note, "favorite_hole": favorite_hole, "friend_user_ids": [], "guest_names": [], "visibility": visibility},
+    )
+    assert details.status_code == 200
+    return response.json()
+
+
+def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared_memories() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:thoughts-alice", "Alice", "alice")
+    bob = _profile(client, "dev:thoughts-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+    _rate_course(client, bob, 1, visibility="friends", note="Windy but fun.", favorite_hole=7)
+
+    response = client.get("/api/v1/courses/1/friends-thoughts", headers=alice)
+    assert response.status_code == 200
+    assert response.json() == {
+        "average_rating": 9.2,
+        "rating_count": 1,
+        "entries": [{
+            "user": {"id": 2, "display_name": "Bob Golfer", "username": "bob"},
+            "rating": 9.2,
+            "tier": "green",
+            "note": "Windy but fun.",
+            "favorite_hole": 7,
+        }],
+    }
+
+    # The rating remains a social projection, but a private round never leaks
+    # its memories, score, companions, or round identifier.
+    _rate_course(client, bob, 1, visibility="private", note="Private notebook", favorite_hole=9)
+    private_memory = client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()
+    assert private_memory["entries"][0] == {
+        "user": {"id": 2, "display_name": "Bob Golfer", "username": "bob"},
+        "rating": 9.2,
+        "tier": "green",
+        "note": None,
+        "favorite_hole": None,
+    }
+    assert "round_id" not in str(private_memory)
+    assert "score" not in str(private_memory)
+    assert "Private notebook" not in str(private_memory)
+
+
+def test_course_friend_thoughts_excludes_one_way_private_blocked_and_muted_relationships() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:thoughts-policy-alice", "Alice", "alice")
+    bob = _profile(client, "dev:thoughts-policy-bob", "Bob", "bob")
+    charlie = _profile(client, "dev:thoughts-policy-charlie", "Charlie", "charlie")
+    private = _profile(client, "dev:thoughts-policy-private", "Private", "private")
+    bob_id = _mutual_friend(client, alice, bob, "bob")
+    _mutual_friend(client, alice, private, "private")
+    _profile(client, "dev:thoughts-policy-private", "Private", "private", "private")
+    charlie_id = client.get("/api/v1/users", headers=alice, params={"q": "charlie"}).json()[0]["id"]
+    client.put(f"/api/v1/me/follows/{charlie_id}", headers=alice)  # One-way only.
+    _rate_course(client, bob, 1, visibility="friends")
+    _rate_course(client, charlie, 1, visibility="friends")
+    # The private user can have historical state, but cannot be discovered or included.
+    _rate_course(client, private, 1, visibility="friends")
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["rating_count"] == 1
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json() == {
+        "average_rating": None, "rating_count": 0, "entries": [],
+    }
+    assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["entries"] == []
+
+
+def test_course_friend_thoughts_uses_canonical_course_identity_and_cannot_open_friend_rounds() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:thoughts-alias-alice", "Alice", "alice")
+    bob = _profile(client, "dev:thoughts-alias-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+    with client.app.state.session_factory() as session:
+        alias = Course(
+            name="Pebble Beach Golf Links Import", region="Pebble Beach, CA", latitude=36.568, longitude=-121.95,
+            source="import", source_course_id="pebble-alias",
+        )
+        session.add(alias)
+        session.flush()
+        session.add(CourseReconciliation(source="import", source_course_id="pebble-alias", canonical_course_id=1))
+        session.commit()
+        alias_id = alias.id
+    rated = _rate_course(client, bob, alias_id, visibility="friends", note="Alias rating", favorite_hole=8)
+    thoughts = client.get("/api/v1/courses/1/friends-thoughts", headers=alice)
+    assert thoughts.status_code == 200
+    assert thoughts.json()["entries"][0]["note"] == "Alias rating"
+    assert thoughts.json()["rating_count"] == 1
+    # The only existing round detail route remains owner scoped.
+    assert client.get(f"/api/v1/me/rounds/{rated['round']['id']}", headers=alice).status_code == 404
 
 
 def test_feed_enforces_public_friends_and_private_visibility() -> None:

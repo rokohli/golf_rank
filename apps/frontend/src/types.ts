@@ -126,6 +126,20 @@ export type CourseRatingState = {
 
 export type RatingCandidate = Course | null
 
+export type FriendCourseThought = {
+  user: FriendSummary
+  rating: number
+  tier: RatingTier
+  note: string | null
+  favorite_hole: number | null
+}
+
+export type FriendsCourseThoughts = {
+  average_rating: number | null
+  rating_count: number
+  entries: FriendCourseThought[]
+}
+
 export type FriendSummary = {
   id: number
   display_name: string

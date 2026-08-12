@@ -19,8 +19,17 @@ from .models import (
     User,
     UserBlock,
     UserMute,
+    Round,
+    RoundNote,
+    UserCourseRating,
 )
-from .schemas import CourseOut
+from .schemas import (
+    CourseOut,
+    FriendCourseThoughtOut,
+    FriendCourseThoughtUserOut,
+    FriendsCourseThoughtsOut,
+)
+from .domain import course_identity_ids
 
 
 router = APIRouter(tags=["social"])
@@ -94,6 +103,13 @@ def _blocked_ids(session: Session, user_id: int) -> set[int]:
     return set(outgoing) | set(incoming)
 
 
+def _muted_ids(session: Session, user_id: int) -> set[int]:
+    """Mute is reciprocal for audience selection: neither direction is social consent."""
+    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
+    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
+    return set(outgoing) | set(incoming)
+
+
 def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[int]]:
     followed_ids = set(session.scalars(select(Follow.followed_id).where(Follow.follower_id == user_id)).all())
     reverse_ids = set(session.scalars(select(Follow.follower_id).where(Follow.followed_id == user_id)).all())
@@ -114,6 +130,87 @@ def _profile_is_visible_to(session: Session, viewer_id: int, target_user_id: int
         return False
     _, mutual_ids = _relationship_sets(session, viewer_id)
     return target_user_id in mutual_ids
+
+
+def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
+    preferences = session.get(OnboardingPreference, user.id)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    display_name = " ".join(
+        item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
+    ).strip()
+    return FriendCourseThoughtUserOut(
+        id=user.id,
+        display_name=display_name or f"Golfer {user.id}",
+        username=onboarding.get("username"),
+    )
+
+
+@router.get("/api/v1/courses/{course_id}/friends-thoughts", response_model=FriendsCourseThoughtsOut)
+def course_friend_thoughts(
+    course_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> FriendsCourseThoughtsOut:
+    """Ratings from currently eligible friends, with memories only when shared to friends.
+
+    This never serializes a round identifier or any private round field.  Ratings are
+    projections rather than round visibility, while notes and favorite holes require
+    the linked rating round to be explicitly friends-visible.
+    """
+    viewer = stored_user(session, current)
+    if viewer is None:
+        return FriendsCourseThoughtsOut()
+    course = require_course(session, course_id)
+    _, mutual_ids = _relationship_sets(session, viewer.id)
+    eligible_ids = mutual_ids - _blocked_ids(session, viewer.id) - _muted_ids(session, viewer.id)
+    if not eligible_ids:
+        return FriendsCourseThoughtsOut()
+
+    ratings = session.scalars(
+        select(UserCourseRating)
+        .where(
+            UserCourseRating.user_id.in_(eligible_ids),
+            UserCourseRating.course_id.in_(course_identity_ids(session, course)),
+        )
+        .order_by(
+            UserCourseRating.updated_at.desc(),
+            UserCourseRating.id.desc(),
+        )
+    ).all()
+    # A reconciliation can leave historical alias projections. Count one current
+    # rating per person, preferring the most recently updated projection.
+    latest_by_user: dict[int, UserCourseRating] = {}
+    for rating in ratings:
+        latest_by_user.setdefault(rating.user_id, rating)
+
+    entries: list[FriendCourseThoughtOut] = []
+    for rating in latest_by_user.values():
+        friend = session.get(User, rating.user_id)
+        if friend is None or not _profile_is_visible_to(session, viewer.id, friend.id):
+            continue
+        round_ = session.scalar(select(Round).where(
+            Round.id == rating.round_id,
+            Round.user_id == friend.id,
+            Round.course_id == rating.course_id,
+        ))
+        note = None
+        favorite_hole = None
+        if round_ is not None and round_.visibility == "friends":
+            stored_note = session.get(RoundNote, round_.id)
+            note = stored_note.body if stored_note else None
+            favorite_hole = round_.favorite_hole
+        entries.append(FriendCourseThoughtOut(
+            user=_thought_identity(session, friend),
+            rating=rating.rating,
+            tier=rating.tier,
+            note=note,
+            favorite_hole=favorite_hole,
+        ))
+    return FriendsCourseThoughtsOut(
+        average_rating=round(sum(entry.rating for entry in entries) / len(entries), 1) if entries else None,
+        rating_count=len(entries),
+        entries=entries,
+    )
 
 
 def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
