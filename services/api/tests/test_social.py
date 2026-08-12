@@ -142,6 +142,39 @@ def test_known_private_follow_target_can_still_be_blocked_or_muted() -> None:
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
 
 
+def test_private_incoming_follow_target_can_still_be_blocked_or_muted() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:incoming-private-alice", "Alice", "alice")
+    bob = _profile(client, "dev:incoming-private-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "alice"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    _profile(client, "dev:incoming-private-bob", "Bob", "bob", "private")
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+
+
+def test_course_friend_thoughts_links_to_newest_visible_rating_activity() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:newest-event-alice", "Alice", "alice")
+    bob = _profile(client, "dev:newest-event-bob", "Bob", "bob")
+    bob_id = _mutual_friend(client, alice, bob, "bob")
+    rated = _rate_course(client, bob, 1, visibility="friends")
+    with client.app.state.session_factory() as session:
+        session.add(ActivityEvent(
+            actor_user_id=bob_id,
+            event_type="course_rated",
+            subject_type="rating_round",
+            subject_id=rated["round"]["id"],
+            visibility="friends",
+            event_data={"course_id": 1, "rating": rated["personal_rating"], "tier": "green"},
+        ))
+        session.commit()
+
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["entries"][0]["activity_id"] == 2
+
+
 def test_course_friend_thoughts_uses_canonical_course_identity_and_cannot_open_friend_rounds() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-alias-alice", "Alice", "alice")

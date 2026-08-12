@@ -221,19 +221,20 @@ def course_friend_thoughts(
         note.round_id: note
         for note in session.scalars(select(RoundNote).where(RoundNote.round_id.in_(rating_round_ids))).all()
     }
-    activity_ids = {
-        (event.actor_user_id, event.subject_id): event.id
-        for event in session.scalars(
-            select(ActivityEvent)
-            .where(
-                ActivityEvent.actor_user_id.in_(friend_ids),
-                ActivityEvent.subject_type == "rating_round",
-                ActivityEvent.subject_id.in_(rating_round_ids),
-                ActivityEvent.visibility == "friends",
-            )
-            .order_by(ActivityEvent.id.desc())
-        ).all()
-    }
+    activity_ids: dict[tuple[int, int], int] = {}
+    for event in session.scalars(
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.actor_user_id.in_(friend_ids),
+            ActivityEvent.subject_type == "rating_round",
+            ActivityEvent.subject_id.in_(rating_round_ids),
+            ActivityEvent.visibility == "friends",
+        )
+        .order_by(ActivityEvent.id.desc())
+    ).all():
+        # Results are newest-first. Preserve the first event for each rating
+        # round rather than overwriting it with an older historical event.
+        activity_ids.setdefault((event.actor_user_id, event.subject_id), event.id)
 
     entries: list[FriendCourseThoughtOut] = []
     for rating in ratings:
@@ -547,10 +548,13 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     if target is None:
         raise HTTPException(404, "User not found")
     followed_ids, _ = _relationship_sets(session, user_id)
+    follower_ids = set(session.scalars(
+        select(Follow.follower_id).where(Follow.followed_id == user_id)
+    ).all())
     # A relationship may predate a target's switch to private visibility. Keep
     # safety controls available for that known target, without making private
     # profiles discoverable to strangers.
-    if target_user_id not in followed_ids and not _profile_is_visible_to(session, user_id, target_user_id):
+    if target_user_id not in followed_ids | follower_ids and not _profile_is_visible_to(session, user_id, target_user_id):
         raise HTTPException(404, "User not found")
     return target
 
