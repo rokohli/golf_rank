@@ -33,6 +33,7 @@ from .domain import course_identity_ids
 
 
 router = APIRouter(tags=["social"])
+FRIEND_THOUGHTS_ENTRY_LIMIT = 10
 
 
 class UserSummaryOut(BaseModel):
@@ -166,37 +167,71 @@ def course_friend_thoughts(
     if not eligible_ids:
         return FriendsCourseThoughtsOut()
 
+    preferences = {
+        user_id: data or {}
+        for user_id, data in session.execute(
+            select(OnboardingPreference.user_id, OnboardingPreference.onboarding_data)
+            .where(OnboardingPreference.user_id.in_(eligible_ids))
+        )
+    }
+    visible_friend_ids = {
+        user_id for user_id in eligible_ids
+        if preferences.get(user_id, {}).get("profile_visibility", "public") != "private"
+    }
+    if not visible_friend_ids:
+        return FriendsCourseThoughtsOut()
+
+    # A reconciliation can leave historical alias projections. Use one current
+    # projection per friend before calculating the aggregate or selecting recent
+    # entries, so aliases cannot double count a friend.
+    ranked_ratings = select(
+        UserCourseRating.id.label("rating_id"),
+        func.row_number().over(
+            partition_by=UserCourseRating.user_id,
+            order_by=(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc()),
+        ).label("position"),
+    ).where(
+        UserCourseRating.user_id.in_(visible_friend_ids),
+        UserCourseRating.course_id.in_(course_identity_ids(session, course)),
+    ).subquery()
+    current_rating_ids = select(ranked_ratings.c.rating_id).where(ranked_ratings.c.position == 1)
+    average, count = session.execute(
+        select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id))
+        .where(UserCourseRating.id.in_(current_rating_ids))
+    ).one()
+    if not count:
+        return FriendsCourseThoughtsOut()
     ratings = session.scalars(
         select(UserCourseRating)
-        .where(
-            UserCourseRating.user_id.in_(eligible_ids),
-            UserCourseRating.course_id.in_(course_identity_ids(session, course)),
-        )
-        .order_by(
-            UserCourseRating.updated_at.desc(),
-            UserCourseRating.id.desc(),
-        )
+        .where(UserCourseRating.id.in_(current_rating_ids))
+        .order_by(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc())
+        .limit(FRIEND_THOUGHTS_ENTRY_LIMIT)
     ).all()
-    # A reconciliation can leave historical alias projections. Count one current
-    # rating per person, preferring the most recently updated projection.
-    latest_by_user: dict[int, UserCourseRating] = {}
-    for rating in ratings:
-        latest_by_user.setdefault(rating.user_id, rating)
+    friend_ids = {rating.user_id for rating in ratings}
+    friends = {
+        friend.id: friend
+        for friend in session.scalars(select(User).where(User.id.in_(friend_ids))).all()
+    }
+    rating_round_ids = [rating.round_id for rating in ratings]
+    rounds = {
+        (round_.id, round_.user_id, round_.course_id): round_
+        for round_ in session.scalars(select(Round).where(Round.id.in_(rating_round_ids))).all()
+    }
+    notes = {
+        note.round_id: note
+        for note in session.scalars(select(RoundNote).where(RoundNote.round_id.in_(rating_round_ids))).all()
+    }
 
     entries: list[FriendCourseThoughtOut] = []
-    for rating in latest_by_user.values():
-        friend = session.get(User, rating.user_id)
-        if friend is None or not _profile_is_visible_to(session, viewer.id, friend.id):
+    for rating in ratings:
+        friend = friends.get(rating.user_id)
+        if friend is None:
             continue
-        round_ = session.scalar(select(Round).where(
-            Round.id == rating.round_id,
-            Round.user_id == friend.id,
-            Round.course_id == rating.course_id,
-        ))
+        round_ = rounds.get((rating.round_id, friend.id, rating.course_id))
         note = None
         favorite_hole = None
         if round_ is not None and round_.visibility == "friends":
-            stored_note = session.get(RoundNote, round_.id)
+            stored_note = notes.get(round_.id)
             note = stored_note.body if stored_note else None
             favorite_hole = round_.favorite_hole
         entries.append(FriendCourseThoughtOut(
@@ -207,8 +242,8 @@ def course_friend_thoughts(
             favorite_hole=favorite_hole,
         ))
     return FriendsCourseThoughtsOut(
-        average_rating=round(sum(entry.rating for entry in entries) / len(entries), 1) if entries else None,
-        rating_count=len(entries),
+        average_rating=round(float(average), 1) if average is not None else None,
+        rating_count=int(count),
         entries=entries,
     )
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from app.models import (
     Course,
     CourseReconciliation,
     Follow,
+    OnboardingPreference,
     Round,
     RoundNote,
     User,
@@ -149,6 +150,38 @@ def test_course_friend_thoughts_uses_canonical_course_identity_and_cannot_open_f
     assert thoughts.json()["rating_count"] == 1
     # The only existing round detail route remains owner scoped.
     assert client.get(f"/api/v1/me/rounds/{rated['round']['id']}", headers=alice).status_code == 404
+
+
+def test_course_friend_thoughts_aggregates_all_visible_friends_but_limits_recent_entries() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:thoughts-limit-alice", "Alice", "alice")
+    with client.app.state.session_factory() as session:
+        viewer = session.scalar(select(User).where(User.provider_subject == "dev:thoughts-limit-alice"))
+        assert viewer is not None
+        for index in range(11):
+            friend = User(provider_subject=f"dev:thoughts-limit-friend-{index}")
+            session.add(friend)
+            session.flush()
+            session.add(OnboardingPreference(
+                user_id=friend.id, max_green_fee=700, difficulty="any", access="any",
+                onboarding_data={"first_name": f"Friend {index}", "username": f"friend{index}", "profile_visibility": "friends"},
+            ))
+            session.add_all([
+                Follow(follower_id=viewer.id, followed_id=friend.id),
+                Follow(follower_id=friend.id, followed_id=viewer.id),
+            ])
+            round_ = Round(user_id=friend.id, course_id=1, played_on=date(2026, 7, 1), visibility="friends", is_rating_round=True)
+            session.add(round_)
+            session.flush()
+            session.add(UserCourseRating(user_id=friend.id, course_id=1, round_id=round_.id, tier="fairway", rating=8.0, confidence=0.7))
+        session.commit()
+
+    response = client.get("/api/v1/courses/1/friends-thoughts", headers=alice)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["average_rating"] == 8.0
+    assert body["rating_count"] == 11
+    assert len(body["entries"]) == 10
 
 
 def test_feed_enforces_public_friends_and_private_visibility() -> None:
