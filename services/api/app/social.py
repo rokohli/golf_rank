@@ -386,9 +386,7 @@ def activity_feed(
     if user is None:
         return FeedPageOut(items=[], next_cursor=None)
     followed_ids, mutual_ids = _relationship_sets(session, user.id)
-    excluded = _blocked_ids(session, user.id) | set(
-        session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user.id)).all()
-    )
+    excluded = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
     visible_public_ids = followed_ids - excluded
     visible_friend_ids = mutual_ids - excluded
     statement = select(ActivityEvent).where(
