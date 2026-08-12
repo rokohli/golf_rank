@@ -425,6 +425,24 @@ def test_blocking_respects_profile_visibility_and_masks_later_private_profiles()
     assert blocked.json()[0]["following_count"] == 0
 
 
+def test_existing_followed_accounts_can_be_blocked_or_muted_after_becoming_private() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:known-target-alice", "Alice", "knowntargetalice")
+    bob = _profile(client, "dev:known-target-bob", "Bob", "knowntargetbob")
+    charlie = _profile(client, "dev:known-target-charlie", "Charlie", "knowntargetcharlie")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "knowntargetbob"}).json()[0]["id"]
+    charlie_id = client.get("/api/v1/users", headers=alice, params={"q": "knowntargetcharlie"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.put(f"/api/v1/me/follows/{charlie_id}", headers=alice).status_code == 200
+    _profile(client, "dev:known-target-bob", "Bob", "knowntargetbob", "private")
+    _profile(client, "dev:known-target-charlie", "Charlie", "knowntargetcharlie", "private")
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/blocks/{charlie_id}", headers=alice).status_code == 204
+    assert [item["user"]["id"] for item in client.get("/api/v1/me/follows", headers=alice).json()] == [bob_id]
+
+
 def test_muted_account_list_is_owner_scoped_and_can_be_unmuted() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:muted-list-alice", "Alice", "mutedlistalice")
