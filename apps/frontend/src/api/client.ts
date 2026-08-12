@@ -29,6 +29,7 @@ import {
   TierPlacement,
   UserSummary,
   BlockedUser,
+  MutedUser,
 } from '../types'
 
 const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
@@ -352,6 +353,12 @@ export async function setActivityReaction(
 export async function muteUser(userId: number, muted: boolean, headers: ApiHeaders): Promise<void> {
   const response = await fetch(`${baseUrl}/api/v1/me/mutes/${userId}`, { method: muted ? 'PUT' : 'DELETE', headers })
   if (!response.ok) throw await responseError(response, 'Unable to update mute settings. Please try again.')
+}
+
+export async function getMutedUsers(headers: ApiHeaders): Promise<MutedUser[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/mutes`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load muted accounts. Please try again.')
+  return response.json()
 }
 
 export async function blockUser(userId: number, blocked: boolean, headers: ApiHeaders): Promise<void> {

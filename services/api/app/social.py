@@ -81,6 +81,12 @@ class BlockedUserOut(UserSummaryOut):
     blocked_at: datetime
 
 
+class MutedUserOut(BaseModel):
+    id: int
+    display_name: str
+    username: str | None
+
+
 def _summary(session: Session, user: User) -> UserSummaryOut:
     preferences = session.get(OnboardingPreference, user.id)
     profile = session.get(Profile, user.id)
@@ -263,6 +269,12 @@ def course_friend_thoughts(
         rating_count=int(count),
         entries=entries,
     )
+
+def _muted_user_summary(session: Session, viewer_id: int, target: User) -> MutedUserOut:
+    if target.id not in _blocked_ids(session, viewer_id) and _profile_is_visible_to(session, viewer_id, target.id):
+        summary = _summary(session, target)
+        return MutedUserOut(id=target.id, display_name=summary.display_name, username=summary.username)
+    return MutedUserOut(id=target.id, display_name="Muted account", username=None)
 
 
 def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
@@ -632,6 +644,24 @@ def mute_user(target_user_id: int, current: CurrentUser = Depends(current_user),
         session.add(UserMute(muter_id=user.id, muted_id=target_user_id))
         session.commit()
     return Response(status_code=204)
+
+
+@router.get("/api/v1/me/mutes", response_model=list[MutedUserOut])
+def list_muted_users(
+    current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
+) -> list[MutedUserOut]:
+    user = require_user(session, current)
+    mutes = session.scalars(
+        select(UserMute)
+        .where(UserMute.muter_id == user.id)
+        .order_by(UserMute.created_at.desc(), UserMute.id.desc())
+    ).all()
+    output: list[MutedUserOut] = []
+    for mute in mutes:
+        target = session.get(User, mute.muted_id)
+        if target is not None:
+            output.append(_muted_user_summary(session, user.id, target))
+    return output
 
 
 @router.delete("/api/v1/me/mutes/{target_user_id}", status_code=204)

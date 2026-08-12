@@ -66,6 +66,12 @@ export type Course = {
 
 export type BlockedUser = UserSummary & { blocked_at: string }
 
+export type MutedUser = {
+  id: number
+  display_name: string
+  username: string | null
+}
+
 export type RatingTier = 'green' | 'fairway' | 'rough' | 'bunker'
 
 export type RankingTier = RatingTier

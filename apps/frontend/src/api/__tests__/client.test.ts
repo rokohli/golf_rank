@@ -12,6 +12,7 @@ import {
   getCourseRating,
   getFriends,
   getFriendRankings,
+  getMutedUsers,
   getProfile,
   getPlan,
   getPlans,
@@ -213,6 +214,18 @@ describe('api client', () => {
     await getFriendRankings(headers)
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/rankings/friends', { headers })
+  })
+
+  it('loads muted accounts with the authenticated request', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+
+    await getMutedUsers(headers)
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/mutes', { headers })
   })
 
   it('sends tier placements and pairwise comparison outcomes', async () => {

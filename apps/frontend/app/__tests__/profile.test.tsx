@@ -138,6 +138,8 @@ describe('profile experience', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/notifications')
     fireEvent.press(screen.getByText('Privacy & visibility'))
     expect(mockRouter.push).toHaveBeenCalledWith('/privacy')
+    fireEvent.press(screen.getByText('Muted accounts'))
+    expect(mockRouter.push).toHaveBeenCalledWith('/muted')
     fireEvent.press(screen.getByRole('button', { name: 'Sign out' }))
 
     await waitFor(() => {

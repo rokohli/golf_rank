@@ -425,6 +425,48 @@ def test_blocking_respects_profile_visibility_and_masks_later_private_profiles()
     assert blocked.json()[0]["following_count"] == 0
 
 
+def test_muted_account_list_is_owner_scoped_and_can_be_unmuted() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:muted-list-alice", "Alice", "mutedlistalice")
+    bob = _profile(client, "dev:muted-list-bob", "Bob", "mutedlistbob")
+    charlie = _profile(client, "dev:muted-list-charlie", "Charlie", "mutedlistcharlie")
+    diana = _profile(client, "dev:muted-list-diana", "Diana", "mutedlistdiana")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "mutedlistbob"}).json()[0]["id"]
+    diana_id = client.get("/api/v1/users", headers=alice, params={"q": "mutedlistdiana"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/mutes/{diana_id}", headers=alice).status_code == 204
+    listed = client.get("/api/v1/me/mutes", headers=alice)
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [diana_id, bob_id]
+    assert listed.json()[1] == {"id": bob_id, "display_name": "Bob Golfer", "username": "mutedlistbob"}
+    assert client.get("/api/v1/me/mutes", headers=charlie).json() == []
+
+    assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=charlie).status_code == 204
+    assert [item["id"] for item in client.get("/api/v1/me/mutes", headers=alice).json()] == [diana_id, bob_id]
+    assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+    assert [item["id"] for item in client.get("/api/v1/me/mutes", headers=alice).json()] == [diana_id]
+    assert client.delete(f"/api/v1/me/mutes/{diana_id}", headers=alice).status_code == 204
+    assert client.get("/api/v1/me/mutes", headers=alice).json() == []
+
+
+def test_muted_account_list_masks_later_private_and_blocked_profiles() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:mute-privacy-alice", "Alice", "muteprivacyalice")
+    bob = _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "muteprivacybob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
+
+    _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob", "private")
+    private_entry = client.get("/api/v1/me/mutes", headers=alice)
+    assert private_entry.json() == [{"id": bob_id, "display_name": "Muted account", "username": None}]
+
+    _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob")
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    blocked_entry = client.get("/api/v1/me/mutes", headers=alice)
+    assert blocked_entry.json() == [{"id": bob_id, "display_name": "Muted account", "username": None}]
+
+
 def test_relationship_removals_cannot_change_another_users_state() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:relationship-alice", "Alice", "relationshipalice")
