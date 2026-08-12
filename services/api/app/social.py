@@ -273,6 +273,18 @@ def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int],
     )
 
 
+def _event_matches_current_round_visibility(session: Session, event: ActivityEvent) -> bool:
+    """Avoid serving a historical event after its backing round becomes private."""
+    if event.subject_type not in {"round", "rating_round"}:
+        return True
+    round_ = session.get(Round, event.subject_id)
+    return (
+        round_ is not None
+        and round_.user_id == event.actor_user_id
+        and round_.visibility == event.visibility
+    )
+
+
 def _cursor(event: ActivityEvent) -> str:
     raw = f"{event.created_at.isoformat()}|{event.id}".encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -429,7 +441,10 @@ def activity_feed(
                 or (event.created_at == cursor_boundary[0] and event.id >= cursor_boundary[1])
             ):
                 continue
-            if not _event_visible(event, user.id, followed_ids, mutual_ids):
+            if (
+                not _event_visible(event, user.id, followed_ids, mutual_ids)
+                or not _event_matches_current_round_visibility(session, event)
+            ):
                 continue
             actor = session.get(User, event.actor_user_id)
             if actor is None:
@@ -468,7 +483,10 @@ def _require_visible_event(session: Session, user_id: int, event_id: int) -> Act
     if event is None or event.actor_user_id in _blocked_ids(session, user_id) | _muted_ids(session, user_id):
         raise HTTPException(404, "Activity not found")
     followed_ids, mutual_ids = _relationship_sets(session, user_id)
-    if not _event_visible(event, user_id, followed_ids, mutual_ids):
+    if (
+        not _event_visible(event, user_id, followed_ids, mutual_ids)
+        or not _event_matches_current_round_visibility(session, event)
+    ):
         raise HTTPException(404, "Activity not found")
     return event
 

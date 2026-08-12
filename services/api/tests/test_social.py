@@ -175,6 +175,32 @@ def test_course_friend_thoughts_links_to_newest_visible_rating_activity() -> Non
     assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["entries"][0]["activity_id"] == 2
 
 
+def test_stale_rating_activity_cannot_bypass_current_private_round_visibility() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:stale-rating-alice", "Alice", "alice")
+    bob = _profile(client, "dev:stale-rating-bob", "Bob", "bob")
+    bob_id = _mutual_friend(client, alice, bob, "bob")
+    rated = _rate_course(client, bob, 1, visibility="friends")
+    round_id = rated["round"]["id"]
+    with client.app.state.session_factory() as session:
+        session.add(ActivityEvent(
+            actor_user_id=bob_id,
+            event_type="course_rated",
+            subject_type="rating_round",
+            subject_id=round_id,
+            visibility="friends",
+            event_data={"course_id": 1, "rating": rated["personal_rating"], "tier": "green"},
+        ))
+        session.commit()
+
+    assert client.patch(
+        "/api/v1/me/course-ratings/1/details", headers=bob,
+        json={"note": None, "favorite_hole": None, "friend_user_ids": [], "guest_names": [], "visibility": "private"},
+    ).status_code == 200
+    assert client.get("/api/v1/feed/1", headers=alice).status_code == 404
+    assert client.get("/api/v1/feed", headers=alice).json()["items"] == []
+
+
 def test_course_friend_thoughts_uses_canonical_course_identity_and_cannot_open_friend_rounds() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-alias-alice", "Alice", "alice")
