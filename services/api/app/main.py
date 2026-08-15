@@ -62,7 +62,7 @@ from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
 from .seed import seed_test_courses
-from .social import router as social_router
+from .social import notify_linked_contacts, router as social_router
 
 
 logger = logging.getLogger("golfrank.catalog")
@@ -175,7 +175,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stored_user = User(provider_subject=user.provider_subject)
             session.add(stored_user)
             session.flush()
-        profile = session.get(Profile, stored_user.id) or Profile(user_id=stored_user.id, home_region=payload.home_region)
+        profile = session.get(Profile, stored_user.id)
+        created_profile = profile is None
+        if profile is None:
+            profile = Profile(user_id=stored_user.id, home_region=payload.home_region)
         preferences = session.get(OnboardingPreference, stored_user.id) or OnboardingPreference(
             user_id=stored_user.id,
             max_green_fee=payload.max_green_fee,
@@ -191,6 +194,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.onboarding_data.model_dump() if payload.onboarding_data else None
             )
         session.add_all([profile, preferences])
+        if created_profile:
+            notify_linked_contacts(session, stored_user, user, settings)
         session.commit()
         return ProfileOut(
             home_region=profile.home_region,

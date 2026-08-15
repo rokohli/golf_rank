@@ -2,6 +2,8 @@ import pytest
 
 from app.core.config import Settings
 
+TEST_IDENTITY_TOKEN = "test"
+
 
 def test_production_rejects_development_identity() -> None:
     with pytest.raises(ValueError, match="development-only"):
@@ -35,6 +37,7 @@ def test_production_requires_a_nondefault_contact_identifier_hmac_key() -> None:
             allow_development_identity=False,
             clerk_issuer="https://clerk.example",
             clerk_jwks_url="https://clerk.example/.well-known/jwks.json",
+            clerk_secret_key=TEST_IDENTITY_TOKEN,
         ).validate_security()
 
 
@@ -48,6 +51,7 @@ def test_enabled_rate_limiting_requires_redis_and_a_strong_nondevelopment_salt()
             allow_development_identity=False,
             clerk_issuer="https://clerk.example",
             clerk_jwks_url="https://clerk.example/.well-known/jwks.json",
+            clerk_secret_key=TEST_IDENTITY_TOKEN,
             rate_limit_enabled=True,
             redis_url="redis://redis:6379",
             rate_limit_key_salt="short",
@@ -61,6 +65,7 @@ def test_staging_alert_webhook_requires_https_and_positive_thresholds() -> None:
         allow_development_identity=False,
         clerk_issuer="https://clerk.example.test",
         clerk_jwks_url="https://clerk.example.test/.well-known/jwks.json",
+        clerk_secret_key=TEST_IDENTITY_TOKEN,
         contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
     )
 
@@ -107,6 +112,7 @@ def test_enabled_ai_planner_requires_provider_key_and_positive_cost_controls() -
             allow_development_identity=False,
             clerk_issuer="https://clerk.example.test",
             clerk_jwks_url="https://clerk.example.test/.well-known/jwks.json",
+            clerk_secret_key=TEST_IDENTITY_TOKEN,
             ai_planner_enabled=True,
             gemini_api_key="test-key",
             rate_limit_enabled=False,

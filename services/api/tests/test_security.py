@@ -3,12 +3,15 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 
+TEST_IDENTITY_TOKEN = "test"
+
 
 PRODUCTION_SETTINGS = Settings(
     app_env="staging",
     allow_development_identity=False,
     clerk_issuer="https://clerk.example",
     clerk_jwks_url="https://clerk.example/.well-known/jwks.json",
+    clerk_secret_key=TEST_IDENTITY_TOKEN,
     contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
     allowed_hosts="testserver",
 )

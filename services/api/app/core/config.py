@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     clerk_issuer: str | None = None
     clerk_jwks_url: str | None = None
     clerk_audience: str | None = None
+    clerk_secret_key: str | None = None
     course_image_base_url: str | None = None
     redis_url: str | None = None
     rate_limit_enabled: bool = False
@@ -65,6 +66,8 @@ class Settings(BaseSettings):
             raise ValueError("CLERK_ISSUER is required outside development")
         if self.app_env != "development" and not self.clerk_jwks_url:
             raise ValueError("CLERK_JWKS_URL is required outside development")
+        if self.app_env != "development" and not self.clerk_secret_key:
+            raise ValueError("CLERK_SECRET_KEY is required outside development")
         if self.rate_limit_enabled and not self.redis_url:
             raise ValueError("REDIS_URL is required when rate limiting is enabled")
         if self.app_env != "development" and self.rate_limit_enabled and len(self.rate_limit_key_salt) < 32:

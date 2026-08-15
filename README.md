@@ -80,6 +80,7 @@ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=<from Clerk dashboard>
 CLERK_ISSUER=<from Clerk dashboard>
 CLERK_JWKS_URL=<issuer>/.well-known/jwks.json
 CLERK_AUDIENCE=fairway-api-staging
+CLERK_SECRET_KEY=<from Clerk dashboard; server-side only>
 ALLOW_DEVELOPMENT_IDENTITY=false
 ```
 

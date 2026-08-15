@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user, get_settings
+from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
 from .core.config import Settings
 from .db import get_session
 from .domain import course_data, require_course, require_user, stored_user
@@ -400,7 +400,13 @@ def follow_user(
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
         session.add(follow)
-        session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
+        existing = session.scalar(select(AppNotification.id).where(
+            AppNotification.recipient_user_id == target_user_id,
+            AppNotification.actor_user_id == user.id,
+            AppNotification.notification_type == "followed_you",
+        ))
+        if existing is None and _notifications_enabled(session, target_user_id):
+            session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
         session.commit()
     mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
@@ -412,6 +418,8 @@ def list_notifications(
 ) -> list[NotificationOut]:
     user = stored_user(session, current)
     if user is None:
+        return []
+    if not _notifications_enabled(session, user.id):
         return []
     blocked = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
     notifications = session.scalars(
@@ -437,17 +445,33 @@ def link_contacts(
         raise HTTPException(422, str(error)) from error
     session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes)
-    # Never accept a claimed account email or phone from the client. These
-    # identifiers come only from verified, signed Clerk token claims.
-    for identity in {_identifier_hash(settings, value) for value in current.verified_identifiers}:
-        recipients = session.scalars(select(LinkedContact.user_id).where(LinkedContact.identifier_hash == identity, LinkedContact.user_id != user.id)).all()
-        for recipient_id in set(recipients):
-            if user.id not in _blocked_ids(session, recipient_id):
-                existing = session.scalar(select(AppNotification.id).where(AppNotification.recipient_user_id == recipient_id, AppNotification.actor_user_id == user.id, AppNotification.notification_type == "contact_joined"))
-                if existing is None:
-                    session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
+    notify_linked_contacts(session, user, current, settings)
     session.commit()
     return Response(status_code=204)
+
+
+def notify_linked_contacts(session: Session, user: User, current: CurrentUser, settings: Settings) -> None:
+    """Notify contact owners when a verified account completes onboarding or syncs contacts."""
+    for identity in {_identifier_hash(settings, value) for value in verified_identifiers(current, settings)}:
+        recipients = session.scalars(select(LinkedContact.user_id).where(
+            LinkedContact.identifier_hash == identity,
+            LinkedContact.user_id != user.id,
+        )).all()
+        for recipient_id in set(recipients):
+            if user.id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
+                continue
+            existing = session.scalar(select(AppNotification.id).where(
+                AppNotification.recipient_user_id == recipient_id,
+                AppNotification.actor_user_id == user.id,
+                AppNotification.notification_type == "contact_joined",
+            ))
+            if existing is None:
+                session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
+
+
+def _notifications_enabled(session: Session, user_id: int) -> bool:
+    preferences = session.get(OnboardingPreference, user_id)
+    return not preferences or preferences.onboarding_data is None or preferences.onboarding_data.get("notifications") is not False
 
 
 def _identifier_hash(settings: Settings, value: str) -> str:

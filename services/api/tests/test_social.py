@@ -685,7 +685,7 @@ def test_feed_cursor_pages_through_many_events_with_the_same_timestamp() -> None
     assert len(set(event_ids)) == 60
 
 
-def test_follow_and_contact_join_notifications_are_persisted() -> None:
+def test_follow_and_contact_join_notifications_are_persisted(monkeypatch) -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:notification-alice", "Alice", "alice")
     bob = _profile(client, "dev:notification-bob", "Bob", "bob")
@@ -701,12 +701,46 @@ def test_follow_and_contact_join_notifications_are_persisted() -> None:
     # data can create a contact-joined notification.
     assert client.put("/api/v1/me/contacts", headers=bob, json={"account_identifiers": ["bob@example.com"], "contact_identifiers": []}).status_code == 422
 
-    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:notification-bob", ("bob@example.com",))
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:notification-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("bob@example.com",))
     assert client.put("/api/v1/me/contacts", headers=bob, json={"contact_identifiers": []}).status_code == 204
     client.app.dependency_overrides.pop(current_user)
     joined = client.get("/api/v1/me/notifications", headers=alice).json()
     assert joined[0]["notification_type"] == "contact_joined"
     assert joined[0]["actor"]["display_name"] == "Bob Golfer"
+
+
+def test_onboarding_triggers_contact_join_matching(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:onboarding-contact-alice", "Alice", "alice")
+    assert client.put("/api/v1/me/contacts", headers=alice, json={"contact_identifiers": ["bob@example.com"]}).status_code == 204
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("clerk:onboarding-contact-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("bob@example.com",))
+    response = client.put("/api/v1/me/onboarding-preferences", json={
+        "home_region": "Monterey, CA", "max_green_fee": 700, "difficulty": "any", "access": "any",
+    })
+    client.app.dependency_overrides.pop(current_user)
+
+    assert response.status_code == 200
+    assert client.get("/api/v1/me/notifications", headers=alice).json()[0]["notification_type"] == "contact_joined"
+
+
+def test_refollow_reuses_notification_and_notifications_preference_hides_inbox() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:notification-repeat-alice", "Alice", "alice")
+    bob = _profile(client, "dev:notification-repeat-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.delete(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert len(client.get("/api/v1/me/notifications", headers=bob).json()) == 1
+
+    saved = client.get("/api/v1/me/profile", headers=bob).json()
+    saved["onboarding_data"]["notifications"] = False
+    assert client.put("/api/v1/me/onboarding-preferences", headers=bob, json=saved).status_code == 200
+    assert client.get("/api/v1/me/notifications", headers=bob).json() == []
 
 
 def test_contact_identifier_hashes_are_keyed_and_normalize_us_phone_numbers() -> None:
