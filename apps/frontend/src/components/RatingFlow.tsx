@@ -74,7 +74,7 @@ export function RatingFlow({
     initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
     initialFriendIds,
     initialGuests,
-    initialRating.round?.visibility !== 'private',
+    initialRating.round?.visibility === 'friends',
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -94,7 +94,7 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
-  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round?.visibility !== 'private')
+  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round?.visibility === 'friends')
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)

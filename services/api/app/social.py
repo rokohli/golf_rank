@@ -434,8 +434,10 @@ def list_notifications(
             AppNotification.actor_user_id.not_in(blocked),
         )
     if cursor:
-        created_at, notification_id = _decode_cursor(cursor)
-        query = query.where(or_(AppNotification.created_at < created_at, and_(AppNotification.created_at == created_at, AppNotification.id < notification_id)))
+        _, notification_id = _decode_cursor(cursor)
+        # IDs are monotonic for notification creation. Using the boundary ID
+        # avoids SQLite's inconsistent fractional-second comparison semantics.
+        query = query.where(AppNotification.id < notification_id)
     notifications = session.scalars(query.order_by(AppNotification.created_at.desc(), AppNotification.id.desc()).limit(limit + 1)).all()
     page = notifications[:limit]
     next_cursor = _cursor(page[-1]) if len(notifications) > limit else None

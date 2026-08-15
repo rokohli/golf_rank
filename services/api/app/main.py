@@ -176,7 +176,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.add(stored_user)
             session.flush()
         profile = session.get(Profile, stored_user.id)
-        created_profile = profile is None
         if profile is None:
             profile = Profile(user_id=stored_user.id, home_region=payload.home_region)
         preferences = session.get(OnboardingPreference, stored_user.id) or OnboardingPreference(
@@ -194,11 +193,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.onboarding_data.model_dump() if payload.onboarding_data else None
             )
         session.add_all([profile, preferences])
-        if created_profile:
-            try:
-                notify_linked_contacts(session, stored_user, user, settings)
-            except HTTPException as error:
-                logger.warning("contact_join_matching_skipped user_id=%s status=%s", stored_user.id, error.status_code)
+        try:
+            # Re-attempt on every authenticated preferences save so a transient
+            # Clerk outage during first onboarding cannot suppress this optional
+            # notification forever. Matching is idempotent.
+            notify_linked_contacts(session, stored_user, user, settings)
+        except HTTPException as error:
+            logger.warning("contact_join_matching_skipped user_id=%s status=%s", stored_user.id, error.status_code)
         session.commit()
         return ProfileOut(
             home_region=profile.home_region,
