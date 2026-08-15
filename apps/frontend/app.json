@@ -4,9 +4,6 @@
     "slug": "golf-rank",
     "version": "1.0.0",
     "scheme": "golfrank",
-    "ios": {
-      "bundleIdentifier": "com.rokohli.golfrank.dev"
-    },
     "plugins": [
       "expo-router",
       "@clerk/expo",
