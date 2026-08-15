@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import hmac
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -7,7 +9,8 @@ from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user
+from .core.auth import CurrentUser, current_user, get_settings
+from .core.config import Settings
 from .db import get_session
 from .domain import course_data, require_course, require_user, stored_user
 from .models import (
@@ -421,12 +424,22 @@ def list_notifications(
 
 
 @router.put("/api/v1/me/contacts", status_code=204)
-def link_contacts(payload: ContactLinkIn, current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)) -> Response:
+def link_contacts(
+    payload: ContactLinkIn,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
     user = require_user(session, current)
-    hashes = {_identifier_hash(value) for value in payload.contact_identifiers}
+    try:
+        hashes = {_identifier_hash(settings, value) for value in payload.contact_identifiers}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes)
-    for identity in {_identifier_hash(value) for value in payload.account_identifiers}:
+    # Never accept a claimed account email or phone from the client. These
+    # identifiers come only from verified, signed Clerk token claims.
+    for identity in {_identifier_hash(settings, value) for value in current.verified_identifiers}:
         recipients = session.scalars(select(LinkedContact.user_id).where(LinkedContact.identifier_hash == identity, LinkedContact.user_id != user.id)).all()
         for recipient_id in set(recipients):
             if user.id not in _blocked_ids(session, recipient_id):
@@ -437,8 +450,24 @@ def link_contacts(payload: ContactLinkIn, current: CurrentUser = Depends(current
     return Response(status_code=204)
 
 
-def _identifier_hash(value: str) -> str:
-    return hashlib.sha256(value.strip().lower().encode()).hexdigest()
+def _identifier_hash(settings: Settings, value: str) -> str:
+    normalized = _canonical_identifier(value, settings.contact_phone_country_calling_code)
+    return hmac.new(settings.contact_identifier_hmac_key.encode(), normalized.encode(), hashlib.sha256).hexdigest()
+
+
+def _canonical_identifier(value: str, default_country_calling_code: str) -> str:
+    normalized = value.strip().lower()
+    if "@" in normalized:
+        return normalized
+    digits = re.sub(r"\D", "", normalized)
+    if normalized.startswith("00"):
+        digits = digits[2:]
+    elif not normalized.startswith("+"):
+        if len(digits) == 10:
+            digits = f"{default_country_calling_code}{digits}"
+    if not digits:
+        raise ValueError("contact identifier must be an email address or phone number")
+    return f"+{digits}"
 
 
 @router.delete("/api/v1/me/follows/{target_user_id}", status_code=204)

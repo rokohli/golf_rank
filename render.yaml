@@ -35,6 +35,8 @@ services:
         value: "true"
       - key: RATE_LIMIT_KEY_SALT
         generateValue: true
+      - key: CONTACT_IDENTIFIER_HMAC_KEY
+        generateValue: true
       - key: TRUSTED_CLIENT_IP_HEADER
         value: cf-connecting-ip
       - key: ALLOWED_HOSTS

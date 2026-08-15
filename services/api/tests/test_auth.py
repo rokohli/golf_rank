@@ -28,6 +28,16 @@ def test_production_requires_clerk_jwks_url() -> None:
         ).validate_security()
 
 
+def test_production_requires_a_nondefault_contact_identifier_hmac_key() -> None:
+    with pytest.raises(ValueError, match="CONTACT_IDENTIFIER_HMAC_KEY"):
+        Settings(
+            app_env="production",
+            allow_development_identity=False,
+            clerk_issuer="https://clerk.example",
+            clerk_jwks_url="https://clerk.example/.well-known/jwks.json",
+        ).validate_security()
+
+
 def test_enabled_rate_limiting_requires_redis_and_a_strong_nondevelopment_salt() -> None:
     with pytest.raises(ValueError, match="REDIS_URL"):
         Settings(rate_limit_enabled=True, redis_url=None).validate_security()
@@ -41,6 +51,7 @@ def test_enabled_rate_limiting_requires_redis_and_a_strong_nondevelopment_salt()
             rate_limit_enabled=True,
             redis_url="redis://redis:6379",
             rate_limit_key_salt="short",
+            contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
         ).validate_security()
 
 
@@ -50,6 +61,7 @@ def test_staging_alert_webhook_requires_https_and_positive_thresholds() -> None:
         allow_development_identity=False,
         clerk_issuer="https://clerk.example.test",
         clerk_jwks_url="https://clerk.example.test/.well-known/jwks.json",
+        contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
     )
 
     with pytest.raises(ValueError, match="OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS"):
@@ -98,6 +110,7 @@ def test_enabled_ai_planner_requires_provider_key_and_positive_cost_controls() -
             ai_planner_enabled=True,
             gemini_api_key="test-key",
             rate_limit_enabled=False,
+            contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
         ).validate_security()
 
     with pytest.raises(ValueError, match="AI_PLANNER_ALLOWED_SUBJECTS"):

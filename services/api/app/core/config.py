@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     rate_limit_enabled: bool = False
     rate_limit_key_salt: str = "development-rate-limit-key"
+    contact_identifier_hmac_key: str = "development-contact-identifier-key"
+    contact_phone_country_calling_code: str = "1"
     trusted_client_ip_header: str = ""
     allowed_hosts: str = "testserver,localhost,127.0.0.1"
     max_request_body_bytes: int = 1_048_576
@@ -67,6 +69,13 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL is required when rate limiting is enabled")
         if self.app_env != "development" and self.rate_limit_enabled and len(self.rate_limit_key_salt) < 32:
             raise ValueError("RATE_LIMIT_KEY_SALT must contain at least 32 characters")
+        if self.app_env != "development" and (
+            self.contact_identifier_hmac_key == "development-contact-identifier-key"
+            or len(self.contact_identifier_hmac_key) < 32
+        ):
+            raise ValueError("CONTACT_IDENTIFIER_HMAC_KEY must contain at least 32 characters outside development")
+        if not self.contact_phone_country_calling_code.isdigit() or not 1 <= len(self.contact_phone_country_calling_code) <= 3:
+            raise ValueError("CONTACT_PHONE_COUNTRY_CALLING_CODE must be a 1 to 3 digit country calling code")
         if self.max_request_body_bytes < 1024:
             raise ValueError("MAX_REQUEST_BODY_BYTES must be at least 1024")
         if self.trusted_client_ip_header not in {"", "cf-connecting-ip"}:

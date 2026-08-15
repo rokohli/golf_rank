@@ -9,6 +9,7 @@ PRODUCTION_SETTINGS = Settings(
     allow_development_identity=False,
     clerk_issuer="https://clerk.example",
     clerk_jwks_url="https://clerk.example/.well-known/jwks.json",
+    contact_identifier_hmac_key="test-contact-identifier-hmac-key-0123456789",
     allowed_hosts="testserver",
 )
 

@@ -12,6 +12,7 @@ from .config import Settings
 @dataclass(frozen=True)
 class CurrentUser:
     provider_subject: str
+    verified_identifiers: tuple[str, ...] = ()
 
 
 @lru_cache(maxsize=8)
@@ -19,7 +20,7 @@ def jwks_client(jwks_url: str) -> PyJWKClient:
     return PyJWKClient(jwks_url)
 
 
-def verify_clerk_token(token: str, settings: Settings) -> str:
+def verify_clerk_token(token: str, settings: Settings) -> tuple[str, tuple[str, ...]]:
     if not settings.clerk_issuer or not settings.clerk_jwks_url:
         raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -40,7 +41,19 @@ def verify_clerk_token(token: str, settings: Settings) -> str:
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
-    return subject
+    return subject, _verified_identifiers(payload)
+
+
+def _verified_identifiers(payload: dict) -> tuple[str, ...]:
+    """Read only verified contact claims signed by Clerk into the API token."""
+    identifiers: list[str] = []
+    email = payload.get("email") or payload.get("email_address")
+    if payload.get("email_verified") is True and isinstance(email, str):
+        identifiers.append(email)
+    phone = payload.get("phone_number") or payload.get("phone")
+    if payload.get("phone_number_verified") is True and isinstance(phone, str):
+        identifiers.append(phone)
+    return tuple(dict.fromkeys(identifiers))
 
 
 def get_settings(request: Request) -> Settings:
@@ -62,5 +75,5 @@ def current_user(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    clerk_subject = verify_clerk_token(authorization.removeprefix("Bearer ").strip(), settings)
-    return CurrentUser(provider_subject=f"clerk:{clerk_subject}")
+    clerk_subject, verified_identifiers = verify_clerk_token(authorization.removeprefix("Bearer ").strip(), settings)
+    return CurrentUser(provider_subject=f"clerk:{clerk_subject}", verified_identifiers=verified_identifiers)

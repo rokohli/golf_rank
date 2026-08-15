@@ -322,7 +322,7 @@ export async function getNotifications(headers: ApiHeaders): Promise<AppNotifica
   return response.json()
 }
 
-export async function syncLinkedContacts(input: { account_identifiers: string[]; contact_identifiers: string[] }, headers: ApiHeaders): Promise<void> {
+export async function syncLinkedContacts(input: { contact_identifiers: string[] }, headers: ApiHeaders): Promise<void> {
   const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { method: 'PUT', headers, body: JSON.stringify(input) })
   if (!response.ok) throw await responseError(response, 'Unable to link contacts. Please try again.')
 }

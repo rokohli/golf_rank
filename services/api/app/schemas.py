@@ -46,10 +46,11 @@ class ProfileOut(OnboardingPreferencesIn):
 
 
 class ContactLinkIn(BaseModel):
-    account_identifiers: list[str] = Field(default_factory=list, max_length=20)
+    model_config = ConfigDict(extra="forbid")
+
     contact_identifiers: list[str] = Field(default_factory=list, max_length=2000)
 
-    @field_validator("account_identifiers", "contact_identifiers")
+    @field_validator("contact_identifiers")
     @classmethod
     def normalize_identifiers(cls, values: list[str]) -> list[str]:
         normalized = list(dict.fromkeys(value.strip().lower() for value in values if value.strip()))

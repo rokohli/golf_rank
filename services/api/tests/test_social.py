@@ -4,6 +4,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.main import create_app
+from app.core.auth import CurrentUser, current_user
+from app.core.config import Settings
+from app.social import _identifier_hash
 from app.models import (
     ActivityEvent,
     Course,
@@ -693,8 +696,20 @@ def test_follow_and_contact_join_notifications_are_persisted() -> None:
     assert followed[0]["notification_type"] == "followed_you"
     assert followed[0]["actor"]["display_name"] == "Alice Golfer"
 
-    assert client.put("/api/v1/me/contacts", headers=alice, json={"account_identifiers": [], "contact_identifiers": ["bob@example.com"]}).status_code == 204
-    assert client.put("/api/v1/me/contacts", headers=bob, json={"account_identifiers": ["bob@example.com"], "contact_identifiers": []}).status_code == 204
+    assert client.put("/api/v1/me/contacts", headers=alice, json={"contact_identifiers": ["bob@example.com"]}).status_code == 204
+    # A client cannot claim another account's identifier; only verified auth
+    # data can create a contact-joined notification.
+    assert client.put("/api/v1/me/contacts", headers=bob, json={"account_identifiers": ["bob@example.com"], "contact_identifiers": []}).status_code == 422
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:notification-bob", ("bob@example.com",))
+    assert client.put("/api/v1/me/contacts", headers=bob, json={"contact_identifiers": []}).status_code == 204
+    client.app.dependency_overrides.pop(current_user)
     joined = client.get("/api/v1/me/notifications", headers=alice).json()
     assert joined[0]["notification_type"] == "contact_joined"
     assert joined[0]["actor"]["display_name"] == "Bob Golfer"
+
+
+def test_contact_identifier_hashes_are_keyed_and_normalize_us_phone_numbers() -> None:
+    settings = Settings(contact_identifier_hmac_key="test-contact-hmac-key")
+    assert _identifier_hash(settings, "+1 415 555 1212") == _identifier_hash(settings, "(415) 555-1212")
+    assert _identifier_hash(settings, "bob@example.com") != _identifier_hash(Settings(contact_identifier_hmac_key="other-test-contact-hmac-key"), "bob@example.com")

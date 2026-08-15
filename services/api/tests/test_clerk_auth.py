@@ -7,13 +7,14 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from app.core.auth import CurrentUser, current_user, get_settings
+from app.core.auth import CurrentUser, _verified_identifiers, current_user, get_settings
 from app.core.config import Settings
 
 
 CLERK_ISSUER = "https://example.clerk.accounts.dev"
 CLERK_JWKS_URL = f"{CLERK_ISSUER}/.well-known/jwks.json"
 CLERK_AUDIENCE = "fairway-api-staging"
+CONTACT_HMAC_KEY = "test-contact-identifier-hmac-key-0123456789"
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +37,7 @@ def audience_settings() -> Settings:
         clerk_issuer=CLERK_ISSUER,
         clerk_jwks_url=CLERK_JWKS_URL,
         clerk_audience=CLERK_AUDIENCE,
+        contact_identifier_hmac_key=CONTACT_HMAC_KEY,
     )
 
 
@@ -68,6 +70,7 @@ def test_production_rejects_missing_bearer_token() -> None:
                 allow_development_identity=False,
                 clerk_issuer="https://example.clerk.accounts.dev",
                 clerk_jwks_url="https://example.clerk.accounts.dev/.well-known/jwks.json",
+                contact_identifier_hmac_key=CONTACT_HMAC_KEY,
             )
         )
     ).get("/whoami")
@@ -81,9 +84,10 @@ def test_clerk_bearer_token_resolves_current_user() -> None:
         allow_development_identity=False,
         clerk_issuer="https://example.clerk.accounts.dev",
         clerk_jwks_url="https://example.clerk.accounts.dev/.well-known/jwks.json",
+        contact_identifier_hmac_key=CONTACT_HMAC_KEY,
     )
 
-    with patch("app.core.auth.verify_clerk_token", return_value="user_123"):
+    with patch("app.core.auth.verify_clerk_token", return_value=("user_123", ())):
         response = TestClient(make_test_app(settings)).get(
             "/whoami",
             headers={"Authorization": "Bearer test.jwt"},
@@ -91,6 +95,14 @@ def test_clerk_bearer_token_resolves_current_user() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"provider_subject": "clerk:user_123"}
+
+
+def test_only_verified_clerk_contact_claims_become_identity_identifiers() -> None:
+    assert _verified_identifiers({
+        "email": "golfer@example.com", "email_verified": True,
+        "phone_number": "+14155551212", "phone_number_verified": True,
+    }) == ("golfer@example.com", "+14155551212")
+    assert _verified_identifiers({"email": "unverified@example.com", "email_verified": False}) == ()
 
 
 def test_configured_clerk_audience_accepts_expected_value(clerk_signing_keys) -> None:
