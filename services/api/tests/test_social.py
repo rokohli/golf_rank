@@ -105,6 +105,38 @@ def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared
     assert "Private notebook" not in str(private_memory)
 
 
+def test_feed_includes_shared_round_note_and_favorite_hole() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:feed-details-alice", "Alice", "alice")
+    bob = _profile(client, "dev:feed-details-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+
+    _rate_course(client, bob, 1, visibility="friends", note="Windy but fun.", favorite_hole=7)
+
+    item = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert item["data"] == {
+        "course_id": 1,
+        "played_on": "2026-07-01",
+        "score": 80,
+        "note": "Windy but fun.",
+        "favorite_hole": 7,
+        "rating": 9.2,
+        "tier": "green",
+    }
+
+    # Older events did not persist these optional fields. The feed must still
+    # render the details currently shared with the backing round.
+    with client.app.state.session_factory() as session:
+        event = session.get(ActivityEvent, item["id"])
+        assert event is not None
+        event.event_data = {"course_id": 1, "played_on": "2026-07-01", "score": 80, "rating": 9.2, "tier": "green"}
+        session.commit()
+
+    hydrated = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert hydrated["data"]["note"] == "Windy but fun."
+    assert hydrated["data"]["favorite_hole"] == 7
+
+
 def test_course_friend_thoughts_excludes_one_way_private_blocked_and_muted_relationships() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-policy-alice", "Alice", "alice")
@@ -648,3 +680,21 @@ def test_feed_cursor_pages_through_many_events_with_the_same_timestamp() -> None
 
     assert len(event_ids) == 60
     assert len(set(event_ids)) == 60
+
+
+def test_follow_and_contact_join_notifications_are_persisted() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:notification-alice", "Alice", "alice")
+    bob = _profile(client, "dev:notification-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    followed = client.get("/api/v1/me/notifications", headers=bob).json()
+    assert followed[0]["notification_type"] == "followed_you"
+    assert followed[0]["actor"]["display_name"] == "Alice Golfer"
+
+    assert client.put("/api/v1/me/contacts", headers=alice, json={"account_identifiers": [], "contact_identifiers": ["bob@example.com"]}).status_code == 204
+    assert client.put("/api/v1/me/contacts", headers=bob, json={"account_identifiers": ["bob@example.com"], "contact_identifiers": []}).status_code == 204
+    joined = client.get("/api/v1/me/notifications", headers=alice).json()
+    assert joined[0]["notification_type"] == "contact_joined"
+    assert joined[0]["actor"]["display_name"] == "Bob Golfer"

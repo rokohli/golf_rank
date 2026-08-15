@@ -15,7 +15,6 @@ export default function NewRound() {
   const { getAuthHeaders } = useAuthHeaders()
   const [initialCourse, setInitialCourse] = useState<Course | null>(null)
   const [friends, setFriends] = useState<FriendSummary[]>([])
-  const [searchRegion, setSearchRegion] = useState<string | undefined>()
   const [defaultVisibility, setDefaultVisibility] = useState<RoundVisibility>('friends')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -35,7 +34,6 @@ export default function NewRound() {
         if (!active) return
         setInitialCourse(course)
         setFriends(follows.map((item) => item.user))
-        setSearchRegion(profile?.home_region || undefined)
         setDefaultVisibility(profile?.onboarding_data?.default_round_visibility ?? 'friends')
       } catch (reason) {
         if (active) setError(message(reason, 'Unable to prepare the round form.'))
@@ -61,7 +59,7 @@ export default function NewRound() {
           const round = await createRound(input, await getAuthHeaders())
           router.replace(`/round/${round.id}` as never)
         }}
-        searchCourses={(query) => searchCourses({ q: query, region: searchRegion, limit: 20 })}
+        searchCourses={(query) => searchCourses({ q: query, limit: 20 })}
         submitLabel="Log round"
       /> : null}
     </ProductScreen>

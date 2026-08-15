@@ -4,7 +4,7 @@ import { Alert } from 'react-native'
 import EditProfile from '../profile/edit'
 import GolfPreferences from '../profile/preferences'
 import Profile from '../profile'
-import Notifications from '../notifications'
+import NotificationSettings from '../notification-settings'
 import Privacy from '../privacy'
 import Settings from '../settings'
 
@@ -26,6 +26,9 @@ jest.mock('@expo/vector-icons', () => {
 jest.mock('expo-image-picker', () => ({
   launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
 }))
+
+jest.mock('@clerk/expo', () => ({ useUser: () => ({ user: { emailAddresses: [], phoneNumbers: [] } }) }))
+jest.mock('expo-contacts', () => ({ Fields: { Emails: 'emails', PhoneNumbers: 'phoneNumbers' }, requestPermissionsAsync: jest.fn(), getContactsAsync: jest.fn() }))
 
 jest.mock('expo-router', () => {
   const React = require('react')
@@ -73,7 +76,7 @@ const profile = {
 
 const latestRound = {
   id: 42,
-  course: { id: 7, name: 'Pebble Beach Golf Links', region: 'Monterey, CA' },
+  course: { id: 7, name: 'Pebble Beach Golf Links', region: 'Monterey, CA', par: 72 },
   played_on: '2026-07-17', score: 84, note: null, favorite_hole: 7, companions: [], visibility: 'friends', is_favorite: true, is_rating_round: false, created_at: '', updated_at: '',
 }
 
@@ -96,6 +99,7 @@ describe('profile experience', () => {
     expect(screen.getByText('@rohank')).toBeOnTheScreen()
     expect(screen.getByText('84.1')).toBeOnTheScreen()
     expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.getByText('+12')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: 'Profile settings' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/settings')
@@ -134,8 +138,8 @@ describe('profile experience', () => {
     await screen.findByText('Golf preferences')
     fireEvent.press(screen.getByText('Golf preferences'))
     expect(mockRouter.push).toHaveBeenCalledWith('/profile/preferences')
-    fireEvent.press(screen.getByText('Notifications'))
-    expect(mockRouter.push).toHaveBeenCalledWith('/notifications')
+    fireEvent.press(screen.getByText('Notification settings'))
+    expect(mockRouter.push).toHaveBeenCalledWith('/notification-settings')
     fireEvent.press(screen.getByText('Privacy & visibility'))
     expect(mockRouter.push).toHaveBeenCalledWith('/privacy')
     fireEvent.press(screen.getByText('Muted accounts'))
@@ -172,7 +176,7 @@ describe('profile experience', () => {
   })
 
   it('persists the master notification preference', async () => {
-    render(<Notifications />)
+    render(<NotificationSettings />)
 
     await screen.findByText('Stay in the loop')
     fireEvent(screen.getByLabelText('Allow notifications'), 'valueChange', false)

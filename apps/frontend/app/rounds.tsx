@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } 
 import { getRounds, getRoundSummary } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, IconButton, ProductScreen, ScreenHeader } from '../src/components/ProductUI'
+import { scoreAccessibilityLabel, scoreToPar } from '../src/scorePresentation'
 import { GolfRound, RoundSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -86,11 +87,15 @@ export default function Rounds() {
 
 function RoundRow({ round, onPress }: { round: GolfRound; onPress: () => void }) {
   const date = formatDateParts(round.played_on)
+  const toPar = scoreToPar(round.score, round.course.par)
   return <Pressable accessibilityLabel={`Open ${round.course.name} round`} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.roundRow, pressed && { opacity: 0.6 }]}>
     <View style={styles.dateBlock}><Text style={styles.dateMonth}>{date.month}</Text><Text style={styles.dateDay}>{date.day}</Text></View>
     <View style={styles.roundCopy}><Text style={styles.course}>{round.course.name}</Text><Text numberOfLines={1} style={styles.meta}>{round.course.region}{round.is_rating_round ? ' · Rating visit' : ''}</Text></View>
     {round.is_favorite ? <Feather accessibilityLabel="Favorite round" name="star" size={16} color={colors.gold} /> : null}
-    <Text accessibilityLabel={round.score == null ? 'No score recorded' : `Score ${round.score}`} style={styles.score}>{round.score ?? '—'}</Text>
+    <View style={styles.scoreBlock}>
+      <Text accessibilityLabel={scoreAccessibilityLabel(round.score, round.course.par)} style={styles.score}>{round.score ?? '—'}</Text>
+      {toPar ? <View style={styles.toParBadge}><Text style={styles.toPar}>{toPar}</Text></View> : null}
+    </View>
   </Pressable>
 }
 
@@ -116,7 +121,7 @@ const styles = StyleSheet.create({
   dateDay: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 24, lineHeight: 28 },
   roundCopy: { flex: 1, gap: 4 },
   course: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14, fontWeight: '400' }, meta: { color: colors.muted, fontSize: 10 },
-  score: { color: colors.pine, fontFamily: 'Georgia', fontSize: 28, fontWeight: '400', minWidth: 34, textAlign: 'right' },
+  scoreBlock: { alignItems: 'center', flexDirection: 'row', gap: 6, minWidth: 40 }, score: { color: colors.pine, fontFamily: 'Georgia', fontSize: 22, fontWeight: '400', minWidth: 34, textAlign: 'right' }, toParBadge: { alignItems: 'center', borderColor: colors.muted, borderRadius: 13, borderWidth: 1, height: 26, justifyContent: 'center', minWidth: 26, paddingHorizontal: 4 }, toPar: { color: colors.muted, fontSize: 9, fontWeight: '700' },
   state: { alignItems: 'center', gap: 10, paddingVertical: 30 }, emptyTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 }, empty: { color: colors.muted, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   error: { color: colors.error, fontSize: 11, textAlign: 'center' }, retry: { borderColor: colors.pine, borderRadius: 18, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 8 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
   primary: { backgroundColor: colors.pine, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 9 }, primaryText: { color: '#FFF', fontSize: 11, fontWeight: '800' },

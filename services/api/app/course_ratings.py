@@ -248,7 +248,7 @@ def _record_rating_event(
         )
     event.visibility = round_.visibility
     event.event_data = {
-        **_event_data(round_),
+        **_event_data(session, round_),
         "rating": rating.rating,
         "tier": rating.tier,
     }

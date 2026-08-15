@@ -297,6 +297,26 @@ class Follow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class LinkedContact(Base):
+    __tablename__ = "linked_contacts"
+    __table_args__ = (UniqueConstraint("user_id", "identifier_hash", name="uq_linked_contact_user_hash"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    identifier_hash: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class AppNotification(Base):
+    __tablename__ = "app_notifications"
+    __table_args__ = (UniqueConstraint("recipient_user_id", "actor_user_id", "notification_type", name="uq_notification_recipient_actor_type"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    notification_type: Mapped[str] = mapped_column(String(40), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class ActivityEvent(Base):
     __tablename__ = "activity_events"
 

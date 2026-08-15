@@ -184,6 +184,13 @@ export type FeedPage = {
   next_cursor: string | null
 }
 
+export type AppNotification = {
+  id: number
+  notification_type: 'followed_you' | 'contact_joined' | string
+  actor: UserSummary
+  created_at: string
+}
+
 export type CourseSearchFilters = {
   q?: string
   region?: string

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -14,6 +15,8 @@ from .models import (
     ActivityReaction,
     Course,
     Follow,
+    AppNotification,
+    LinkedContact,
     OnboardingPreference,
     Profile,
     User,
@@ -28,6 +31,7 @@ from .schemas import (
     FriendCourseThoughtOut,
     FriendCourseThoughtUserOut,
     FriendsCourseThoughtsOut,
+    ContactLinkIn,
 )
 from .domain import course_identity_ids
 
@@ -68,6 +72,13 @@ class ActivityOut(BaseModel):
 class FeedPageOut(BaseModel):
     items: list[ActivityOut]
     next_cursor: str | None
+
+
+class NotificationOut(BaseModel):
+    id: int
+    notification_type: str
+    actor: UserSummaryOut
+    created_at: datetime
 
 
 class ReactionOut(BaseModel):
@@ -297,6 +308,26 @@ def _event_matches_current_round_visibility(session: Session, event: ActivityEve
     )
 
 
+def _activity_data(session: Session, event: ActivityEvent) -> dict:
+    """Return current, intentionally shared round details for an activity."""
+    data = dict(event.event_data)
+    if event.subject_type not in {"round", "rating_round"}:
+        return data
+    # Read these fields from the backing round so activity created before the
+    # feed detail fields existed also renders the details the golfer shares now.
+    data.pop("note", None)
+    data.pop("favorite_hole", None)
+    round_ = session.get(Round, event.subject_id)
+    if round_ is None:
+        return data
+    note = session.get(RoundNote, round_.id)
+    if note and note.body:
+        data["note"] = note.body
+    if round_.favorite_hole is not None:
+        data["favorite_hole"] = round_.favorite_hole
+    return data
+
+
 def _cursor(event: ActivityEvent) -> str:
     raw = f"{event.created_at.isoformat()}|{event.id}".encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -366,9 +397,48 @@ def follow_user(
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
         session.add(follow)
+        session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
         session.commit()
     mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
+
+
+@router.get("/api/v1/me/notifications", response_model=list[NotificationOut])
+def list_notifications(
+    current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
+) -> list[NotificationOut]:
+    user = stored_user(session, current)
+    if user is None:
+        return []
+    blocked = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
+    notifications = session.scalars(
+        select(AppNotification).where(
+            AppNotification.recipient_user_id == user.id,
+            AppNotification.actor_user_id.not_in(blocked),
+        ).order_by(AppNotification.created_at.desc(), AppNotification.id.desc())
+    ).all()
+    return [NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at) for item in notifications]
+
+
+@router.put("/api/v1/me/contacts", status_code=204)
+def link_contacts(payload: ContactLinkIn, current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)) -> Response:
+    user = require_user(session, current)
+    hashes = {_identifier_hash(value) for value in payload.contact_identifiers}
+    session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
+    session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes)
+    for identity in {_identifier_hash(value) for value in payload.account_identifiers}:
+        recipients = session.scalars(select(LinkedContact.user_id).where(LinkedContact.identifier_hash == identity, LinkedContact.user_id != user.id)).all()
+        for recipient_id in set(recipients):
+            if user.id not in _blocked_ids(session, recipient_id):
+                existing = session.scalar(select(AppNotification.id).where(AppNotification.recipient_user_id == recipient_id, AppNotification.actor_user_id == user.id, AppNotification.notification_type == "contact_joined"))
+                if existing is None:
+                    session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
+    session.commit()
+    return Response(status_code=204)
+
+
+def _identifier_hash(value: str) -> str:
+    return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
 
 @router.delete("/api/v1/me/follows/{target_user_id}", status_code=204)
@@ -414,6 +484,7 @@ def activity_feed(
     visible_public_ids = followed_ids - excluded
     visible_friend_ids = mutual_ids - excluded
     statement = select(ActivityEvent).where(
+        ActivityEvent.event_type != "ranking_updated",
         or_(
             ActivityEvent.actor_user_id == user.id,
             and_(
@@ -462,7 +533,8 @@ def activity_feed(
             if actor is None:
                 continue
             course = None
-            course_id = event.event_data.get("course_id")
+            data = _activity_data(session, event)
+            course_id = data.get("course_id")
             if isinstance(course_id, int):
                 try:
                     stored_course = require_course(session, course_id)
@@ -474,7 +546,7 @@ def activity_feed(
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,
                 subject_id=event.subject_id, actor=_summary(session, actor), course=course,
-                data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+                data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
                 is_own_activity=event.actor_user_id == user.id,
                 created_at=event.created_at,
             ))
@@ -508,7 +580,8 @@ def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> Act
     if actor is None:
         raise HTTPException(404, "Activity not found")
     course = None
-    course_id = event.event_data.get("course_id")
+    data = _activity_data(session, event)
+    course_id = data.get("course_id")
     if isinstance(course_id, int):
         try:
             stored_course = require_course(session, course_id)
@@ -520,7 +593,7 @@ def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> Act
     return ActivityOut(
         id=event.id, event_type=event.event_type, subject_type=event.subject_type,
         subject_id=event.subject_id, actor=_summary(session, actor), course=course,
-        data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+        data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
         is_own_activity=event.actor_user_id == viewer_id, created_at=event.created_at,
     )
 

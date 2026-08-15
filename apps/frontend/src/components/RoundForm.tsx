@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons'
-import { useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { useMemo, useRef, useState } from 'react'
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 
 import { Course, FriendSummary, GolfRound, RoundInput, RoundVisibility } from '../types'
 import { colors } from '../ui/theme'
@@ -31,9 +31,12 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const [visibility, setVisibility] = useState<RoundVisibility>(initialRound?.visibility ?? defaultVisibility)
   const [favorite, setFavorite] = useState(initialRound?.is_favorite ?? false)
   const [openSection, setOpenSection] = useState<DetailSection | null>(null)
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendarMonth, setCalendarMonth] = useState(() => monthStart(parseDateInput(playedOn) ?? localToday()))
   const [searching, setSearching] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const searchRequest = useRef(0)
 
   const parsedDate = parseDateInput(playedOn)
   const scoreNumber = score.trim() ? Number(score) : null
@@ -52,18 +55,46 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const peopleCount = friendIds.length + guests.length
   const detailsSummary = favoriteHoleNumber ? `Hole ${favoriteHoleNumber} added` : note.trim() ? 'Notes added' : 'Add details'
 
-  async function runCourseSearch() {
-    const query = courseQuery.trim()
-    if (!query) return
+  async function runCourseSearch(rawQuery = courseQuery) {
+    const query = rawQuery.trim()
+    if (query.length < 3) {
+      setCourseResults([])
+      setSearching(false)
+      return
+    }
+    const request = ++searchRequest.current
     setSearching(true)
     setError(null)
     try {
-      setCourseResults(await searchCourses(query))
+      const results = await searchCourses(query)
+      if (request === searchRequest.current) setCourseResults(results)
     } catch (reason) {
-      setError(message(reason, 'Unable to search courses.'))
+      if (request === searchRequest.current) setError(message(reason, 'Unable to search courses.'))
     } finally {
-      setSearching(false)
+      if (request === searchRequest.current) setSearching(false)
     }
+  }
+
+  function updateCourseQuery(value: string) {
+    setCourseQuery(value)
+    if (value !== course?.name) setCourse(null)
+    if (value.trim().length < 3) {
+      searchRequest.current += 1
+      setCourseResults([])
+      setSearching(false)
+      return
+    }
+    void runCourseSearch(value)
+  }
+
+  function openCalendar() {
+    setCalendarMonth(monthStart(parseDateInput(playedOn) ?? localToday()))
+    setCalendarOpen(true)
+  }
+
+  function selectDate(value: string) {
+    setPlayedOn(formatDateInput(value))
+    setCalendarOpen(false)
   }
 
   async function submit() {
@@ -96,7 +127,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     {initialRound ? <SelectedCourse course={course} /> : <>
       <View style={styles.courseSearch}>
         <Feather name="search" color={colors.pineDark} size={20} />
-        <TextInput accessibilityLabel="Course" onChangeText={(value) => { setCourseQuery(value); if (value !== course?.name) setCourse(null) }} onSubmitEditing={() => void runCourseSearch()} placeholder="Search for a course" placeholderTextColor={colors.muted} returnKeyType="search" style={styles.courseSearchInput} value={courseQuery} />
+        <TextInput accessibilityLabel="Course" onChangeText={updateCourseQuery} onSubmitEditing={() => void runCourseSearch()} placeholder="Search for a course" placeholderTextColor={colors.muted} returnKeyType="search" style={styles.courseSearchInput} value={courseQuery} />
         <Pressable accessibilityRole="button" accessibilityLabel="Search courses" onPress={() => void runCourseSearch()} style={styles.searchButton}>{searching ? <ActivityIndicator color={colors.pine} size="small" /> : <Feather name="arrow-right" color={colors.pine} size={18} />}</Pressable>
       </View>
       {courseResults.length ? <View style={styles.results}>{courseResults.slice(0, 8).map((result) => <Pressable accessibilityRole="button" accessibilityLabel={`Select ${result.name}`} key={result.id} onPress={() => { setCourse(result); setCourseQuery(result.name); setCourseResults([]) }} style={styles.result}><Text style={styles.resultName}>{result.name}</Text><Text style={styles.help}>{result.region}</Text></Pressable>)}</View> : null}
@@ -104,7 +135,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     </>}
 
     <View style={styles.twoColumns}>
-      <View style={styles.essentialField}><FieldLabel text="Date" /><TextInput accessibilityLabel="Played date" autoCapitalize="none" keyboardType="numbers-and-punctuation" onChangeText={setPlayedOn} placeholder="MM/DD/YYYY" placeholderTextColor={colors.muted} style={styles.lineInput} value={playedOn} /></View>
+      <View style={styles.essentialField}><FieldLabel text="Date" /><Pressable accessibilityLabel="Played date" accessibilityRole="button" onPress={openCalendar} style={styles.dateButton}><Text style={styles.dateValue}>{playedOn}</Text><Feather name="calendar" color={colors.pine} size={17} /></Pressable></View>
       <View style={styles.essentialField}><FieldLabel text="Score" /><TextInput accessibilityLabel="Score" keyboardType="number-pad" onChangeText={setScore} placeholder="84" placeholderTextColor={colors.muted} style={styles.lineInput} value={score} /></View>
     </View>
 
@@ -133,6 +164,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.validation}>Favorite hole must be between 1 and 18.</Text> : null}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => void submit()} style={[styles.submit, (!valid || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitText}>{submitLabel}</Text>}</Pressable>
+    <DatePicker calendarMonth={calendarMonth} onClose={() => setCalendarOpen(false)} onMonthChange={setCalendarMonth} onSelect={selectDate} open={calendarOpen} selectedDate={parsedDate} />
   </View>
 }
 
@@ -146,6 +178,17 @@ function listUnique(values: string[]) { return [...new Set(values)] }
 function localToday() { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
 export function formatDateInput(value: string) { const [year, month, day] = value.split('-'); return year && month && day ? `${month}/${day}/${year}` : value }
 export function parseDateInput(value: string) { const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim()); if (!match) return null; const [, month, day, year] = match; const candidate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`; const date = new Date(`${candidate}T12:00:00`); return date.getFullYear() === Number(year) && date.getMonth() + 1 === Number(month) && date.getDate() === Number(day) ? candidate : null }
+
+function DatePicker({ calendarMonth, onClose, onMonthChange, onSelect, open, selectedDate }: { calendarMonth: Date; onClose: () => void; onMonthChange: (month: Date) => void; onSelect: (value: string) => void; open: boolean; selectedDate: string | null }) {
+  const today = localToday()
+  const days = calendarDays(calendarMonth)
+  return <Modal animationType="fade" onRequestClose={onClose} transparent visible={open}><View style={styles.calendarOverlay}><View accessibilityLabel="Choose round date" style={styles.calendarCard}><View style={styles.calendarHeader}><View><Text style={styles.calendarKicker}>Round date</Text><Text style={styles.calendarTitle}>{calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</Text></View><Pressable accessibilityLabel="Close calendar" accessibilityRole="button" onPress={onClose} style={styles.calendarClose}><Feather color={colors.pineDark} name="x" size={20} /></Pressable></View><View style={styles.calendarNav}><Pressable accessibilityLabel="Previous month" accessibilityRole="button" onPress={() => onMonthChange(addMonths(calendarMonth, -1))} style={styles.calendarNavButton}><Feather color={colors.pine} name="chevron-left" size={21} /></Pressable><Text style={styles.calendarHint}>Choose the day you played</Text><Pressable accessibilityLabel="Next month" accessibilityRole="button" onPress={() => onMonthChange(addMonths(calendarMonth, 1))} style={styles.calendarNavButton}><Feather color={colors.pine} name="chevron-right" size={21} /></Pressable></View><View style={styles.weekdays}>{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}</View><View style={styles.calendarGrid}>{days.map((day, index) => { if (!day) return <View key={`blank-${index}`} style={styles.calendarDay} />; const value = dateKey(day); const selected = value === selectedDate; const disabled = value > today; return <Pressable accessibilityLabel={`Select ${day.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}`} accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} key={value} onPress={() => onSelect(value)} style={[styles.calendarDay, selected && styles.calendarDaySelected, disabled && styles.calendarDayDisabled]}><Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, disabled && styles.calendarDayTextDisabled]}>{day.getDate()}</Text></Pressable> })}</View><Pressable accessibilityLabel="Select today" accessibilityRole="button" onPress={() => onSelect(today)} style={styles.todayButton}><Text style={styles.todayButtonText}>Today</Text></Pressable></View></View></Modal>
+}
+
+function monthStart(value: string) { const date = new Date(`${value}T12:00:00`); return new Date(date.getFullYear(), date.getMonth(), 1) }
+function addMonths(value: Date, amount: number) { return new Date(value.getFullYear(), value.getMonth() + amount, 1) }
+function dateKey(value: Date) { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}` }
+function calendarDays(month: Date) { const count = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate(); return [...Array(month.getDay()).fill(null), ...Array.from({ length: count }, (_, index) => new Date(month.getFullYear(), month.getMonth(), index + 1))] }
 
 const styles = StyleSheet.create({
   form: { gap: 14 },
@@ -163,7 +206,7 @@ const styles = StyleSheet.create({
   selectedCourseRegion: { color: colors.muted, fontSize: 11 },
   twoColumns: { flexDirection: 'row', gap: 28 },
   essentialField: { flex: 1, gap: 4 },
-  lineInput: { borderBottomColor: colors.muted, borderBottomWidth: StyleSheet.hairlineWidth, color: colors.pineDark, fontSize: 15, minHeight: 42, paddingHorizontal: 0, paddingVertical: 8 },
+  lineInput: { borderBottomColor: colors.muted, borderBottomWidth: StyleSheet.hairlineWidth, color: colors.pineDark, fontSize: 15, minHeight: 42, paddingHorizontal: 0, paddingVertical: 8 }, dateButton: { alignItems: 'center', borderBottomColor: colors.muted, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 42, paddingVertical: 8 }, dateValue: { color: colors.pineDark, fontSize: 15 },
   detailsList: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth },
   detailRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 58, paddingHorizontal: 2 },
   detailLabel: { color: colors.pineDark, fontSize: 14, fontWeight: '700' },
@@ -194,4 +237,5 @@ const styles = StyleSheet.create({
   submitText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.65 },
+  calendarOverlay: { alignItems: 'center', backgroundColor: 'rgba(28, 37, 32, 0.42)', flex: 1, justifyContent: 'center', padding: 22 }, calendarCard: { backgroundColor: colors.background, borderRadius: 20, elevation: 8, maxWidth: 380, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 18, width: '100%' }, calendarHeader: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' }, calendarKicker: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.1, textTransform: 'uppercase' }, calendarTitle: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 25, marginTop: 3 }, calendarClose: { alignItems: 'center', backgroundColor: colors.card, borderRadius: 18, height: 36, justifyContent: 'center', width: 36 }, calendarNav: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 19 }, calendarNavButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 }, calendarHint: { color: colors.muted, fontSize: 10 }, weekdays: { flexDirection: 'row', marginTop: 12 }, weekday: { color: colors.muted, flex: 1, fontSize: 10, fontWeight: '800', textAlign: 'center' }, calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 7 }, calendarDay: { alignItems: 'center', height: 40, justifyContent: 'center', width: '14.2857%' }, calendarDaySelected: { backgroundColor: colors.pine, borderRadius: 20 }, calendarDayDisabled: { opacity: 0.3 }, calendarDayText: { color: colors.ink, fontSize: 13, fontWeight: '700' }, calendarDayTextSelected: { color: '#FFF' }, calendarDayTextDisabled: { color: colors.muted }, todayButton: { alignItems: 'center', borderColor: colors.pine, borderRadius: 16, borderWidth: 1, marginTop: 14, minHeight: 34, justifyContent: 'center' }, todayButtonText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })

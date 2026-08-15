@@ -294,10 +294,11 @@ def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() ->
             "course_id": 1,
             "played_on": "2026-07-01",
             "score": 79,
+            "note": "Fast greens",
+            "favorite_hole": 7,
             "rating": rating.json()["personal_rating"],
             "tier": "green",
         }
-        assert "note" not in event.event_data
 
     unranked = client.put(
         "/api/v1/me/rankings/tiers",

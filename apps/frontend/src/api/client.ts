@@ -2,6 +2,7 @@ import { ApiHeaders } from '../auth/useAuthToken'
 import {
   AIGolfPlan,
   Activity,
+  AppNotification,
   Course,
   CourseRegion,
   CourseSearchFilters,
@@ -313,6 +314,17 @@ export async function getFeed(headers: ApiHeaders, cursor?: string): Promise<Fee
   const response = await fetch(`${baseUrl}/api/v1/feed?${params}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load friends activity. Please try again.')
   return response.json()
+}
+
+export async function getNotifications(headers: ApiHeaders): Promise<AppNotification[]> {
+  const response = await fetch(`${baseUrl}/api/v1/me/notifications`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load notifications. Please try again.')
+  return response.json()
+}
+
+export async function syncLinkedContacts(input: { account_identifiers: string[]; contact_identifiers: string[] }, headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { method: 'PUT', headers, body: JSON.stringify(input) })
+  if (!response.ok) throw await responseError(response, 'Unable to link contacts. Please try again.')
 }
 
 export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSummary[]> {

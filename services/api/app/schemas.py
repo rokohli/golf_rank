@@ -45,6 +45,19 @@ class ProfileOut(OnboardingPreferencesIn):
     pass
 
 
+class ContactLinkIn(BaseModel):
+    account_identifiers: list[str] = Field(default_factory=list, max_length=20)
+    contact_identifiers: list[str] = Field(default_factory=list, max_length=2000)
+
+    @field_validator("account_identifiers", "contact_identifiers")
+    @classmethod
+    def normalize_identifiers(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip().lower() for value in values if value.strip()))
+        if any(len(value) > 255 for value in normalized):
+            raise ValueError("contact identifiers must be at most 255 characters")
+        return normalized
+
+
 class CourseImageOut(BaseModel):
     id: int
     url: str | None = None

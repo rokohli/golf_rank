@@ -1,95 +1,23 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
-import { getProfile, savePreferences } from '../src/api/client'
+import { followUser, getNotifications } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { ProductScreen, ScreenHeader } from '../src/components/ProductUI'
-import { OnboardingPreferences } from '../src/types'
-import { colors, radii } from '../src/ui/theme'
+import { AppNotification } from '../src/types'
+import { colors } from '../src/ui/theme'
 
 export default function Notifications() {
-  const router = useRouter()
-  const { getAuthHeaders } = useAuthHeaders()
-  const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
-  const [enabled, setEnabled] = useState(true)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const next = await getProfile(await getAuthHeaders())
-      setProfile(next)
-      setEnabled(next.onboarding_data?.notifications !== false)
-    } catch (reason) {
-      setError(message(reason, 'Unable to load notification settings.'))
-    } finally {
-      setLoading(false)
-    }
-  }, [getAuthHeaders])
-
+  const router = useRouter(); const { getAuthHeaders } = useAuthHeaders(); const [items, setItems] = useState<AppNotification[]>([]); const [loading, setLoading] = useState(true); const [refreshing, setRefreshing] = useState(false); const [error, setError] = useState<string | null>(null); const [following, setFollowing] = useState<number | null>(null)
+  const load = useCallback(async (refresh = false) => { refresh ? setRefreshing(true) : setLoading(true); setError(null); try { setItems(await getNotifications(await getAuthHeaders())) } catch (reason) { setError(message(reason, 'Unable to load notifications.')) } finally { setLoading(false); setRefreshing(false) } }, [getAuthHeaders])
   useFocusEffect(useCallback(() => { void load() }, [load]))
-
-  const save = async () => {
-    if (!profile?.onboarding_data) {
-      setError('Your saved profile is incomplete. Please try again.')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    try {
-      await savePreferences({ ...profile, onboarding_data: { ...profile.onboarding_data, notifications: enabled } }, await getAuthHeaders())
-      router.back()
-    } catch (reason) {
-      setError(message(reason, 'Unable to save notification settings.'))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return <>
-    <Stack.Screen options={{ headerShown: false }} />
-    <ProductScreen>
-      <ScreenHeader title="Notifications" onBack={() => router.back()} />
-      {loading ? <ActivityIndicator accessibilityLabel="Loading notification settings" color={colors.pine} /> : <>
-        <View style={styles.heroIcon}><Feather name="bell" size={26} color={colors.pine} /></View>
-        <View style={styles.intro}><Text style={styles.introTitle}>Stay in the loop</Text><Text style={styles.introBody}>Control whether GolfRank can notify you about relevant activity and updates.</Text></View>
-        <View style={styles.group}>
-          <View style={styles.row}>
-            <View style={styles.rowCopy}><Text style={styles.rowTitle}>Allow notifications</Text><Text style={styles.rowBody}>{enabled ? 'Notifications are enabled for your account.' : 'You will not receive GolfRank notifications.'}</Text></View>
-            <Switch accessibilityLabel="Allow notifications" onValueChange={setEnabled} trackColor={{ false: '#D4D7D4', true: colors.pineSoft }} thumbColor={enabled ? colors.pine : '#FFFFFF'} value={enabled} />
-          </View>
-        </View>
-        <Text style={styles.note}>Device-level notification permission is managed in iOS Settings.</Text>
-        {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-        <Pressable accessibilityRole="button" accessibilityState={{ disabled: saving }} disabled={saving} onPress={() => void save()} style={({ pressed }) => [styles.saveButton, pressed && styles.pressed, saving && styles.disabled]}>{saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveText}>Save changes</Text>}</Pressable>
-        <Pressable accessibilityRole="button" disabled={saving} hitSlop={8} onPress={() => router.back()}><Text style={styles.cancel}>Cancel</Text></Pressable>
-      </>}
-    </ProductScreen>
-  </>
+  const follow = async (item: AppNotification) => { setFollowing(item.id); setError(null); try { await followUser(item.actor.id, await getAuthHeaders()); setItems((current) => current.map((value) => value.id === item.id ? { ...value, notification_type: 'contact_joined_followed' } : value)) } catch (reason) { setError(message(reason, 'Unable to follow this golfer.')) } finally { setFollowing(null) } }
+  return <><Stack.Screen options={{ headerShown: false }} /><ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}><ScreenHeader title="Notifications" onBack={() => router.back()} action={<Pressable accessibilityLabel="Notification settings" accessibilityRole="button" onPress={() => router.push('/notification-settings')} style={styles.settings}><Feather name="settings" size={18} color={colors.pine} /></Pressable>} />{loading ? <ActivityIndicator accessibilityLabel="Loading notifications" color={colors.pine} /> : null}{error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : null}{!loading && !error && !items.length ? <View style={styles.state}><Feather name="bell" size={26} color={colors.muted} /><Text style={styles.emptyTitle}>You’re all caught up</Text><Text style={styles.empty}>Relevant account and social updates will appear here.</Text></View> : null}<View style={styles.list}>{items.map((item) => <NotificationRow following={following === item.id} item={item} key={item.id} onFollow={() => void follow(item)} />)}</View></ProductScreen></>
 }
-
+function NotificationRow({ following, item, onFollow }: { following: boolean; item: AppNotification; onFollow: () => void }) { const contactJoined = item.notification_type.startsWith('contact_joined'); const followed = item.notification_type === 'contact_joined_followed'; const text = item.notification_type === 'followed_you' ? 'started following you' : 'joined Fairway'; return <View style={[styles.row, contactJoined && styles.contactRow]}><View style={styles.avatar}><Text style={styles.initials}>{initials(item.actor.display_name)}</Text></View><View style={styles.copy}><Text style={styles.title}><Text style={styles.actor}>{item.actor.display_name}</Text> {text}</Text><Text style={styles.time}>{contactJoined ? `From your contacts · ${relativeTime(item.created_at)}` : relativeTime(item.created_at)}</Text></View>{contactJoined ? <Pressable accessibilityLabel={`${followed ? 'Following' : 'Follow'} ${item.actor.display_name}`} accessibilityRole="button" disabled={following || followed} onPress={onFollow} style={[styles.follow, followed && styles.followed]}>{following ? <ActivityIndicator color={colors.pine} size="small" /> : <Text style={[styles.followText, followed && styles.followedText]}>{followed ? 'Following' : 'Follow'}</Text>}</Pressable> : null}</View> }
+function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
+function relativeTime(value: string) { const days = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000)); return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : `${days}d ago` }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
-
-const styles = StyleSheet.create({
-  heroIcon: { alignItems: 'center', alignSelf: 'center', backgroundColor: colors.pineSoft, borderRadius: 29, height: 58, justifyContent: 'center', marginTop: 8, width: 58 },
-  intro: { alignItems: 'center', gap: 7, paddingHorizontal: 24 },
-  introTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 22 },
-  introBody: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },
-  group: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1 },
-  row: { alignItems: 'center', flexDirection: 'row', gap: 15, minHeight: 76, paddingHorizontal: 15, paddingVertical: 12 },
-  rowCopy: { flex: 1, gap: 5 },
-  rowTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 15 },
-  rowBody: { color: colors.muted, fontSize: 10, lineHeight: 14 },
-  note: { color: colors.muted, fontSize: 10, lineHeight: 15, paddingHorizontal: 4 },
-  error: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
-  saveButton: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: radii.pill, justifyContent: 'center', minHeight: 50, marginTop: 'auto' },
-  saveText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  cancel: { color: colors.pine, fontSize: 12, fontWeight: '800', textAlign: 'center' },
-  pressed: { opacity: 0.75 },
-  disabled: { opacity: 0.55 },
-})
+const styles = StyleSheet.create({ settings: { alignItems: 'center', height: 38, justifyContent: 'center', width: 38 }, list: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, row: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 62, paddingVertical: 8 }, contactRow: { backgroundColor: '#F4F2EA', marginHorizontal: -4, paddingHorizontal: 4 }, avatar: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: 21, height: 42, justifyContent: 'center', width: 42 }, initials: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 17 }, copy: { flex: 1, gap: 3 }, title: { color: colors.ink, fontSize: 12, lineHeight: 16 }, actor: { fontWeight: '800' }, time: { color: colors.muted, fontSize: 10 }, follow: { alignItems: 'center', borderColor: colors.pine, borderRadius: 8, borderWidth: 1, justifyContent: 'center', minHeight: 34, minWidth: 66, paddingHorizontal: 10 }, followed: { backgroundColor: colors.pine }, followText: { color: colors.pine, fontSize: 11, fontWeight: '800' }, followedText: { color: '#FFF' }, state: { alignItems: 'center', gap: 9, paddingVertical: 34 }, emptyTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 19 }, empty: { color: colors.muted, fontSize: 11, textAlign: 'center' }, error: { color: colors.error, fontSize: 11 }, retry: { borderColor: colors.pine, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' } })

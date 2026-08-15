@@ -36,7 +36,7 @@ jest.mock('../../src/auth/useAuthToken', () => ({
 
 const round = {
   id: 42,
-  course: { id: 7, name: 'Test Links', region: 'Monterey, CA' },
+  course: { id: 7, name: 'Test Links', region: 'Monterey, CA', par: 72 },
   played_on: '2026-07-17',
   score: 84,
   note: null,
@@ -67,6 +67,8 @@ describe('round history', () => {
     expect(screen.getByText('JULY 2026')).toBeOnTheScreen()
     expect(screen.getByText('JUL')).toBeOnTheScreen()
     expect(screen.getByText('17')).toBeOnTheScreen()
+    expect(screen.getByText('+12')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Score 84, 12 over par')).toBeOnTheScreen()
     expect(screen.queryByText('72°F')).toBeNull()
     expect(screen.queryByText('chevron-right')).toBeNull()
     expect(mockGetRounds).toHaveBeenCalledWith(expect.anything(), { limit: 20, year: 2026 })
