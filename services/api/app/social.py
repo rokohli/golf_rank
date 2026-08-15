@@ -82,6 +82,7 @@ class NotificationOut(BaseModel):
     notification_type: str
     actor: UserSummaryOut
     created_at: datetime
+    is_following: bool = False
 
 
 class NotificationPageOut(BaseModel):
@@ -438,10 +439,11 @@ def list_notifications(
         # IDs are monotonic for notification creation. Using the boundary ID
         # avoids SQLite's inconsistent fractional-second comparison semantics.
         query = query.where(AppNotification.id < notification_id)
-    notifications = session.scalars(query.order_by(AppNotification.created_at.desc(), AppNotification.id.desc()).limit(limit + 1)).all()
+    notifications = session.scalars(query.order_by(AppNotification.id.desc()).limit(limit + 1)).all()
     page = notifications[:limit]
     next_cursor = _cursor(page[-1]) if len(notifications) > limit else None
-    return NotificationPageOut(items=[NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at) for item in page], next_cursor=next_cursor)
+    following_ids = set(session.scalars(select(Follow.followed_id).where(Follow.follower_id == user.id)).all())
+    return NotificationPageOut(items=[NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at, is_following=item.actor_user_id in following_ids) for item in page], next_cursor=next_cursor)
 
 
 @router.put("/api/v1/me/contacts", status_code=204)
@@ -458,7 +460,8 @@ def link_contacts(
         raise HTTPException(422, str(error)) from error
     if payload.replace:
         session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
-    session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes)
+    existing_hashes = set(session.scalars(select(LinkedContact.identifier_hash).where(LinkedContact.user_id == user.id)).all())
+    session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes - existing_hashes)
     notify_linked_contacts(session, user, current, settings)
     session.commit()
     return Response(status_code=204)
@@ -472,7 +475,7 @@ def notify_linked_contacts(session: Session, user: User, current: CurrentUser, s
             LinkedContact.user_id != user.id,
         )).all()
         for recipient_id in set(recipients):
-            if user.id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
+            if user.id in _blocked_ids(session, recipient_id) or not _profile_is_visible_to(session, recipient_id, user.id) or not _notifications_enabled(session, recipient_id):
                 continue
             existing = session.scalar(select(AppNotification.id).where(
                 AppNotification.recipient_user_id == recipient_id,

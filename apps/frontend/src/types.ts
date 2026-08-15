@@ -177,6 +177,7 @@ export type Activity = {
   viewer_reacted: boolean
   is_own_activity: boolean
   created_at: string
+  is_following: boolean
 }
 
 export type FeedPage = {
@@ -189,6 +190,7 @@ export type AppNotification = {
   notification_type: 'followed_you' | 'contact_joined' | string
   actor: UserSummary
   created_at: string
+  is_following: boolean
 }
 
 export type CourseSearchFilters = {
