@@ -84,6 +84,11 @@ class NotificationOut(BaseModel):
     created_at: datetime
 
 
+class NotificationPageOut(BaseModel):
+    items: list[NotificationOut]
+    next_cursor: str | None
+
+
 class ReactionOut(BaseModel):
     event_id: int
     reaction: str
@@ -412,23 +417,29 @@ def follow_user(
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
 
 
-@router.get("/api/v1/me/notifications", response_model=list[NotificationOut])
+@router.get("/api/v1/me/notifications", response_model=NotificationPageOut)
 def list_notifications(
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = None,
     current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
-) -> list[NotificationOut]:
+) -> NotificationPageOut:
     user = stored_user(session, current)
     if user is None:
-        return []
+        return NotificationPageOut(items=[], next_cursor=None)
     if not _notifications_enabled(session, user.id):
-        return []
+        return NotificationPageOut(items=[], next_cursor=None)
     blocked = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
-    notifications = session.scalars(
-        select(AppNotification).where(
+    query = select(AppNotification).where(
             AppNotification.recipient_user_id == user.id,
             AppNotification.actor_user_id.not_in(blocked),
-        ).order_by(AppNotification.created_at.desc(), AppNotification.id.desc())
-    ).all()
-    return [NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at) for item in notifications]
+        )
+    if cursor:
+        created_at, notification_id = _decode_cursor(cursor)
+        query = query.where(or_(AppNotification.created_at < created_at, and_(AppNotification.created_at == created_at, AppNotification.id < notification_id)))
+    notifications = session.scalars(query.order_by(AppNotification.created_at.desc(), AppNotification.id.desc()).limit(limit + 1)).all()
+    page = notifications[:limit]
+    next_cursor = _cursor(page[-1]) if len(notifications) > limit else None
+    return NotificationPageOut(items=[NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at) for item in page], next_cursor=next_cursor)
 
 
 @router.put("/api/v1/me/contacts", status_code=204)
@@ -443,7 +454,8 @@ def link_contacts(
         hashes = {_identifier_hash(settings, value) for value in payload.contact_identifiers}
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
+    if payload.replace:
+        session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes)
     notify_linked_contacts(session, user, current, settings)
     session.commit()

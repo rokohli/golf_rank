@@ -13,6 +13,6 @@ jest.mock('../../src/api/client', () => ({ getNotifications: (...args: unknown[]
 jest.mock('../../src/auth/useAuthToken', () => ({ useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }) }))
 
 describe('Notifications', () => {
-  beforeEach(() => { jest.clearAllMocks(); mockGetNotifications.mockResolvedValue([{ id: 9, notification_type: 'contact_joined', actor: { id: 2, display_name: 'Maya Golfer', username: 'maya', home_region: null, follower_count: 0, following_count: 0 }, created_at: new Date().toISOString() }]); mockFollowUser.mockResolvedValue(undefined) })
+  beforeEach(() => { jest.clearAllMocks(); mockGetNotifications.mockResolvedValue({ items: [{ id: 9, notification_type: 'contact_joined', actor: { id: 2, display_name: 'Maya Golfer', username: 'maya', home_region: null, follower_count: 0, following_count: 0 }, created_at: new Date().toISOString() }], next_cursor: null }); mockFollowUser.mockResolvedValue(undefined) })
   it('shows contact-join notifications with a functional follow action', async () => { render(<Notifications />); expect(await screen.findByText('Maya Golfer')).toBeOnTheScreen(); fireEvent.press(screen.getByRole('button', { name: 'Follow Maya Golfer' })); await waitFor(() => expect(mockFollowUser).toHaveBeenCalledWith(2, expect.anything())); fireEvent.press(screen.getByRole('button', { name: 'Notification settings' })); expect(mockRouter.push).toHaveBeenCalledWith('/notification-settings') })
 })

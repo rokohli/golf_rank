@@ -195,7 +195,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         session.add_all([profile, preferences])
         if created_profile:
-            notify_linked_contacts(session, stored_user, user, settings)
+            try:
+                notify_linked_contacts(session, stored_user, user, settings)
+            except HTTPException as error:
+                logger.warning("contact_join_matching_skipped user_id=%s status=%s", stored_user.id, error.status_code)
         session.commit()
         return ProfileOut(
             home_region=profile.home_region,

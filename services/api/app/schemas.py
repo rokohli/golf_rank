@@ -49,6 +49,7 @@ class ContactLinkIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     contact_identifiers: list[str] = Field(default_factory=list, max_length=2000)
+    replace: bool = True
 
     @field_validator("contact_identifiers")
     @classmethod
