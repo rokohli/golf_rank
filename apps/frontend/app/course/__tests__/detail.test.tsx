@@ -6,6 +6,7 @@ import { CourseRatingState } from '../../../src/types'
 
 const mockGetCourse = jest.fn()
 const mockGetCourseRating = jest.fn()
+const mockGetFriendsCourseThoughts = jest.fn()
 const mockGetSavedLists = jest.fn()
 const mockCreateSavedList = jest.fn()
 const mockSaveCourseToList = jest.fn()
@@ -51,6 +52,7 @@ jest.mock('../../../src/api/client', () => ({
   createSavedList: (...args: unknown[]) => mockCreateSavedList(...args),
   getCourse: (...args: unknown[]) => mockGetCourse(...args),
   getCourseRating: (...args: unknown[]) => mockGetCourseRating(...args),
+  getFriendsCourseThoughts: (...args: unknown[]) => mockGetFriendsCourseThoughts(...args),
   getSavedLists: (...args: unknown[]) => mockGetSavedLists(...args),
   removeCourseFromList: (...args: unknown[]) => mockRemoveCourseFromList(...args),
   saveCourseToList: (...args: unknown[]) => mockSaveCourseToList(...args),
@@ -101,6 +103,7 @@ describe('course detail ratings', () => {
     mockFocusCleanup = undefined
     mockGetCourse.mockResolvedValue(course)
     mockGetCourseRating.mockResolvedValue(rating(null))
+    mockGetFriendsCourseThoughts.mockResolvedValue({ average_rating: null, rating_count: 0, entries: [] })
     mockGetSavedLists.mockResolvedValue([])
     mockRemoveCourseFromList.mockResolvedValue(undefined)
     mockUpdateRound.mockResolvedValue({})
@@ -185,7 +188,40 @@ describe('course detail ratings', () => {
     expect(screen.queryByRole('button', { name: /Add photos/ })).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
-    expect(screen.getByText('Friends’ thoughts aren’t available yet.')).toBeOnTheScreen()
+    expect(screen.getByText('No friends have rated this course yet.')).toBeOnTheScreen()
+  })
+
+  it('shows loading, populated, empty, and error states for friends thoughts without rendering absent memories', async () => {
+    let resolveThoughts: (value: unknown) => void = () => undefined
+    mockGetFriendsCourseThoughts.mockImplementationOnce(() => new Promise((resolve) => { resolveThoughts = resolve }))
+    render(<CourseDetail />)
+    expect(await screen.findByText('Test Links')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
+    expect(screen.getByLabelText('Loading friends’ thoughts')).toBeOnTheScreen()
+    await act(async () => resolveThoughts({
+      average_rating: 8.6,
+      rating_count: 2,
+      entries: [
+        { user: { id: 4, display_name: 'Avery Green', username: 'avery' }, activity_id: 44, rating: 9.1, tier: 'green', note: 'Great closing stretch.', favorite_hole: 18 },
+        { user: { id: 5, display_name: 'Blair Tee', username: 'blair' }, activity_id: null, rating: 8.1, tier: 'fairway', note: null, favorite_hole: null },
+      ],
+    }))
+    expect(await screen.findByLabelText('Friends rating 8.6 out of 10')).toBeOnTheScreen()
+    expect(screen.getByText('Avery Green')).toBeOnTheScreen()
+    expect(screen.getByText('Great closing stretch.')).toBeOnTheScreen()
+    expect(screen.getByText('Favorite hole 18')).toBeOnTheScreen()
+    expect(screen.getByText('Blair Tee')).toBeOnTheScreen()
+    expect(screen.queryByText('Favorite hole null')).toBeNull()
+    expect(screen.queryByText('null')).toBeNull()
+    fireEvent.press(screen.getByRole('button', { name: "Open Avery Green's shared activity" }))
+    expect(mockPush).toHaveBeenLastCalledWith('/activity/44')
+
+    mockGetFriendsCourseThoughts.mockRejectedValueOnce(new Error('Friends service unavailable'))
+    fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
+    await act(async () => { mockFocusEffect?.() })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Friends service unavailable')
+    expect(screen.getByRole('button', { name: 'Retry friends’ thoughts' })).toBeOnTheScreen()
   })
 
   it('renders attributed course images returned by the API', async () => {
@@ -286,7 +322,7 @@ describe('course detail ratings', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Rated' }))
     expect(mockPush).toHaveBeenLastCalledWith('/rate/7')
     expect(mockGetCourseRating).toHaveBeenCalledTimes(2)
-    expect(mockGetAuthHeaders).toHaveBeenCalledTimes(4)
+    expect(mockGetAuthHeaders).toHaveBeenCalledTimes(6)
   })
 
   it('creates a default list, persists the course, and can remove it again', async () => {

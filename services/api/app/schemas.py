@@ -205,3 +205,26 @@ class FriendRankingOut(BaseModel):
     version: int
     entries: list[RankedCourseOut]
     updated_at: datetime | None = None
+
+
+class FriendCourseThoughtUserOut(BaseModel):
+    """The intentionally small identity surface used on a course page."""
+
+    id: int
+    display_name: str
+    username: str | None = None
+
+
+class FriendCourseThoughtOut(BaseModel):
+    user: FriendCourseThoughtUserOut
+    activity_id: int | None = None
+    rating: float = Field(ge=1, le=10)
+    tier: RankingTier
+    note: str | None = None
+    favorite_hole: int | None = Field(default=None, ge=1, le=18)
+
+
+class FriendsCourseThoughtsOut(BaseModel):
+    average_rating: float | None = None
+    rating_count: int = 0
+    entries: list[FriendCourseThoughtOut] = Field(default_factory=list)

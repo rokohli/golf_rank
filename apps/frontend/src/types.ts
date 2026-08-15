@@ -64,6 +64,8 @@ export type Course = {
   distance_miles?: number | null
 }
 
+export type BlockedUser = UserSummary & { blocked_at: string }
+
 export type RatingTier = 'green' | 'fairway' | 'rough' | 'bunker'
 
 export type RankingTier = RatingTier
@@ -123,6 +125,21 @@ export type CourseRatingState = {
 }
 
 export type RatingCandidate = Course | null
+
+export type FriendCourseThought = {
+  user: FriendSummary
+  activity_id: number | null
+  rating: number
+  tier: RatingTier
+  note: string | null
+  favorite_hole: number | null
+}
+
+export type FriendsCourseThoughts = {
+  average_rating: number | null
+  rating_count: number
+  entries: FriendCourseThought[]
+}
 
 export type FriendSummary = {
   id: number

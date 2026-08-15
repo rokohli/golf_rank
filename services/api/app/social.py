@@ -19,11 +19,21 @@ from .models import (
     User,
     UserBlock,
     UserMute,
+    Round,
+    RoundNote,
+    UserCourseRating,
 )
-from .schemas import CourseOut
+from .schemas import (
+    CourseOut,
+    FriendCourseThoughtOut,
+    FriendCourseThoughtUserOut,
+    FriendsCourseThoughtsOut,
+)
+from .domain import course_identity_ids
 
 
 router = APIRouter(tags=["social"])
+FRIEND_THOUGHTS_ENTRY_LIMIT = 10
 
 
 class UserSummaryOut(BaseModel):
@@ -67,6 +77,10 @@ class ReactionOut(BaseModel):
     viewer_reacted: bool
 
 
+class BlockedUserOut(UserSummaryOut):
+    blocked_at: datetime
+
+
 def _summary(session: Session, user: User) -> UserSummaryOut:
     preferences = session.get(OnboardingPreference, user.id)
     profile = session.get(Profile, user.id)
@@ -90,6 +104,13 @@ def _blocked_ids(session: Session, user_id: int) -> set[int]:
     return set(outgoing) | set(incoming)
 
 
+def _muted_ids(session: Session, user_id: int) -> set[int]:
+    """Mute is reciprocal for audience selection: neither direction is social consent."""
+    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
+    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
+    return set(outgoing) | set(incoming)
+
+
 def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[int]]:
     followed_ids = set(session.scalars(select(Follow.followed_id).where(Follow.follower_id == user_id)).all())
     reverse_ids = set(session.scalars(select(Follow.follower_id).where(Follow.followed_id == user_id)).all())
@@ -102,11 +123,165 @@ def _profile_visibility(session: Session, user_id: int) -> str:
     return onboarding.get("profile_visibility", "public")
 
 
+def _profile_is_visible_to(session: Session, viewer_id: int, target_user_id: int) -> bool:
+    visibility = _profile_visibility(session, target_user_id)
+    if visibility == "public":
+        return True
+    if visibility != "friends":
+        return False
+    _, mutual_ids = _relationship_sets(session, viewer_id)
+    return target_user_id in mutual_ids
+
+
+def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
+    preferences = session.get(OnboardingPreference, user.id)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    display_name = " ".join(
+        item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
+    ).strip()
+    return FriendCourseThoughtUserOut(
+        id=user.id,
+        display_name=display_name or f"Golfer {user.id}",
+        username=onboarding.get("username"),
+    )
+
+
+@router.get("/api/v1/courses/{course_id}/friends-thoughts", response_model=FriendsCourseThoughtsOut)
+def course_friend_thoughts(
+    course_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> FriendsCourseThoughtsOut:
+    """Ratings from currently eligible friends, with memories only when shared to friends.
+
+    This never serializes a round identifier or any private round field.  Ratings are
+    projections rather than round visibility, while notes and favorite holes require
+    the linked rating round to be explicitly friends-visible.
+    """
+    viewer = stored_user(session, current)
+    if viewer is None:
+        return FriendsCourseThoughtsOut()
+    course = require_course(session, course_id)
+    _, mutual_ids = _relationship_sets(session, viewer.id)
+    eligible_ids = mutual_ids - _blocked_ids(session, viewer.id) - _muted_ids(session, viewer.id)
+    if not eligible_ids:
+        return FriendsCourseThoughtsOut()
+
+    preferences = {
+        user_id: data or {}
+        for user_id, data in session.execute(
+            select(OnboardingPreference.user_id, OnboardingPreference.onboarding_data)
+            .where(OnboardingPreference.user_id.in_(eligible_ids))
+        )
+    }
+    visible_friend_ids = {
+        user_id for user_id in eligible_ids
+        if preferences.get(user_id, {}).get("profile_visibility", "public") != "private"
+    }
+    if not visible_friend_ids:
+        return FriendsCourseThoughtsOut()
+
+    # A reconciliation can leave historical alias projections. Use one current
+    # projection per friend before calculating the aggregate or selecting recent
+    # entries, so aliases cannot double count a friend.
+    ranked_ratings = select(
+        UserCourseRating.id.label("rating_id"),
+        func.row_number().over(
+            partition_by=UserCourseRating.user_id,
+            order_by=(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc()),
+        ).label("position"),
+    ).where(
+        UserCourseRating.user_id.in_(visible_friend_ids),
+        UserCourseRating.course_id.in_(course_identity_ids(session, course)),
+    ).subquery()
+    current_rating_ids = select(ranked_ratings.c.rating_id).where(ranked_ratings.c.position == 1)
+    average, count = session.execute(
+        select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id))
+        .where(UserCourseRating.id.in_(current_rating_ids))
+    ).one()
+    if not count:
+        return FriendsCourseThoughtsOut()
+    ratings = session.scalars(
+        select(UserCourseRating)
+        .where(UserCourseRating.id.in_(current_rating_ids))
+        .order_by(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc())
+        .limit(FRIEND_THOUGHTS_ENTRY_LIMIT)
+    ).all()
+    friend_ids = {rating.user_id for rating in ratings}
+    friends = {
+        friend.id: friend
+        for friend in session.scalars(select(User).where(User.id.in_(friend_ids))).all()
+    }
+    rating_round_ids = [rating.round_id for rating in ratings]
+    rounds = {
+        (round_.id, round_.user_id, round_.course_id): round_
+        for round_ in session.scalars(select(Round).where(Round.id.in_(rating_round_ids))).all()
+    }
+    notes = {
+        note.round_id: note
+        for note in session.scalars(select(RoundNote).where(RoundNote.round_id.in_(rating_round_ids))).all()
+    }
+    activity_ids: dict[tuple[int, int], int] = {}
+    for event in session.scalars(
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.actor_user_id.in_(friend_ids),
+            ActivityEvent.subject_type == "rating_round",
+            ActivityEvent.subject_id.in_(rating_round_ids),
+            ActivityEvent.visibility == "friends",
+        )
+        .order_by(ActivityEvent.id.desc())
+    ).all():
+        # Results are newest-first. Preserve the first event for each rating
+        # round rather than overwriting it with an older historical event.
+        activity_ids.setdefault((event.actor_user_id, event.subject_id), event.id)
+
+    entries: list[FriendCourseThoughtOut] = []
+    for rating in ratings:
+        friend = friends.get(rating.user_id)
+        if friend is None:
+            continue
+        round_ = rounds.get((rating.round_id, friend.id, rating.course_id))
+        note = None
+        favorite_hole = None
+        if round_ is not None and round_.visibility == "friends":
+            stored_note = notes.get(round_.id)
+            note = stored_note.body if stored_note else None
+            favorite_hole = round_.favorite_hole
+        entries.append(FriendCourseThoughtOut(
+            user=_thought_identity(session, friend),
+            # A previously shared rating activity is not a target for a later
+            # private round; the current round's visibility remains authoritative.
+            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_ is not None and round_.visibility == "friends" else None,
+            rating=rating.rating,
+            tier=rating.tier,
+            note=note,
+            favorite_hole=favorite_hole,
+        ))
+    return FriendsCourseThoughtsOut(
+        average_rating=round(float(average), 1) if average is not None else None,
+        rating_count=int(count),
+        entries=entries,
+    )
+
+
 def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
     return (
         event.actor_user_id == viewer_id
         or (event.actor_user_id in followed_ids and event.visibility == "public")
         or (event.actor_user_id in mutual_ids and event.visibility == "friends")
+    )
+
+
+def _event_matches_current_round_visibility(session: Session, event: ActivityEvent) -> bool:
+    """Avoid serving a historical event after its backing round becomes private."""
+    if event.subject_type not in {"round", "rating_round"}:
+        return True
+    round_ = session.get(Round, event.subject_id)
+    return (
+        round_ is not None
+        and round_.user_id == event.actor_user_id
+        and round_.visibility == event.visibility
     )
 
 
@@ -223,9 +398,7 @@ def activity_feed(
     if user is None:
         return FeedPageOut(items=[], next_cursor=None)
     followed_ids, mutual_ids = _relationship_sets(session, user.id)
-    excluded = _blocked_ids(session, user.id) | set(
-        session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user.id)).all()
-    )
+    excluded = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
     visible_public_ids = followed_ids - excluded
     visible_friend_ids = mutual_ids - excluded
     statement = select(ActivityEvent).where(
@@ -268,7 +441,10 @@ def activity_feed(
                 or (event.created_at == cursor_boundary[0] and event.id >= cursor_boundary[1])
             ):
                 continue
-            if not _event_visible(event, user.id, followed_ids, mutual_ids):
+            if (
+                not _event_visible(event, user.id, followed_ids, mutual_ids)
+                or not _event_matches_current_round_visibility(session, event)
+            ):
                 continue
             actor = session.get(User, event.actor_user_id)
             if actor is None:
@@ -304,12 +480,47 @@ def activity_feed(
 
 def _require_visible_event(session: Session, user_id: int, event_id: int) -> ActivityEvent:
     event = session.get(ActivityEvent, event_id)
-    if event is None or event.actor_user_id in _blocked_ids(session, user_id):
+    if event is None or event.actor_user_id in _blocked_ids(session, user_id) | _muted_ids(session, user_id):
         raise HTTPException(404, "Activity not found")
     followed_ids, mutual_ids = _relationship_sets(session, user_id)
-    if not _event_visible(event, user_id, followed_ids, mutual_ids):
+    if (
+        not _event_visible(event, user_id, followed_ids, mutual_ids)
+        or not _event_matches_current_round_visibility(session, event)
+    ):
         raise HTTPException(404, "Activity not found")
     return event
+
+
+def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> ActivityOut:
+    actor = session.get(User, event.actor_user_id)
+    if actor is None:
+        raise HTTPException(404, "Activity not found")
+    course = None
+    course_id = event.event_data.get("course_id")
+    if isinstance(course_id, int):
+        try:
+            stored_course = require_course(session, course_id)
+        except HTTPException:
+            stored_course = None
+        if stored_course is not None:
+            course = course_data(stored_course)
+    reaction_count, viewer_reacted = _reaction_state(session, event.id, viewer_id)
+    return ActivityOut(
+        id=event.id, event_type=event.event_type, subject_type=event.subject_type,
+        subject_id=event.subject_id, actor=_summary(session, actor), course=course,
+        data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+        is_own_activity=event.actor_user_id == viewer_id, created_at=event.created_at,
+    )
+
+
+@router.get("/api/v1/feed/{event_id}", response_model=ActivityOut)
+def get_activity(
+    event_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ActivityOut:
+    user = require_user(session, current)
+    return _activity_out(session, _require_visible_event(session, user.id, event_id), user.id)
 
 
 @router.put("/api/v1/feed/{event_id}/reactions/{reaction}", response_model=ReactionOut)
@@ -352,6 +563,15 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     target = session.get(User, target_user_id)
     if target is None:
         raise HTTPException(404, "User not found")
+    followed_ids, _ = _relationship_sets(session, user_id)
+    follower_ids = set(session.scalars(
+        select(Follow.follower_id).where(Follow.followed_id == user_id)
+    ).all())
+    # A relationship may predate a target's switch to private visibility. Keep
+    # safety controls available for that known target, without making private
+    # profiles discoverable to strangers.
+    if target_user_id not in followed_ids | follower_ids and not _profile_is_visible_to(session, user_id, target_user_id):
+        raise HTTPException(404, "User not found")
     return target
 
 
@@ -372,6 +592,36 @@ def unblock_user(target_user_id: int, current: CurrentUser = Depends(current_use
     session.execute(delete(UserBlock).where(UserBlock.blocker_id == user.id, UserBlock.blocked_id == target_user_id))
     session.commit()
     return Response(status_code=204)
+
+
+@router.get("/api/v1/me/blocks", response_model=list[BlockedUserOut])
+def list_blocked_users(
+    current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
+) -> list[BlockedUserOut]:
+    user = require_user(session, current)
+    blocks = session.scalars(
+        select(UserBlock)
+        .where(UserBlock.blocker_id == user.id)
+        .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
+    ).all()
+    output: list[BlockedUserOut] = []
+    for block in blocks:
+        target = session.get(User, block.blocked_id)
+        if target is None:
+            continue
+        if _profile_is_visible_to(session, user.id, target.id):
+            summary = _summary(session, target)
+        else:
+            summary = UserSummaryOut(
+                id=target.id,
+                username=None,
+                display_name="Blocked account",
+                home_region=None,
+                follower_count=0,
+                following_count=0,
+            )
+        output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
+    return output
 
 
 @router.put("/api/v1/me/mutes/{target_user_id}", status_code=204)

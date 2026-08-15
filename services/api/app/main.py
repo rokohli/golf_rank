@@ -1,9 +1,12 @@
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from threading import Lock
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
@@ -26,10 +29,31 @@ from .models import (
     Base,
     Course,
     CourseReconciliation,
+    ActivityEvent,
+    ActivityReaction,
+    Comparison,
+    CourseCandidate,
+    Follow,
+    ItineraryItem,
     OnboardingPreference,
+    Plan,
+    PlanCandidate,
+    PlanConstraint,
+    PlanGeneration,
     Profile,
+    RankingConfidence,
+    RankingSnapshot,
+    Round,
+    RoundCompanion,
+    RoundNote,
+    SavedCourse,
+    SavedList,
+    TierAssignment,
     User,
+    UserBlock,
     UserCourseRating,
+    UserCourseState,
+    UserMute,
 )
 from .plans import router as plans_router
 from .planner_narrative import build_planner_narrative_provider
@@ -42,6 +66,11 @@ from .social import router as social_router
 
 
 logger = logging.getLogger("golfrank.catalog")
+
+
+def _row_data(row: object) -> dict:
+    table = row.__table__
+    return {column.name: getattr(row, column.name) for column in table.columns}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -190,6 +219,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             difficulty=preferences.difficulty,
             access=preferences.access,
             onboarding_data=preferences.onboarding_data,
+        )
+
+    @app.get("/api/v1/me/data-export")
+    def data_export(
+        _rate_limit: None = Depends(authenticated_rate_limit),
+        user: CurrentUser = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
+        if stored_user is None:
+            raise HTTPException(404, "Profile not found")
+        profile = session.get(Profile, stored_user.id)
+        preferences = session.get(OnboardingPreference, stored_user.id)
+        if profile is None or preferences is None:
+            raise HTTPException(404, "Profile not found")
+
+        def rows(model, *conditions):
+            return [_row_data(item) for item in session.scalars(select(model).where(*conditions)).all()]
+
+        round_rows = session.scalars(select(Round).where(Round.user_id == stored_user.id)).all()
+        round_ids = [round_.id for round_ in round_rows]
+        saved_lists = session.scalars(select(SavedList).where(SavedList.user_id == stored_user.id)).all()
+        saved_list_ids = [saved_list.id for saved_list in saved_lists]
+        plans = session.scalars(select(Plan).where(Plan.user_id == stored_user.id)).all()
+        plan_ids = [plan.id for plan in plans]
+        data = {
+            "export_version": 1,
+            "generated_at": datetime.now(timezone.utc),
+            "scope": "GolfRank application data only; Clerk identity and security data are not included.",
+            "profile": {
+                "home_region": profile.home_region,
+                "max_green_fee": preferences.max_green_fee,
+                "difficulty": preferences.difficulty,
+                "access": preferences.access,
+                "onboarding_data": preferences.onboarding_data,
+            },
+            "tier_assignments": rows(TierAssignment, TierAssignment.user_id == stored_user.id),
+            "comparisons": rows(Comparison, Comparison.user_id == stored_user.id),
+            "ranking_confidences": rows(RankingConfidence, RankingConfidence.user_id == stored_user.id),
+            "ranking_snapshots": rows(RankingSnapshot, RankingSnapshot.user_id == stored_user.id),
+            "rounds": [_row_data(round_) for round_ in round_rows],
+            "round_notes": rows(RoundNote, RoundNote.round_id.in_(round_ids)) if round_ids else [],
+            "round_companions": rows(RoundCompanion, RoundCompanion.round_id.in_(round_ids)) if round_ids else [],
+            "course_ratings": rows(UserCourseRating, UserCourseRating.user_id == stored_user.id),
+            "course_states": rows(UserCourseState, UserCourseState.user_id == stored_user.id),
+            "following": rows(Follow, Follow.follower_id == stored_user.id),
+            "followers": rows(Follow, Follow.followed_id == stored_user.id),
+            "blocked_accounts": rows(UserBlock, UserBlock.blocker_id == stored_user.id),
+            "muted_accounts": rows(UserMute, UserMute.muter_id == stored_user.id),
+            "activity": rows(ActivityEvent, ActivityEvent.actor_user_id == stored_user.id),
+            "activity_reactions": rows(ActivityReaction, ActivityReaction.user_id == stored_user.id),
+            "course_candidates": rows(CourseCandidate, CourseCandidate.submitted_by_user_id == stored_user.id),
+            "saved_lists": [_row_data(saved_list) for saved_list in saved_lists],
+            "saved_courses": rows(SavedCourse, SavedCourse.list_id.in_(saved_list_ids)) if saved_list_ids else [],
+            "plans": [_row_data(plan) for plan in plans],
+            "plan_constraints": rows(PlanConstraint, PlanConstraint.plan_id.in_(plan_ids)) if plan_ids else [],
+            "plan_candidates": rows(PlanCandidate, PlanCandidate.plan_id.in_(plan_ids)) if plan_ids else [],
+            "itinerary_items": rows(ItineraryItem, ItineraryItem.plan_id.in_(plan_ids)) if plan_ids else [],
+            "plan_generations": rows(PlanGeneration, PlanGeneration.plan_id.in_(plan_ids)) if plan_ids else [],
+        }
+        return JSONResponse(
+            content=jsonable_encoder(data),
+            headers={"Content-Disposition": 'attachment; filename="golfrank-data-export.json"'},
         )
 
     @app.get("/api/v1/courses", response_model=list[CourseOut])

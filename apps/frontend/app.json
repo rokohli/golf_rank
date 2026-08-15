@@ -2,6 +2,7 @@
   "expo": {
     "name": "GolfRank",
     "slug": "golf-rank",
+    "version": "1.0.0",
     "scheme": "golfrank",
     "plugins": [
       "expo-router",
