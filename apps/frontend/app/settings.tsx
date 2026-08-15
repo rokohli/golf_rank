@@ -54,6 +54,7 @@ export default function Settings() {
       <SettingsSection title="APP">
         <SettingsRow icon="bell" label="Notifications" meta={profile?.onboarding_data?.notifications === false ? 'Off' : 'On'} onPress={() => router.push('/notifications')} />
         <SettingsRow icon="lock" label="Privacy & visibility" meta={visibilitySummary(profile)} onPress={() => router.push('/privacy' as never)} />
+        <SettingsRow icon="volume-x" label="Muted accounts" onPress={() => router.push('/muted' as never)} />
         <SettingsRow icon="slash" label="Blocked accounts" onPress={() => router.push('/blocked' as never)} />
       </SettingsSection>
 
