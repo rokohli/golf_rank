@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import re
 from datetime import datetime
 
@@ -40,6 +41,7 @@ from .domain import course_identity_ids
 
 
 router = APIRouter(tags=["social"])
+logger = logging.getLogger("golfrank.social")
 FRIEND_THOUGHTS_ENTRY_LIMIT = 10
 
 
@@ -462,7 +464,16 @@ def link_contacts(
         session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     existing_hashes = set(session.scalars(select(LinkedContact.identifier_hash).where(LinkedContact.user_id == user.id)).all())
     session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes - existing_hashes)
-    notify_linked_contacts(session, user, current, settings)
+    try:
+        notify_linked_contacts(session, user, current, settings)
+    except HTTPException as error:
+        # Contact storage is useful independently of the optional join alert.
+        # A later preferences save or contact sync retries the idempotent match.
+        logger.warning(
+            "contact_join_matching_skipped user_id=%s status=%s",
+            user.id,
+            error.status_code,
+        )
     session.commit()
     return Response(status_code=204)
 

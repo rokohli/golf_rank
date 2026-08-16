@@ -33,6 +33,7 @@ import {
   searchUsers,
   searchCourses,
   setActivityReaction,
+  syncLinkedContacts,
   updateRound,
   updatePlan,
 } from '../client'
@@ -214,6 +215,21 @@ describe('api client', () => {
     await getFriendRankings(headers)
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/rankings/friends', { headers })
+  })
+
+  it('batches large contact books with replace followed by append requests', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+    const contactIdentifiers = Array.from({ length: 2_001 }, (_, index) => `golfer${index}@example.com`)
+
+    await syncLinkedContacts({ contact_identifiers: contactIdentifiers }, headers)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)
+    expect(firstBody).toMatchObject({ replace: true })
+    expect(firstBody.contact_identifiers).toHaveLength(2_000)
+    expect(secondBody).toEqual({ contact_identifiers: ['golfer2000@example.com'], replace: false })
   })
 
   it('loads muted accounts with the authenticated request', async () => {

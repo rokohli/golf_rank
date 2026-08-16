@@ -98,7 +98,7 @@ describe('RoundForm', () => {
     expect(selectedPrivate?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }))
   })
 
-  it('searches for courses after the third typed character', async () => {
+  it('debounces course search after the third typed character', async () => {
     const searchCourses = jest.fn().mockResolvedValue([course])
     render(<RoundForm friends={[]} onSubmit={jest.fn()} searchCourses={searchCourses} submitLabel="Log round" />)
 
@@ -106,7 +106,10 @@ describe('RoundForm', () => {
     expect(searchCourses).not.toHaveBeenCalled()
 
     fireEvent.changeText(screen.getByLabelText('Course'), 'Tes')
-    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Tes'))
+    fireEvent.changeText(screen.getByLabelText('Course'), 'Test')
+    expect(searchCourses).not.toHaveBeenCalled()
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Test'))
+    expect(searchCourses).not.toHaveBeenCalledWith('Tes')
     expect(await screen.findByRole('button', { name: 'Select Test Links' })).toBeOnTheScreen()
   })
 })

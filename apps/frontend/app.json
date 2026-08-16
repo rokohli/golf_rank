@@ -14,7 +14,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "Allow GolfRank to securely match your contacts and notify you when they join."
+          "contactsPermission": "Allow GolfRank to upload your contacts' email addresses and phone numbers to securely match people who join."
         }
       ],
       [

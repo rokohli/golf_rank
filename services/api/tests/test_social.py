@@ -1,7 +1,8 @@
 from datetime import date, datetime
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.main import create_app
 from app.core.auth import CurrentUser, current_user
@@ -9,9 +10,11 @@ from app.core.config import Settings
 from app.social import _identifier_hash
 from app.models import (
     ActivityEvent,
+    AppNotification,
     Course,
     CourseReconciliation,
     Follow,
+    LinkedContact,
     OnboardingPreference,
     Round,
     RoundNote,
@@ -747,3 +750,88 @@ def test_contact_identifier_hashes_are_keyed_and_normalize_us_phone_numbers() ->
     settings = Settings(contact_identifier_hmac_key="test-contact-hmac-key")
     assert _identifier_hash(settings, "+1 415 555 1212") == _identifier_hash(settings, "(415) 555-1212")
     assert _identifier_hash(settings, "bob@example.com") != _identifier_hash(Settings(contact_identifier_hmac_key="other-test-contact-hmac-key"), "bob@example.com")
+
+
+def test_private_accounts_do_not_create_contact_join_notifications(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:private-contact-alice", "Alice", "privatecontactalice")
+    bob = _profile(client, "dev:private-contact-bob", "Bob", "privatecontactbob", "private")
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["private-bob@example.com"]},
+    ).status_code == 204
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:private-contact-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("private-bob@example.com",))
+    assert client.put(
+        "/api/v1/me/contacts", headers=bob, json={"contact_identifiers": []}
+    ).status_code == 204
+    client.app.dependency_overrides.pop(current_user)
+
+    assert client.get("/api/v1/me/notifications", headers=alice).json()["items"] == []
+
+
+def test_contact_upload_persists_when_optional_identity_matching_is_unavailable(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:contact-outage-alice", "Alice", "contactoutagealice")
+
+    def unavailable(*_args) -> tuple[str, ...]:
+        raise HTTPException(status_code=503, detail="Identity provider is unavailable")
+
+    monkeypatch.setattr("app.social.verified_identifiers", unavailable)
+    response = client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["bob@example.com"]},
+    )
+
+    assert response.status_code == 204
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count(LinkedContact.id))) == 1
+
+
+def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:cursor-notification-alice", "Alice", "cursoralice")
+    _profile(client, "dev:cursor-notification-bob", "Bob", "cursorbob")
+    _profile(client, "dev:cursor-notification-charlie", "Charlie", "cursorcharlie")
+    _profile(client, "dev:cursor-notification-dana", "Dana", "cursordana")
+
+    with client.app.state.session_factory() as session:
+        users = {
+            user.provider_subject: user
+            for user in session.scalars(select(User)).all()
+        }
+        session.add_all([
+            AppNotification(
+                recipient_user_id=users["dev:cursor-notification-alice"].id,
+                actor_user_id=users[subject].id,
+                notification_type="followed_you",
+                created_at=created_at,
+            )
+            for subject, created_at in [
+                ("dev:cursor-notification-bob", datetime(2026, 8, 16, 12, 0, 3)),
+                ("dev:cursor-notification-charlie", datetime(2026, 8, 16, 12, 0, 1)),
+                ("dev:cursor-notification-dana", datetime(2026, 8, 16, 12, 0, 2)),
+            ]
+        ])
+        session.commit()
+
+    first = client.get(
+        "/api/v1/me/notifications", headers=alice, params={"limit": 2}
+    ).json()
+    second = client.get(
+        "/api/v1/me/notifications",
+        headers=alice,
+        params={"limit": 2, "cursor": first["next_cursor"]},
+    ).json()
+
+    assert [item["actor"]["display_name"] for item in first["items"]] == [
+        "Dana Golfer",
+        "Charlie Golfer",
+    ]
+    assert [item["actor"]["display_name"] for item in second["items"]] == [
+        "Bob Golfer"
+    ]
+    assert second["next_cursor"] is None

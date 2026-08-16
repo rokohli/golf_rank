@@ -177,7 +177,6 @@ export type Activity = {
   viewer_reacted: boolean
   is_own_activity: boolean
   created_at: string
-  is_following: boolean
 }
 
 export type FeedPage = {

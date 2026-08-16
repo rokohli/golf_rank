@@ -137,7 +137,7 @@ function ActivityDetails({ activity }: { activity: Activity }) {
   const note = typeof activity.data.note === 'string' && activity.data.note.trim() ? activity.data.note.trim() : null
   const favoriteHole = typeof activity.data.favorite_hole === 'number' ? activity.data.favorite_hole : null
   if (!note && favoriteHole === null) return null
-  return <View style={styles.activityDetails}>{note ? <Text style={styles.activityNote}>{note}</Text> : null}{favoriteHole !== null ? <View style={styles.favoriteHole}><Feather name="flag" size={11} color={colors.pine} /><Text style={styles.favoriteHoleText}>Favorite hole {favoriteHole}</Text></View> : null}</View>
+  return <View style={styles.activityDetails}>{note ? <Text ellipsizeMode="tail" numberOfLines={3} style={styles.activityNote}>{note}</Text> : null}{favoriteHole !== null ? <View style={styles.favoriteHole}><Feather name="flag" size={11} color={colors.pine} /><Text style={styles.favoriteHoleText}>Favorite hole {favoriteHole}</Text></View> : null}</View>
 }
 
 function eventPresentation(activity: Activity) {

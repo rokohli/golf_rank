@@ -11,6 +11,7 @@ import Settings from '../settings'
 const mockGetProfile = jest.fn()
 const mockGetRoundSummary = jest.fn()
 const mockSavePreferences = jest.fn()
+const mockSyncLinkedContacts = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -28,7 +29,9 @@ jest.mock('expo-image-picker', () => ({
 }))
 
 jest.mock('@clerk/expo', () => ({ useUser: () => ({ user: { emailAddresses: [], phoneNumbers: [] } }) }))
-jest.mock('expo-contacts', () => ({ Fields: { Emails: 'emails', PhoneNumbers: 'phoneNumbers' }, requestPermissionsAsync: jest.fn(), getContactsAsync: jest.fn() }))
+const mockRequestContactsPermission = jest.fn()
+const mockGetContacts = jest.fn()
+jest.mock('expo-contacts', () => ({ Fields: { Emails: 'emails', PhoneNumbers: 'phoneNumbers' }, requestPermissionsAsync: (...args: unknown[]) => mockRequestContactsPermission(...args), getContactsAsync: (...args: unknown[]) => mockGetContacts(...args) }))
 
 jest.mock('expo-router', () => {
   const React = require('react')
@@ -44,6 +47,7 @@ jest.mock('../../src/api/client', () => ({
   getProfile: (...args: unknown[]) => mockGetProfile(...args),
   getRoundSummary: (...args: unknown[]) => mockGetRoundSummary(...args),
   savePreferences: (...args: unknown[]) => mockSavePreferences(...args),
+  syncLinkedContacts: (...args: unknown[]) => mockSyncLinkedContacts(...args),
 }))
 
 jest.mock('../../src/auth/AuthProvider', () => ({
@@ -86,6 +90,9 @@ describe('profile experience', () => {
     mockGetProfile.mockResolvedValue(profile)
     mockGetRoundSummary.mockResolvedValue({ total_rounds: 24, distinct_courses: 18, average_score: 84.1, best_score: 78, latest_round: latestRound })
     mockSavePreferences.mockResolvedValue(undefined)
+    mockSyncLinkedContacts.mockResolvedValue(undefined)
+    mockRequestContactsPermission.mockResolvedValue({ status: 'granted' })
+    mockGetContacts.mockResolvedValue({ data: [] })
     mockUpdateUserProfile.mockResolvedValue(undefined)
     mockUpdateProfileImage.mockResolvedValue(undefined)
     mockSignOut.mockResolvedValue(undefined)
@@ -189,6 +196,23 @@ describe('profile experience', () => {
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })
+  })
+
+  it('discloses and uploads normalized contact identifiers after permission', async () => {
+    mockGetContacts.mockResolvedValue({
+      data: [{
+        emails: [{ email: ' Golfer@Example.com ', label: 'home' }],
+        phoneNumbers: [{ countryCode: 'AU', label: 'mobile', number: '0412 345 678' }],
+      }],
+    })
+    render(<NotificationSettings />)
+
+    expect(await screen.findByText(/uploads your contacts’ email addresses and phone numbers/i)).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Link contacts' }))
+
+    await waitFor(() => expect(mockSyncLinkedContacts).toHaveBeenCalledWith({
+      contact_identifiers: ['golfer@example.com', '+61412345678'],
+    }, expect.anything()))
   })
 
   it('persists profile and default round visibility', async () => {

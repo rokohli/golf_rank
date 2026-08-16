@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 
 import { Course, FriendSummary, GolfRound, RoundInput, RoundVisibility } from '../types'
@@ -37,6 +37,12 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const searchRequest = useRef(0)
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchRequest.current += 1
+  }, [])
 
   const parsedDate = parseDateInput(playedOn)
   const scoreNumber = score.trim() ? Number(score) : null
@@ -56,6 +62,10 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const detailsSummary = favoriteHoleNumber ? `Hole ${favoriteHoleNumber} added` : note.trim() ? 'Notes added' : 'Add details'
 
   async function runCourseSearch(rawQuery = courseQuery) {
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
     const query = rawQuery.trim()
     if (query.length < 3) {
       setCourseResults([])
@@ -78,13 +88,18 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   function updateCourseQuery(value: string) {
     setCourseQuery(value)
     if (value !== course?.name) setCourse(null)
+    // Invalidate an in-flight response immediately, not only when the next
+    // debounced request begins.
+    searchRequest.current += 1
     if (value.trim().length < 3) {
-      searchRequest.current += 1
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+      searchTimer.current = null
       setCourseResults([])
       setSearching(false)
       return
     }
-    void runCourseSearch(value)
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => void runCourseSearch(value), 300)
   }
 
   function openCalendar() {

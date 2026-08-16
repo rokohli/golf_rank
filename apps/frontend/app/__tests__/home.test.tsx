@@ -101,6 +101,19 @@ describe('Home social feed', () => {
     await screen.findByText('Maya Golfer rated')
     expect(screen.queryByText('0 likes')).toBeNull()
   })
+
+  it('bounds long round notes in feed cards', async () => {
+    const longNote = 'A'.repeat(5_000)
+    mockGetFeed.mockResolvedValue({
+      items: [{ ...activity, data: { ...activity.data, note: longNote } }],
+      next_cursor: null,
+    })
+    render(<Home />)
+
+    const note = await screen.findByText(longNote)
+    expect(note).toHaveProp('numberOfLines', 3)
+    expect(note).toHaveProp('ellipsizeMode', 'tail')
+  })
 })
 
 describe('home greeting', () => {
