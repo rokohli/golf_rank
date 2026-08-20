@@ -147,7 +147,7 @@ describe('profile experience', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/profile/preferences')
     fireEvent.press(screen.getByText('Notification settings'))
     expect(mockRouter.push).toHaveBeenCalledWith('/notification-settings')
-    fireEvent.press(screen.getByText('Privacy & visibility'))
+    fireEvent.press(screen.getByText('Round visibility'))
     expect(mockRouter.push).toHaveBeenCalledWith('/privacy')
     fireEvent.press(screen.getByText('Muted accounts'))
     expect(mockRouter.push).toHaveBeenCalledWith('/muted')
@@ -215,11 +215,11 @@ describe('profile experience', () => {
     }, expect.anything()))
   })
 
-  it('persists profile and default round visibility', async () => {
+  it('persists default round visibility without a private-account setting', async () => {
     render(<Privacy />)
 
-    await screen.findByText('PROFILE VISIBILITY')
-    fireEvent.press(screen.getByRole('radio', { name: 'Private: Your profile is hidden from golfer search.' }))
+    await screen.findByText('DEFAULT ROUND VISIBILITY')
+    expect(screen.queryByText('PROFILE VISIBILITY')).not.toBeOnTheScreen()
     fireEvent.press(screen.getByRole('radio', { name: 'Public: Followers can see new rounds.' }))
     fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
 
@@ -227,9 +227,9 @@ describe('profile experience', () => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         onboarding_data: expect.objectContaining({
           default_round_visibility: 'public',
-          profile_visibility: 'private',
         }),
       }), expect.anything())
+      expect(mockSavePreferences.mock.calls[0][0].onboarding_data).not.toHaveProperty('profile_visibility')
       expect(mockRouter.back).toHaveBeenCalled()
     })
   })

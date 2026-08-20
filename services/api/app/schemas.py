@@ -29,7 +29,6 @@ class OnboardingData(BaseModel):
     preferred_tee_time: str = Field(max_length=120)
     transportation: Literal["Walking", "Cart", "Either"] | None = None
     notifications: bool | None = None
-    profile_visibility: Literal["public", "friends", "private"] = "public"
     default_round_visibility: Literal["private", "friends", "public"] = "friends"
 
 

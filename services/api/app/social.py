@@ -145,22 +145,6 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
     return followed_ids, followed_ids & reverse_ids
 
 
-def _profile_visibility(session: Session, user_id: int) -> str:
-    preferences = session.get(OnboardingPreference, user_id)
-    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
-    return onboarding.get("profile_visibility", "public")
-
-
-def _profile_is_visible_to(session: Session, viewer_id: int, target_user_id: int) -> bool:
-    visibility = _profile_visibility(session, target_user_id)
-    if visibility == "public":
-        return True
-    if visibility != "friends":
-        return False
-    _, mutual_ids = _relationship_sets(session, viewer_id)
-    return target_user_id in mutual_ids
-
-
 def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
     preferences = session.get(OnboardingPreference, user.id)
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
@@ -180,7 +164,7 @@ def course_friend_thoughts(
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> FriendsCourseThoughtsOut:
-    """Ratings from currently eligible friends, with memories only when shared to friends.
+    """Ratings from mutual friends, with memories only when shared to friends.
 
     This never serializes a round identifier or any private round field.  Ratings are
     projections rather than round visibility, while notes and favorite holes require
@@ -195,20 +179,6 @@ def course_friend_thoughts(
     if not eligible_ids:
         return FriendsCourseThoughtsOut()
 
-    preferences = {
-        user_id: data or {}
-        for user_id, data in session.execute(
-            select(OnboardingPreference.user_id, OnboardingPreference.onboarding_data)
-            .where(OnboardingPreference.user_id.in_(eligible_ids))
-        )
-    }
-    visible_friend_ids = {
-        user_id for user_id in eligible_ids
-        if preferences.get(user_id, {}).get("profile_visibility", "public") != "private"
-    }
-    if not visible_friend_ids:
-        return FriendsCourseThoughtsOut()
-
     # A reconciliation can leave historical alias projections. Use one current
     # projection per friend before calculating the aggregate or selecting recent
     # entries, so aliases cannot double count a friend.
@@ -219,7 +189,7 @@ def course_friend_thoughts(
             order_by=(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc()),
         ).label("position"),
     ).where(
-        UserCourseRating.user_id.in_(visible_friend_ids),
+        UserCourseRating.user_id.in_(eligible_ids),
         UserCourseRating.course_id.in_(course_identity_ids(session, course)),
     ).subquery()
     current_rating_ids = select(ranked_ratings.c.rating_id).where(ranked_ratings.c.position == 1)
@@ -293,13 +263,18 @@ def course_friend_thoughts(
     )
 
 def _muted_user_summary(session: Session, viewer_id: int, target: User) -> MutedUserOut:
-    if target.id not in _blocked_ids(session, viewer_id) and _profile_is_visible_to(session, viewer_id, target.id):
+    if target.id not in _blocked_ids(session, viewer_id):
         summary = _summary(session, target)
         return MutedUserOut(id=target.id, display_name=summary.display_name, username=summary.username)
     return MutedUserOut(id=target.id, display_name="Muted account", username=None)
 
 
-def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
+def _event_visible(
+    event: ActivityEvent,
+    viewer_id: int,
+    followed_ids: set[int],
+    mutual_ids: set[int],
+) -> bool:
     return (
         event.actor_user_id == viewer_id
         or (event.actor_user_id in followed_ids and event.visibility == "public")
@@ -373,14 +348,10 @@ def search_users(
 ) -> list[UserSummaryOut]:
     current_record = require_user(session, current)
     excluded = _blocked_ids(session, current_record.id) | {current_record.id}
-    _, mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
     results: list[UserSummaryOut] = []
     for user in users:
-        visibility = _profile_visibility(session, user.id)
-        if visibility == "private" or (visibility == "friends" and user.id not in mutual_ids):
-            continue
         summary = _summary(session, user)
         haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
         if needle in haystack:
@@ -486,7 +457,7 @@ def notify_linked_contacts(session: Session, user: User, current: CurrentUser, s
             LinkedContact.user_id != user.id,
         )).all()
         for recipient_id in set(recipients):
-            if user.id in _blocked_ids(session, recipient_id) or not _profile_is_visible_to(session, recipient_id, user.id) or not _notifications_enabled(session, recipient_id):
+            if user.id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
                 continue
             existing = session.scalar(select(AppNotification.id).where(
                 AppNotification.recipient_user_id == recipient_id,
@@ -729,15 +700,6 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     target = session.get(User, target_user_id)
     if target is None:
         raise HTTPException(404, "User not found")
-    followed_ids, _ = _relationship_sets(session, user_id)
-    follower_ids = set(session.scalars(
-        select(Follow.follower_id).where(Follow.followed_id == user_id)
-    ).all())
-    # A relationship may predate a target's switch to private visibility. Keep
-    # safety controls available for that known target, without making private
-    # profiles discoverable to strangers.
-    if target_user_id not in followed_ids | follower_ids and not _profile_is_visible_to(session, user_id, target_user_id):
-        raise HTTPException(404, "User not found")
     return target
 
 
@@ -775,17 +737,7 @@ def list_blocked_users(
         target = session.get(User, block.blocked_id)
         if target is None:
             continue
-        if _profile_is_visible_to(session, user.id, target.id):
-            summary = _summary(session, target)
-        else:
-            summary = UserSummaryOut(
-                id=target.id,
-                username=None,
-                display_name="Blocked account",
-                home_region=None,
-                follower_count=0,
-                following_count=0,
-            )
+        summary = _summary(session, target)
         output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
     return output
 

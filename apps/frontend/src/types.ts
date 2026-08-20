@@ -21,7 +21,6 @@ export type OnboardingPreferences = {
     preferred_tee_time: string
     transportation: 'Walking' | 'Cart' | 'Either' | null
     notifications: boolean | null
-    profile_visibility?: 'public' | 'friends' | 'private'
     default_round_visibility?: 'private' | 'friends' | 'public'
   }
 }

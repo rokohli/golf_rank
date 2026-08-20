@@ -9,16 +9,9 @@ import { ProductScreen, ScreenHeader } from '../src/components/ProductUI'
 import { OnboardingPreferences, RoundVisibility } from '../src/types'
 import { colors, radii } from '../src/ui/theme'
 
-type ProfileVisibility = NonNullable<NonNullable<OnboardingPreferences['onboarding_data']>['profile_visibility']>
-
-const profileOptions: Array<{ description: string; icon: keyof typeof Feather.glyphMap; label: string; value: ProfileVisibility }> = [
-  { description: 'Anyone can find your profile.', icon: 'globe', label: 'Public', value: 'public' },
-  { description: 'Only mutual friends can find your profile.', icon: 'users', label: 'Friends', value: 'friends' },
-  { description: 'Your profile is hidden from golfer search.', icon: 'lock', label: 'Private', value: 'private' },
-]
 const roundOptions: Array<{ description: string; icon: keyof typeof Feather.glyphMap; label: string; value: RoundVisibility }> = [
   { description: 'Only you can see new rounds.', icon: 'lock', label: 'Private', value: 'private' },
-  { description: 'Mutual friends can see new rounds.', icon: 'users', label: 'Friends', value: 'friends' },
+  { description: 'Only people you follow who also follow you can see new rounds.', icon: 'users', label: 'Friends', value: 'friends' },
   { description: 'Followers can see new rounds.', icon: 'globe', label: 'Public', value: 'public' },
 ]
 
@@ -26,7 +19,6 @@ export default function Privacy() {
   const router = useRouter()
   const { getAuthHeaders } = useAuthHeaders()
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
-  const [profileVisibility, setProfileVisibility] = useState<ProfileVisibility>('public')
   const [roundVisibility, setRoundVisibility] = useState<RoundVisibility>('friends')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -38,7 +30,6 @@ export default function Privacy() {
     try {
       const next = await getProfile(await getAuthHeaders())
       setProfile(next)
-      setProfileVisibility(next.onboarding_data?.profile_visibility ?? 'public')
       setRoundVisibility(next.onboarding_data?.default_round_visibility ?? 'friends')
     } catch (reason) {
       setError(message(reason, 'Unable to load privacy settings.'))
@@ -62,7 +53,6 @@ export default function Privacy() {
         onboarding_data: {
           ...profile.onboarding_data,
           default_round_visibility: roundVisibility,
-          profile_visibility: profileVisibility,
         },
       }, await getAuthHeaders())
       router.back()
@@ -76,11 +66,8 @@ export default function Privacy() {
   return <>
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen>
-      <ScreenHeader title="Privacy & visibility" onBack={() => router.back()} />
+      <ScreenHeader title="Round visibility" onBack={() => router.back()} />
       {loading ? <ActivityIndicator accessibilityLabel="Loading privacy settings" color={colors.pine} /> : <>
-        <PrivacySection description="Choose who can discover you in golfer search." title="PROFILE VISIBILITY">
-          <OptionGroup options={profileOptions} selected={profileVisibility} onSelect={(value) => setProfileVisibility(value as ProfileVisibility)} />
-        </PrivacySection>
         <PrivacySection description="This becomes the starting visibility for rounds you log. You can still change each round before saving." title="DEFAULT ROUND VISIBILITY">
           <OptionGroup options={roundOptions} selected={roundVisibility} onSelect={(value) => setRoundVisibility(value as RoundVisibility)} />
         </PrivacySection>

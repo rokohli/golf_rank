@@ -38,7 +38,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     assert response.status_code == 200
     assert response.json()["home_region"] == "Monterey, CA"
     assert response.json()["onboarding_data"]["played_course_ids"] == ["pebble"]
-    assert response.json()["onboarding_data"]["profile_visibility"] == "friends"
+    assert "profile_visibility" not in response.json()["onboarding_data"]
     assert response.json()["onboarding_data"]["default_round_visibility"] == "private"
 
     profile = client.get(
@@ -46,6 +46,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     )
     assert profile.status_code == 200
     assert profile.json()["onboarding_data"]["dream_course_ids"] == ["bandon"]
+    assert "profile_visibility" not in profile.json()["onboarding_data"]
 
     legacy_update = client.put(
         "/api/v1/me/onboarding-preferences",
