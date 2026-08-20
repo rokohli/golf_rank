@@ -788,6 +788,41 @@ def test_contact_upload_persists_when_optional_identity_matching_is_unavailable(
         assert session.scalar(select(func.count(LinkedContact.id))) == 1
 
 
+def test_linked_contact_status_and_removal_are_owner_scoped() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:contact-control-alice", "Alice", "contactcontrolalice")
+    bob = _profile(client, "dev:contact-control-bob", "Bob", "contactcontrolbob")
+
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": False,
+        "contact_count": 0,
+    }
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["bob@example.com", "+14155551212"]},
+    ).status_code == 204
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=bob,
+        json={"contact_identifiers": ["alice@example.com"]},
+    ).status_code == 204
+
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": True,
+        "contact_count": 2,
+    }
+    assert client.delete("/api/v1/me/contacts", headers=alice).status_code == 204
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": False,
+        "contact_count": 0,
+    }
+    assert client.get("/api/v1/me/contacts", headers=bob).json() == {
+        "linked": True,
+        "contact_count": 1,
+    }
+
+
 def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:cursor-notification-alice", "Alice", "cursoralice")

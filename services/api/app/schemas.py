@@ -59,6 +59,11 @@ class ContactLinkIn(BaseModel):
         return normalized
 
 
+class ContactLinkStatusOut(BaseModel):
+    linked: bool
+    contact_count: int
+
+
 class CourseImageOut(BaseModel):
     id: int
     url: str | None = None

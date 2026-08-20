@@ -67,6 +67,8 @@ Creates an authenticated pending catalog-review candidate with `name`, optional 
 - `GET /api/v1/users?q=...` searches golfers without exposing provider identities and excludes blocks in either direction.
 - `PUT` and `DELETE /api/v1/me/follows/{user_id}` manage one-way follows. Mutual follows are presented as Friends.
 - `GET /api/v1/me/follows` returns followed-user envelopes with `is_mutual`.
+- `PUT /api/v1/me/contacts` replaces or appends bounded batches of contact identifiers, which are canonicalized and stored only as keyed hashes. `GET` returns the authenticated owner's persisted link status and count; `DELETE` removes all of that owner's stored contact hashes.
+- `GET /api/v1/me/notifications?limit=...&cursor=...` returns a cursor page of account notifications and current follow state.
 - `PUT` and `DELETE /api/v1/me/mutes/{user_id}` hide or restore a followed user's feed activity.
 - `PUT` and `DELETE /api/v1/me/blocks/{user_id}` hide both users from search/feed and remove follows in both directions.
 

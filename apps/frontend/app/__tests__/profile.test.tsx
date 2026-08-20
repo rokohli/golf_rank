@@ -12,6 +12,8 @@ const mockGetProfile = jest.fn()
 const mockGetRoundSummary = jest.fn()
 const mockSavePreferences = jest.fn()
 const mockSyncLinkedContacts = jest.fn()
+const mockGetLinkedContactStatus = jest.fn()
+const mockDeleteLinkedContacts = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -48,6 +50,8 @@ jest.mock('../../src/api/client', () => ({
   getRoundSummary: (...args: unknown[]) => mockGetRoundSummary(...args),
   savePreferences: (...args: unknown[]) => mockSavePreferences(...args),
   syncLinkedContacts: (...args: unknown[]) => mockSyncLinkedContacts(...args),
+  getLinkedContactStatus: (...args: unknown[]) => mockGetLinkedContactStatus(...args),
+  deleteLinkedContacts: (...args: unknown[]) => mockDeleteLinkedContacts(...args),
 }))
 
 jest.mock('../../src/auth/AuthProvider', () => ({
@@ -91,6 +95,8 @@ describe('profile experience', () => {
     mockGetRoundSummary.mockResolvedValue({ total_rounds: 24, distinct_courses: 18, average_score: 84.1, best_score: 78, latest_round: latestRound })
     mockSavePreferences.mockResolvedValue(undefined)
     mockSyncLinkedContacts.mockResolvedValue(undefined)
+    mockGetLinkedContactStatus.mockResolvedValue({ linked: false, contact_count: 0 })
+    mockDeleteLinkedContacts.mockResolvedValue(undefined)
     mockRequestContactsPermission.mockResolvedValue({ status: 'granted' })
     mockGetContacts.mockResolvedValue({ data: [] })
     mockUpdateUserProfile.mockResolvedValue(undefined)
@@ -213,6 +219,17 @@ describe('profile experience', () => {
     await waitFor(() => expect(mockSyncLinkedContacts).toHaveBeenCalledWith({
       contact_identifiers: ['golfer@example.com', '+61412345678'],
     }, expect.anything()))
+  })
+
+  it('loads persisted contact-link status and removes stored contact hashes', async () => {
+    mockGetLinkedContactStatus.mockResolvedValue({ linked: true, contact_count: 2 })
+    render(<NotificationSettings />)
+
+    expect(await screen.findByText('Update linked contacts')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Remove linked contacts' }))
+
+    await waitFor(() => expect(mockDeleteLinkedContacts).toHaveBeenCalledWith(expect.anything()))
+    expect(screen.getByText('Link contacts')).toBeOnTheScreen()
   })
 
   it('persists default round visibility without a private-account setting', async () => {

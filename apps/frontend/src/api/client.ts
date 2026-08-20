@@ -330,6 +330,17 @@ export async function syncLinkedContacts(input: { contact_identifiers: string[] 
   }
 }
 
+export async function getLinkedContactStatus(headers: ApiHeaders): Promise<{ linked: boolean; contact_count: number }> {
+  const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load linked-contact status. Please try again.')
+  return response.json()
+}
+
+export async function deleteLinkedContacts(headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to remove linked contacts. Please try again.')
+}
+
 export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSummary[]> {
   const response = await fetch(`${baseUrl}/api/v1/users?q=${encodeURIComponent(query)}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to search golfers. Please try again.')

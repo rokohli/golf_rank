@@ -36,6 +36,7 @@ from .schemas import (
     FriendCourseThoughtUserOut,
     FriendsCourseThoughtsOut,
     ContactLinkIn,
+    ContactLinkStatusOut,
 )
 from .domain import course_identity_ids
 
@@ -445,6 +446,31 @@ def link_contacts(
             user.id,
             error.status_code,
         )
+    session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/api/v1/me/contacts", response_model=ContactLinkStatusOut)
+def linked_contact_status(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ContactLinkStatusOut:
+    user = stored_user(session, current)
+    if user is None:
+        return ContactLinkStatusOut(linked=False, contact_count=0)
+    contact_count = session.scalar(
+        select(func.count(LinkedContact.id)).where(LinkedContact.user_id == user.id)
+    ) or 0
+    return ContactLinkStatusOut(linked=contact_count > 0, contact_count=contact_count)
+
+
+@router.delete("/api/v1/me/contacts", status_code=204)
+def unlink_contacts(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    user = require_user(session, current)
+    session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     session.commit()
     return Response(status_code=204)
 
