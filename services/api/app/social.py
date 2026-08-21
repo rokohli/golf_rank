@@ -113,6 +113,22 @@ class MutedUserOut(BaseModel):
 def _summary(session: Session, user: User) -> UserSummaryOut:
     preferences = session.get(OnboardingPreference, user.id)
     profile = session.get(Profile, user.id)
+    follower_count = session.scalar(
+        select(func.count(Follow.id)).where(Follow.followed_id == user.id)
+    ) or 0
+    following_count = session.scalar(
+        select(func.count(Follow.id)).where(Follow.follower_id == user.id)
+    ) or 0
+    return _summary_out(user, preferences, profile, follower_count, following_count)
+
+
+def _summary_out(
+    user: User,
+    preferences: OnboardingPreference | None,
+    profile: Profile | None,
+    follower_count: int,
+    following_count: int,
+) -> UserSummaryOut:
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
@@ -122,9 +138,40 @@ def _summary(session: Session, user: User) -> UserSummaryOut:
         username=onboarding.get("username"),
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
-        follower_count=session.scalar(select(func.count(Follow.id)).where(Follow.followed_id == user.id)) or 0,
-        following_count=session.scalar(select(func.count(Follow.id)).where(Follow.follower_id == user.id)) or 0,
+        follower_count=follower_count,
+        following_count=following_count,
     )
+
+
+def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut]:
+    if not user_ids:
+        return {}
+    rows = session.execute(
+        select(User, OnboardingPreference, Profile)
+        .outerjoin(OnboardingPreference, OnboardingPreference.user_id == User.id)
+        .outerjoin(Profile, Profile.user_id == User.id)
+        .where(User.id.in_(user_ids))
+    ).all()
+    follower_counts = dict(session.execute(
+        select(Follow.followed_id, func.count(Follow.id))
+        .where(Follow.followed_id.in_(user_ids))
+        .group_by(Follow.followed_id)
+    ).all())
+    following_counts = dict(session.execute(
+        select(Follow.follower_id, func.count(Follow.id))
+        .where(Follow.follower_id.in_(user_ids))
+        .group_by(Follow.follower_id)
+    ).all())
+    return {
+        user.id: _summary_out(
+            user,
+            preferences,
+            profile,
+            follower_counts.get(user.id, 0),
+            following_counts.get(user.id, 0),
+        )
+        for user, preferences, profile in rows
+    }
 
 
 def _blocked_ids(session: Session, user_id: int) -> set[int]:
@@ -416,8 +463,27 @@ def list_notifications(
     notifications = session.scalars(query.order_by(AppNotification.id.desc()).limit(limit + 1)).all()
     page = notifications[:limit]
     next_cursor = _cursor(page[-1]) if len(notifications) > limit else None
-    following_ids = set(session.scalars(select(Follow.followed_id).where(Follow.follower_id == user.id)).all())
-    return NotificationPageOut(items=[NotificationOut(id=item.id, notification_type=item.notification_type, actor=_summary(session, session.get(User, item.actor_user_id)), created_at=item.created_at, is_following=item.actor_user_id in following_ids) for item in page], next_cursor=next_cursor)
+    actor_ids = {item.actor_user_id for item in page}
+    summaries = _summaries(session, actor_ids)
+    following_ids = set(session.scalars(
+        select(Follow.followed_id).where(
+            Follow.follower_id == user.id,
+            Follow.followed_id.in_(actor_ids),
+        )
+    ).all()) if actor_ids else set()
+    return NotificationPageOut(
+        items=[
+            NotificationOut(
+                id=item.id,
+                notification_type=item.notification_type,
+                actor=summaries[item.actor_user_id],
+                created_at=item.created_at,
+                is_following=item.actor_user_id in following_ids,
+            )
+            for item in page
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @router.put("/api/v1/me/contacts", status_code=204)

@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from app.main import create_app
 from app.core.auth import CurrentUser, current_user
@@ -16,6 +16,7 @@ from app.models import (
     Follow,
     LinkedContact,
     OnboardingPreference,
+    Profile,
     Round,
     RoundNote,
     User,
@@ -867,3 +868,68 @@ def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> 
         "Bob Golfer"
     ]
     assert second["next_cursor"] is None
+
+
+def test_notification_actor_summary_queries_do_not_scale_with_page_size() -> None:
+    client = TestClient(create_app())
+    viewer = _profile(client, "dev:notification-query-viewer", "Viewer", "queryviewer")
+
+    with client.app.state.session_factory() as session:
+        viewer_record = session.scalar(
+            select(User).where(User.provider_subject == "dev:notification-query-viewer")
+        )
+        assert viewer_record is not None
+        for index in range(20):
+            actor = User(provider_subject=f"dev:notification-query-actor-{index}")
+            session.add(actor)
+            session.flush()
+            session.add_all([
+                Profile(user_id=actor.id, home_region="Monterey, CA"),
+                OnboardingPreference(
+                    user_id=actor.id,
+                    max_green_fee=700,
+                    difficulty="any",
+                    access="any",
+                    onboarding_data={
+                        "first_name": f"Actor {index}",
+                        "username": f"queryactor{index}",
+                    },
+                ),
+                Follow(follower_id=viewer_record.id, followed_id=actor.id),
+                Follow(follower_id=actor.id, followed_id=viewer_record.id),
+                AppNotification(
+                    recipient_user_id=viewer_record.id,
+                    actor_user_id=actor.id,
+                    notification_type="followed_you",
+                ),
+            ])
+        session.commit()
+
+    def select_count(limit: int) -> tuple[int, dict]:
+        statements: list[str] = []
+
+        def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(client.app.state.engine, "before_cursor_execute", capture_select)
+        try:
+            response = client.get(
+                "/api/v1/me/notifications",
+                headers=viewer,
+                params={"limit": limit},
+            )
+        finally:
+            event.remove(client.app.state.engine, "before_cursor_execute", capture_select)
+        assert response.status_code == 200
+        return len(statements), response.json()
+
+    one_count, one = select_count(1)
+    full_count, full = select_count(20)
+
+    assert len(one["items"]) == 1
+    assert len(full["items"]) == 20
+    assert full_count <= one_count + 1
+    assert full["items"][0]["actor"]["follower_count"] == 1
+    assert full["items"][0]["actor"]["following_count"] == 1
+    assert full["items"][0]["is_following"] is True
