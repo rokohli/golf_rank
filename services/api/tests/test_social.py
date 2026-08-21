@@ -1,15 +1,22 @@
 from datetime import date, datetime
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, func, select
 
 from app.main import create_app
+from app.core.auth import CurrentUser, current_user
+from app.core.config import Settings
+from app.social import _identifier_hash
 from app.models import (
     ActivityEvent,
+    AppNotification,
     Course,
     CourseReconciliation,
     Follow,
+    LinkedContact,
     OnboardingPreference,
+    Profile,
     Round,
     RoundNote,
     User,
@@ -18,7 +25,7 @@ from app.models import (
 )
 
 
-def _profile(client: TestClient, subject: str, first_name: str, username: str, visibility: str = "public") -> dict[str, str]:
+def _profile(client: TestClient, subject: str, first_name: str, username: str) -> dict[str, str]:
     headers = {"X-Development-Subject": subject}
     response = client.put(
         "/api/v1/me/onboarding-preferences",
@@ -35,7 +42,6 @@ def _profile(client: TestClient, subject: str, first_name: str, username: str, v
                 "home_course_search": "Pebble Beach",
                 "travel_distance": "Any",
                 "preferred_tee_time": "Morning",
-                "profile_visibility": visibility,
             },
         },
     )
@@ -105,52 +111,73 @@ def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared
     assert "Private notebook" not in str(private_memory)
 
 
-def test_course_friend_thoughts_excludes_one_way_private_blocked_and_muted_relationships() -> None:
+def test_feed_includes_shared_round_note_and_favorite_hole() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:feed-details-alice", "Alice", "alice")
+    bob = _profile(client, "dev:feed-details-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+
+    _rate_course(client, bob, 1, visibility="friends", note="Windy but fun.", favorite_hole=7)
+
+    item = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert item["data"] == {
+        "course_id": 1,
+        "played_on": "2026-07-01",
+        "score": 80,
+        "note": "Windy but fun.",
+        "favorite_hole": 7,
+        "rating": 9.2,
+        "tier": "green",
+    }
+
+    # Older events did not persist these optional fields. The feed must still
+    # render the details currently shared with the backing round.
+    with client.app.state.session_factory() as session:
+        event = session.get(ActivityEvent, item["id"])
+        assert event is not None
+        event.event_data = {"course_id": 1, "played_on": "2026-07-01", "score": 80, "rating": 9.2, "tier": "green"}
+        session.commit()
+
+    hydrated = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert hydrated["data"]["note"] == "Windy but fun."
+    assert hydrated["data"]["favorite_hole"] == 7
+
+
+def test_course_friend_thoughts_requires_mutual_friends_and_excludes_blocked_and_muted_accounts() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-policy-alice", "Alice", "alice")
     bob = _profile(client, "dev:thoughts-policy-bob", "Bob", "bob")
     charlie = _profile(client, "dev:thoughts-policy-charlie", "Charlie", "charlie")
-    private = _profile(client, "dev:thoughts-policy-private", "Private", "private")
     bob_id = _mutual_friend(client, alice, bob, "bob")
-    _mutual_friend(client, alice, private, "private")
-    _profile(client, "dev:thoughts-policy-private", "Private", "private", "private")
     charlie_id = client.get("/api/v1/users", headers=alice, params={"q": "charlie"}).json()[0]["id"]
     client.put(f"/api/v1/me/follows/{charlie_id}", headers=alice)  # One-way only.
     _rate_course(client, bob, 1, visibility="friends")
     _rate_course(client, charlie, 1, visibility="friends")
-    # The private user can have historical state, but cannot be discovered or included.
-    _rate_course(client, private, 1, visibility="friends")
     assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["rating_count"] == 1
 
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
-    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json() == {
-        "average_rating": None, "rating_count": 0, "entries": [],
-    }
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["rating_count"] == 0
     assert client.delete(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
-    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["entries"] == []
+    assert client.get("/api/v1/courses/1/friends-thoughts", headers=alice).json()["rating_count"] == 0
 
 
-def test_known_private_follow_target_can_still_be_blocked_or_muted() -> None:
+def test_follow_target_can_be_blocked_or_muted() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:private-controls-alice", "Alice", "alice")
     bob = _profile(client, "dev:private-controls-bob", "Bob", "bob")
     bob_id = _mutual_friend(client, alice, bob, "bob")
-    _profile(client, "dev:private-controls-bob", "Bob", "bob", "private")
-
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
 
 
-def test_private_incoming_follow_target_can_still_be_blocked_or_muted() -> None:
+def test_incoming_follow_target_can_be_blocked_or_muted() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:incoming-private-alice", "Alice", "alice")
     bob = _profile(client, "dev:incoming-private-bob", "Bob", "bob")
     bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
     alice_id = client.get("/api/v1/users", headers=bob, params={"q": "alice"}).json()[0]["id"]
     assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
-    _profile(client, "dev:incoming-private-bob", "Bob", "bob", "private")
-
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
 
@@ -237,7 +264,7 @@ def test_course_friend_thoughts_aggregates_all_visible_friends_but_limits_recent
             session.flush()
             session.add(OnboardingPreference(
                 user_id=friend.id, max_green_fee=700, difficulty="any", access="any",
-                onboarding_data={"first_name": f"Friend {index}", "username": f"friend{index}", "profile_visibility": "friends"},
+                onboarding_data={"first_name": f"Friend {index}", "username": f"friend{index}"},
             ))
             session.add_all([
                 Follow(follower_id=viewer.id, followed_id=friend.id),
@@ -257,7 +284,7 @@ def test_course_friend_thoughts_aggregates_all_visible_friends_but_limits_recent
     assert len(body["entries"]) == 10
 
 
-def test_feed_enforces_public_friends_and_private_visibility() -> None:
+def test_feed_enforces_private_mutual_friend_and_follower_public_audiences() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:social-alice", "Alice", "alice")
     bob = _profile(client, "dev:social-bob", "Bob", "bob")
@@ -272,19 +299,27 @@ def test_feed_enforces_public_friends_and_private_visibility() -> None:
     )
     assert client.get("/api/v1/feed", headers=alice).json() == {"items": [], "next_cursor": None}
 
+    client.post(
+        "/api/v1/me/rounds",
+        headers=bob,
+        json={"course_id": 2, "played_on": "2026-07-02", "score": 82, "visibility": "public"},
+    )
+    public_feed = client.get("/api/v1/feed", headers=alice).json()["items"]
+    assert len(public_feed) == 1
+    assert public_feed[0]["course"]["id"] == 2
+
     client.put(f"/api/v1/me/follows/{alice_id}", headers=bob)
     mutual_feed = client.get("/api/v1/feed", headers=alice).json()["items"]
-    assert mutual_feed[0]["event_type"] == "round_logged"
-    assert mutual_feed[0]["data"]["score"] == 80
-    assert "note" not in mutual_feed[0]["data"]
+    assert {item["course"]["id"] for item in mutual_feed} == {1, 2}
+    assert next(item for item in mutual_feed if item["course"]["id"] == 1)["data"]["score"] == 80
 
     client.post(
         "/api/v1/me/rounds",
         headers=bob,
-        json={"course_id": 2, "played_on": "2026-07-02", "visibility": "private"},
+        json={"course_id": 2, "played_on": "2026-07-03", "visibility": "private"},
     )
     feed = client.get("/api/v1/feed", headers=alice).json()["items"]
-    assert all(item["course"]["id"] != 2 for item in feed)
+    assert len(feed) == 2
 
 
 def test_user_search_does_not_expose_provider_subjects() -> None:
@@ -296,23 +331,28 @@ def test_user_search_does_not_expose_provider_subjects() -> None:
     assert "provider_subject" not in result.json()[0]
 
 
-def test_user_search_enforces_profile_visibility() -> None:
+def test_legacy_profile_visibility_is_ignored_for_search_and_shared_posts() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:privacy-alice", "Alice", "privacyalice")
     bob = _profile(client, "dev:privacy-bob", "Bob", "privacybob")
     bob_id = client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json()[0]["id"]
     alice_id = client.get("/api/v1/users", headers=bob, params={"q": "privacyalice"}).json()[0]["id"]
+    with client.app.state.session_factory() as session:
+        bob_record = session.scalar(select(User).where(User.provider_subject == "dev:privacy-bob"))
+        assert bob_record is not None
+        preferences = session.get(OnboardingPreference, bob_record.id)
+        assert preferences is not None
+        preferences.onboarding_data = {**preferences.onboarding_data, "profile_visibility": "private"}
+        session.commit()
 
-    client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
-    client.put(f"/api/v1/me/follows/{alice_id}", headers=bob)
-    _profile(client, "dev:privacy-bob", "Bob", "privacybob", "friends")
     assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json()[0]["id"] == bob_id
-
-    client.delete(f"/api/v1/me/follows/{alice_id}", headers=bob)
-    assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json() == []
-
-    _profile(client, "dev:privacy-bob", "Bob", "privacybob", "private")
-    assert client.get("/api/v1/users", headers=alice, params={"q": "privacybob"}).json() == []
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 1, "played_on": "2026-07-01", "visibility": "friends"},
+    ).status_code == 201
+    assert client.get("/api/v1/feed", headers=alice).json()["items"][0]["actor"]["id"] == bob_id
 
 
 def test_feed_reactions_are_idempotent_and_private_events_are_not_reactable() -> None:
@@ -402,30 +442,25 @@ def test_blocked_account_list_is_owner_scoped_and_can_be_unblocked() -> None:
     assert client.get("/api/v1/me/blocks", headers=alice).json() == []
 
 
-def test_blocking_respects_profile_visibility_and_masks_later_private_profiles() -> None:
+def test_blocked_account_list_retains_public_identity_summary() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:block-privacy-alice", "Alice", "blockprivacyalice")
     bob = _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob")
     bob_id = client.get("/api/v1/users", headers=alice, params={"q": "blockprivacybob"}).json()[0]["id"]
 
-    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob", "private")
-    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 404
-
-    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob")
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
-    _profile(client, "dev:block-privacy-bob", "Bob", "blockprivacybob", "private")
 
     blocked = client.get("/api/v1/me/blocks", headers=alice)
     assert blocked.status_code == 200
     assert blocked.json()[0]["id"] == bob_id
-    assert blocked.json()[0]["username"] is None
-    assert blocked.json()[0]["display_name"] == "Blocked account"
-    assert blocked.json()[0]["home_region"] is None
+    assert blocked.json()[0]["username"] == "blockprivacybob"
+    assert blocked.json()[0]["display_name"] == "Bob Golfer"
+    assert blocked.json()[0]["home_region"] == "Monterey, CA"
     assert blocked.json()[0]["follower_count"] == 0
     assert blocked.json()[0]["following_count"] == 0
 
 
-def test_existing_followed_accounts_can_be_blocked_or_muted_after_becoming_private() -> None:
+def test_existing_followed_accounts_can_be_blocked_or_muted() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:known-target-alice", "Alice", "knowntargetalice")
     bob = _profile(client, "dev:known-target-bob", "Bob", "knowntargetbob")
@@ -435,9 +470,6 @@ def test_existing_followed_accounts_can_be_blocked_or_muted_after_becoming_priva
 
     assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
     assert client.put(f"/api/v1/me/follows/{charlie_id}", headers=alice).status_code == 200
-    _profile(client, "dev:known-target-bob", "Bob", "knowntargetbob", "private")
-    _profile(client, "dev:known-target-charlie", "Charlie", "knowntargetcharlie", "private")
-
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
     assert client.put(f"/api/v1/me/blocks/{charlie_id}", headers=alice).status_code == 204
     assert [item["user"]["id"] for item in client.get("/api/v1/me/follows", headers=alice).json()] == [bob_id]
@@ -468,18 +500,13 @@ def test_muted_account_list_is_owner_scoped_and_can_be_unmuted() -> None:
     assert client.get("/api/v1/me/mutes", headers=alice).json() == []
 
 
-def test_muted_account_list_masks_later_private_and_blocked_profiles() -> None:
+def test_muted_account_list_masks_blocked_profiles() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:mute-privacy-alice", "Alice", "muteprivacyalice")
     bob = _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob")
     bob_id = client.get("/api/v1/users", headers=alice, params={"q": "muteprivacybob"}).json()[0]["id"]
     assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice).status_code == 204
 
-    _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob", "private")
-    private_entry = client.get("/api/v1/me/mutes", headers=alice)
-    assert private_entry.json() == [{"id": bob_id, "display_name": "Muted account", "username": None}]
-
-    _profile(client, "dev:mute-privacy-bob", "Bob", "muteprivacybob")
     assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
     blocked_entry = client.get("/api/v1/me/mutes", headers=alice)
     assert blocked_entry.json() == [{"id": bob_id, "display_name": "Muted account", "username": None}]
@@ -648,3 +675,261 @@ def test_feed_cursor_pages_through_many_events_with_the_same_timestamp() -> None
 
     assert len(event_ids) == 60
     assert len(set(event_ids)) == 60
+
+
+def test_follow_and_contact_join_notifications_are_persisted(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:notification-alice", "Alice", "alice")
+    bob = _profile(client, "dev:notification-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    followed = client.get("/api/v1/me/notifications", headers=bob).json()["items"]
+    assert followed[0]["notification_type"] == "followed_you"
+    assert followed[0]["actor"]["display_name"] == "Alice Golfer"
+
+    assert client.put("/api/v1/me/contacts", headers=alice, json={"contact_identifiers": ["bob@example.com"]}).status_code == 204
+    # A client cannot claim another account's identifier; only verified auth
+    # data can create a contact-joined notification.
+    assert client.put("/api/v1/me/contacts", headers=bob, json={"account_identifiers": ["bob@example.com"], "contact_identifiers": []}).status_code == 422
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:notification-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("bob@example.com",))
+    assert client.put("/api/v1/me/contacts", headers=bob, json={"contact_identifiers": []}).status_code == 204
+    client.app.dependency_overrides.pop(current_user)
+    joined = client.get("/api/v1/me/notifications", headers=alice).json()["items"]
+    assert joined[0]["notification_type"] == "contact_joined"
+    assert joined[0]["actor"]["display_name"] == "Bob Golfer"
+
+
+def test_onboarding_triggers_contact_join_matching(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:onboarding-contact-alice", "Alice", "alice")
+    assert client.put("/api/v1/me/contacts", headers=alice, json={"contact_identifiers": ["bob@example.com"]}).status_code == 204
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("clerk:onboarding-contact-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("bob@example.com",))
+    response = client.put("/api/v1/me/onboarding-preferences", json={
+        "home_region": "Monterey, CA", "max_green_fee": 700, "difficulty": "any", "access": "any",
+    })
+    client.app.dependency_overrides.pop(current_user)
+
+    assert response.status_code == 200
+    assert client.get("/api/v1/me/notifications", headers=alice).json()["items"][0]["notification_type"] == "contact_joined"
+
+
+def test_refollow_reuses_notification_and_notifications_preference_hides_inbox() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:notification-repeat-alice", "Alice", "alice")
+    bob = _profile(client, "dev:notification-repeat-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.delete(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 204
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert len(client.get("/api/v1/me/notifications", headers=bob).json()["items"]) == 1
+
+    saved = client.get("/api/v1/me/profile", headers=bob).json()
+    saved["onboarding_data"]["notifications"] = False
+    assert client.put("/api/v1/me/onboarding-preferences", headers=bob, json=saved).status_code == 200
+    assert client.get("/api/v1/me/notifications", headers=bob).json() == {"items": [], "next_cursor": None}
+
+
+def test_contact_identifier_hashes_are_keyed_and_normalize_us_phone_numbers() -> None:
+    settings = Settings(contact_identifier_hmac_key="test-contact-hmac-key")
+    assert _identifier_hash(settings, "+1 415 555 1212") == _identifier_hash(settings, "(415) 555-1212")
+    assert _identifier_hash(settings, "bob@example.com") != _identifier_hash(Settings(contact_identifier_hmac_key="other-test-contact-hmac-key"), "bob@example.com")
+
+
+def test_contact_join_notifications_are_not_gated_by_legacy_profile_visibility(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:private-contact-alice", "Alice", "privatecontactalice")
+    bob = _profile(client, "dev:private-contact-bob", "Bob", "privatecontactbob")
+    with client.app.state.session_factory() as session:
+        bob_record = session.scalar(select(User).where(User.provider_subject == "dev:private-contact-bob"))
+        assert bob_record is not None
+        preferences = session.get(OnboardingPreference, bob_record.id)
+        assert preferences is not None
+        preferences.onboarding_data = {**preferences.onboarding_data, "profile_visibility": "private"}
+        session.commit()
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["private-bob@example.com"]},
+    ).status_code == 204
+
+    client.app.dependency_overrides[current_user] = lambda: CurrentUser("dev:private-contact-bob")
+    monkeypatch.setattr("app.social.verified_identifiers", lambda *_: ("private-bob@example.com",))
+    assert client.put(
+        "/api/v1/me/contacts", headers=bob, json={"contact_identifiers": []}
+    ).status_code == 204
+    client.app.dependency_overrides.pop(current_user)
+
+    notifications = client.get("/api/v1/me/notifications", headers=alice).json()["items"]
+    assert notifications[0]["notification_type"] == "contact_joined"
+    assert notifications[0]["actor"]["username"] == "privatecontactbob"
+
+
+def test_contact_upload_persists_when_optional_identity_matching_is_unavailable(monkeypatch) -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:contact-outage-alice", "Alice", "contactoutagealice")
+
+    def unavailable(*_args) -> tuple[str, ...]:
+        raise HTTPException(status_code=503, detail="Identity provider is unavailable")
+
+    monkeypatch.setattr("app.social.verified_identifiers", unavailable)
+    response = client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["bob@example.com"]},
+    )
+
+    assert response.status_code == 204
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count(LinkedContact.id))) == 1
+
+
+def test_linked_contact_status_and_removal_are_owner_scoped() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:contact-control-alice", "Alice", "contactcontrolalice")
+    bob = _profile(client, "dev:contact-control-bob", "Bob", "contactcontrolbob")
+
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": False,
+        "contact_count": 0,
+    }
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["bob@example.com", "+14155551212"]},
+    ).status_code == 204
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=bob,
+        json={"contact_identifiers": ["alice@example.com"]},
+    ).status_code == 204
+
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": True,
+        "contact_count": 2,
+    }
+    assert client.delete("/api/v1/me/contacts", headers=alice).status_code == 204
+    assert client.get("/api/v1/me/contacts", headers=alice).json() == {
+        "linked": False,
+        "contact_count": 0,
+    }
+    assert client.get("/api/v1/me/contacts", headers=bob).json() == {
+        "linked": True,
+        "contact_count": 1,
+    }
+
+
+def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:cursor-notification-alice", "Alice", "cursoralice")
+    _profile(client, "dev:cursor-notification-bob", "Bob", "cursorbob")
+    _profile(client, "dev:cursor-notification-charlie", "Charlie", "cursorcharlie")
+    _profile(client, "dev:cursor-notification-dana", "Dana", "cursordana")
+
+    with client.app.state.session_factory() as session:
+        users = {
+            user.provider_subject: user
+            for user in session.scalars(select(User)).all()
+        }
+        session.add_all([
+            AppNotification(
+                recipient_user_id=users["dev:cursor-notification-alice"].id,
+                actor_user_id=users[subject].id,
+                notification_type="followed_you",
+                created_at=created_at,
+            )
+            for subject, created_at in [
+                ("dev:cursor-notification-bob", datetime(2026, 8, 16, 12, 0, 3)),
+                ("dev:cursor-notification-charlie", datetime(2026, 8, 16, 12, 0, 1)),
+                ("dev:cursor-notification-dana", datetime(2026, 8, 16, 12, 0, 2)),
+            ]
+        ])
+        session.commit()
+
+    first = client.get(
+        "/api/v1/me/notifications", headers=alice, params={"limit": 2}
+    ).json()
+    second = client.get(
+        "/api/v1/me/notifications",
+        headers=alice,
+        params={"limit": 2, "cursor": first["next_cursor"]},
+    ).json()
+
+    assert [item["actor"]["display_name"] for item in first["items"]] == [
+        "Dana Golfer",
+        "Charlie Golfer",
+    ]
+    assert [item["actor"]["display_name"] for item in second["items"]] == [
+        "Bob Golfer"
+    ]
+    assert second["next_cursor"] is None
+
+
+def test_notification_actor_summary_queries_do_not_scale_with_page_size() -> None:
+    client = TestClient(create_app())
+    viewer = _profile(client, "dev:notification-query-viewer", "Viewer", "queryviewer")
+
+    with client.app.state.session_factory() as session:
+        viewer_record = session.scalar(
+            select(User).where(User.provider_subject == "dev:notification-query-viewer")
+        )
+        assert viewer_record is not None
+        for index in range(20):
+            actor = User(provider_subject=f"dev:notification-query-actor-{index}")
+            session.add(actor)
+            session.flush()
+            session.add_all([
+                Profile(user_id=actor.id, home_region="Monterey, CA"),
+                OnboardingPreference(
+                    user_id=actor.id,
+                    max_green_fee=700,
+                    difficulty="any",
+                    access="any",
+                    onboarding_data={
+                        "first_name": f"Actor {index}",
+                        "username": f"queryactor{index}",
+                    },
+                ),
+                Follow(follower_id=viewer_record.id, followed_id=actor.id),
+                Follow(follower_id=actor.id, followed_id=viewer_record.id),
+                AppNotification(
+                    recipient_user_id=viewer_record.id,
+                    actor_user_id=actor.id,
+                    notification_type="followed_you",
+                ),
+            ])
+        session.commit()
+
+    def select_count(limit: int) -> tuple[int, dict]:
+        statements: list[str] = []
+
+        def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(client.app.state.engine, "before_cursor_execute", capture_select)
+        try:
+            response = client.get(
+                "/api/v1/me/notifications",
+                headers=viewer,
+                params={"limit": limit},
+            )
+        finally:
+            event.remove(client.app.state.engine, "before_cursor_execute", capture_select)
+        assert response.status_code == 200
+        return len(statements), response.json()
+
+    one_count, one = select_count(1)
+    full_count, full = select_count(20)
+
+    assert len(one["items"]) == 1
+    assert len(full["items"]) == 20
+    assert full_count <= one_count + 1
+    assert full["items"][0]["actor"]["follower_count"] == 1
+    assert full["items"][0]["actor"]["following_count"] == 1
+    assert full["items"][0]["is_following"] is True

@@ -21,7 +21,6 @@ export type OnboardingPreferences = {
     preferred_tee_time: string
     transportation: 'Walking' | 'Cart' | 'Either' | null
     notifications: boolean | null
-    profile_visibility?: 'public' | 'friends' | 'private'
     default_round_visibility?: 'private' | 'friends' | 'public'
   }
 }
@@ -182,6 +181,14 @@ export type Activity = {
 export type FeedPage = {
   items: Activity[]
   next_cursor: string | null
+}
+
+export type AppNotification = {
+  id: number
+  notification_type: 'followed_you' | 'contact_joined' | string
+  actor: UserSummary
+  created_at: string
+  is_following: boolean
 }
 
 export type CourseSearchFilters = {

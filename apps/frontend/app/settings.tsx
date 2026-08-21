@@ -52,8 +52,8 @@ export default function Settings() {
       </SettingsSection>
 
       <SettingsSection title="APP">
-        <SettingsRow icon="bell" label="Notifications" meta={profile?.onboarding_data?.notifications === false ? 'Off' : 'On'} onPress={() => router.push('/notifications')} />
-        <SettingsRow icon="lock" label="Privacy & visibility" meta={visibilitySummary(profile)} onPress={() => router.push('/privacy' as never)} />
+        <SettingsRow icon="bell" label="Notification settings" meta={profile?.onboarding_data?.notifications === false ? 'Off' : 'On'} onPress={() => router.push('/notification-settings')} />
+        <SettingsRow icon="eye" label="Round visibility" meta={roundVisibilitySummary(profile)} onPress={() => router.push('/privacy' as never)} />
         <SettingsRow icon="volume-x" label="Muted accounts" onPress={() => router.push('/muted' as never)} />
         <SettingsRow icon="slash" label="Blocked accounts" onPress={() => router.push('/blocked' as never)} />
       </SettingsSection>
@@ -87,8 +87,9 @@ function preferenceSummary(profile: OnboardingPreferences | null) {
   return labels.join(', ')
 }
 
-function visibilitySummary(profile: OnboardingPreferences | null) {
-  const visibility = profile?.onboarding_data?.profile_visibility ?? 'public'
+function roundVisibilitySummary(profile: OnboardingPreferences | null) {
+  const visibility = profile?.onboarding_data?.default_round_visibility ?? 'friends'
+  if (visibility === 'friends') return 'Friends'
   return visibility.charAt(0).toUpperCase() + visibility.slice(1)
 }
 

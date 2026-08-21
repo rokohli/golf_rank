@@ -11,7 +11,7 @@ Development-only authorization: `X-Development-Subject: dev:<subject>`.
 Request body:
 
 ```json
-{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"pebble","home_course_search":"Pebble Beach Golf Links","played_course_ids":["pebble"],"favorite_wins":["pebble"],"dream_course_ids":["bandon"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true,"profile_visibility":"public","default_round_visibility":"friends"}}
+{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"pebble","home_course_search":"Pebble Beach Golf Links","played_course_ids":["pebble"],"favorite_wins":["pebble"],"dream_course_ids":["bandon"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true,"default_round_visibility":"friends"}}
 ```
 
 Returns the validated preference object. `onboarding_data` is optional for backward compatibility and stores the complete onboarding snapshot when supplied. Invalid fields return `422`; missing development identity returns `401`.
@@ -67,6 +67,8 @@ Creates an authenticated pending catalog-review candidate with `name`, optional 
 - `GET /api/v1/users?q=...` searches golfers without exposing provider identities and excludes blocks in either direction.
 - `PUT` and `DELETE /api/v1/me/follows/{user_id}` manage one-way follows. Mutual follows are presented as Friends.
 - `GET /api/v1/me/follows` returns followed-user envelopes with `is_mutual`.
+- `PUT /api/v1/me/contacts` replaces or appends bounded batches of contact identifiers, which are canonicalized and stored only as keyed hashes. `GET` returns the authenticated owner's persisted link status and count; `DELETE` removes all of that owner's stored contact hashes.
+- `GET /api/v1/me/notifications?limit=...&cursor=...` returns a cursor page of account notifications and current follow state.
 - `PUT` and `DELETE /api/v1/me/mutes/{user_id}` hide or restore a followed user's feed activity.
 - `PUT` and `DELETE /api/v1/me/blocks/{user_id}` hide both users from search/feed and remove follows in both directions.
 

@@ -1,4 +1,8 @@
 import base64
+import hashlib
+import hmac
+import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -6,7 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user
+from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
+from .core.config import Settings
 from .db import get_session
 from .domain import course_data, require_course, require_user, stored_user
 from .models import (
@@ -14,6 +19,8 @@ from .models import (
     ActivityReaction,
     Course,
     Follow,
+    AppNotification,
+    LinkedContact,
     OnboardingPreference,
     Profile,
     User,
@@ -28,11 +35,14 @@ from .schemas import (
     FriendCourseThoughtOut,
     FriendCourseThoughtUserOut,
     FriendsCourseThoughtsOut,
+    ContactLinkIn,
+    ContactLinkStatusOut,
 )
 from .domain import course_identity_ids
 
 
 router = APIRouter(tags=["social"])
+logger = logging.getLogger("golfrank.social")
 FRIEND_THOUGHTS_ENTRY_LIMIT = 10
 
 
@@ -70,6 +80,19 @@ class FeedPageOut(BaseModel):
     next_cursor: str | None
 
 
+class NotificationOut(BaseModel):
+    id: int
+    notification_type: str
+    actor: UserSummaryOut
+    created_at: datetime
+    is_following: bool = False
+
+
+class NotificationPageOut(BaseModel):
+    items: list[NotificationOut]
+    next_cursor: str | None
+
+
 class ReactionOut(BaseModel):
     event_id: int
     reaction: str
@@ -90,6 +113,22 @@ class MutedUserOut(BaseModel):
 def _summary(session: Session, user: User) -> UserSummaryOut:
     preferences = session.get(OnboardingPreference, user.id)
     profile = session.get(Profile, user.id)
+    follower_count = session.scalar(
+        select(func.count(Follow.id)).where(Follow.followed_id == user.id)
+    ) or 0
+    following_count = session.scalar(
+        select(func.count(Follow.id)).where(Follow.follower_id == user.id)
+    ) or 0
+    return _summary_out(user, preferences, profile, follower_count, following_count)
+
+
+def _summary_out(
+    user: User,
+    preferences: OnboardingPreference | None,
+    profile: Profile | None,
+    follower_count: int,
+    following_count: int,
+) -> UserSummaryOut:
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
@@ -99,9 +138,40 @@ def _summary(session: Session, user: User) -> UserSummaryOut:
         username=onboarding.get("username"),
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
-        follower_count=session.scalar(select(func.count(Follow.id)).where(Follow.followed_id == user.id)) or 0,
-        following_count=session.scalar(select(func.count(Follow.id)).where(Follow.follower_id == user.id)) or 0,
+        follower_count=follower_count,
+        following_count=following_count,
     )
+
+
+def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut]:
+    if not user_ids:
+        return {}
+    rows = session.execute(
+        select(User, OnboardingPreference, Profile)
+        .outerjoin(OnboardingPreference, OnboardingPreference.user_id == User.id)
+        .outerjoin(Profile, Profile.user_id == User.id)
+        .where(User.id.in_(user_ids))
+    ).all()
+    follower_counts = dict(session.execute(
+        select(Follow.followed_id, func.count(Follow.id))
+        .where(Follow.followed_id.in_(user_ids))
+        .group_by(Follow.followed_id)
+    ).all())
+    following_counts = dict(session.execute(
+        select(Follow.follower_id, func.count(Follow.id))
+        .where(Follow.follower_id.in_(user_ids))
+        .group_by(Follow.follower_id)
+    ).all())
+    return {
+        user.id: _summary_out(
+            user,
+            preferences,
+            profile,
+            follower_counts.get(user.id, 0),
+            following_counts.get(user.id, 0),
+        )
+        for user, preferences, profile in rows
+    }
 
 
 def _blocked_ids(session: Session, user_id: int) -> set[int]:
@@ -123,22 +193,6 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
     return followed_ids, followed_ids & reverse_ids
 
 
-def _profile_visibility(session: Session, user_id: int) -> str:
-    preferences = session.get(OnboardingPreference, user_id)
-    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
-    return onboarding.get("profile_visibility", "public")
-
-
-def _profile_is_visible_to(session: Session, viewer_id: int, target_user_id: int) -> bool:
-    visibility = _profile_visibility(session, target_user_id)
-    if visibility == "public":
-        return True
-    if visibility != "friends":
-        return False
-    _, mutual_ids = _relationship_sets(session, viewer_id)
-    return target_user_id in mutual_ids
-
-
 def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
     preferences = session.get(OnboardingPreference, user.id)
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
@@ -158,7 +212,7 @@ def course_friend_thoughts(
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> FriendsCourseThoughtsOut:
-    """Ratings from currently eligible friends, with memories only when shared to friends.
+    """Ratings from mutual friends, with memories only when shared to friends.
 
     This never serializes a round identifier or any private round field.  Ratings are
     projections rather than round visibility, while notes and favorite holes require
@@ -173,20 +227,6 @@ def course_friend_thoughts(
     if not eligible_ids:
         return FriendsCourseThoughtsOut()
 
-    preferences = {
-        user_id: data or {}
-        for user_id, data in session.execute(
-            select(OnboardingPreference.user_id, OnboardingPreference.onboarding_data)
-            .where(OnboardingPreference.user_id.in_(eligible_ids))
-        )
-    }
-    visible_friend_ids = {
-        user_id for user_id in eligible_ids
-        if preferences.get(user_id, {}).get("profile_visibility", "public") != "private"
-    }
-    if not visible_friend_ids:
-        return FriendsCourseThoughtsOut()
-
     # A reconciliation can leave historical alias projections. Use one current
     # projection per friend before calculating the aggregate or selecting recent
     # entries, so aliases cannot double count a friend.
@@ -197,7 +237,7 @@ def course_friend_thoughts(
             order_by=(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc()),
         ).label("position"),
     ).where(
-        UserCourseRating.user_id.in_(visible_friend_ids),
+        UserCourseRating.user_id.in_(eligible_ids),
         UserCourseRating.course_id.in_(course_identity_ids(session, course)),
     ).subquery()
     current_rating_ids = select(ranked_ratings.c.rating_id).where(ranked_ratings.c.position == 1)
@@ -271,13 +311,18 @@ def course_friend_thoughts(
     )
 
 def _muted_user_summary(session: Session, viewer_id: int, target: User) -> MutedUserOut:
-    if target.id not in _blocked_ids(session, viewer_id) and _profile_is_visible_to(session, viewer_id, target.id):
+    if target.id not in _blocked_ids(session, viewer_id):
         summary = _summary(session, target)
         return MutedUserOut(id=target.id, display_name=summary.display_name, username=summary.username)
     return MutedUserOut(id=target.id, display_name="Muted account", username=None)
 
 
-def _event_visible(event: ActivityEvent, viewer_id: int, followed_ids: set[int], mutual_ids: set[int]) -> bool:
+def _event_visible(
+    event: ActivityEvent,
+    viewer_id: int,
+    followed_ids: set[int],
+    mutual_ids: set[int],
+) -> bool:
     return (
         event.actor_user_id == viewer_id
         or (event.actor_user_id in followed_ids and event.visibility == "public")
@@ -295,6 +340,26 @@ def _event_matches_current_round_visibility(session: Session, event: ActivityEve
         and round_.user_id == event.actor_user_id
         and round_.visibility == event.visibility
     )
+
+
+def _activity_data(session: Session, event: ActivityEvent) -> dict:
+    """Return current, intentionally shared round details for an activity."""
+    data = dict(event.event_data)
+    if event.subject_type not in {"round", "rating_round"}:
+        return data
+    # Read these fields from the backing round so activity created before the
+    # feed detail fields existed also renders the details the golfer shares now.
+    data.pop("note", None)
+    data.pop("favorite_hole", None)
+    round_ = session.get(Round, event.subject_id)
+    if round_ is None:
+        return data
+    note = session.get(RoundNote, round_.id)
+    if note and note.body:
+        data["note"] = note.body
+    if round_.favorite_hole is not None:
+        data["favorite_hole"] = round_.favorite_hole
+    return data
 
 
 def _cursor(event: ActivityEvent) -> str:
@@ -331,14 +396,10 @@ def search_users(
 ) -> list[UserSummaryOut]:
     current_record = require_user(session, current)
     excluded = _blocked_ids(session, current_record.id) | {current_record.id}
-    _, mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
     results: list[UserSummaryOut] = []
     for user in users:
-        visibility = _profile_visibility(session, user.id)
-        if visibility == "private" or (visibility == "friends" and user.id not in mutual_ids):
-            continue
         summary = _summary(session, user)
         haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
         if needle in haystack:
@@ -366,9 +427,162 @@ def follow_user(
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
         session.add(follow)
+        existing = session.scalar(select(AppNotification.id).where(
+            AppNotification.recipient_user_id == target_user_id,
+            AppNotification.actor_user_id == user.id,
+            AppNotification.notification_type == "followed_you",
+        ))
+        if existing is None and _notifications_enabled(session, target_user_id):
+            session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
         session.commit()
     mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
+
+
+@router.get("/api/v1/me/notifications", response_model=NotificationPageOut)
+def list_notifications(
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = None,
+    current: CurrentUser = Depends(current_user), session: Session = Depends(get_session)
+) -> NotificationPageOut:
+    user = stored_user(session, current)
+    if user is None:
+        return NotificationPageOut(items=[], next_cursor=None)
+    if not _notifications_enabled(session, user.id):
+        return NotificationPageOut(items=[], next_cursor=None)
+    blocked = _blocked_ids(session, user.id) | _muted_ids(session, user.id)
+    query = select(AppNotification).where(
+            AppNotification.recipient_user_id == user.id,
+            AppNotification.actor_user_id.not_in(blocked),
+        )
+    if cursor:
+        _, notification_id = _decode_cursor(cursor)
+        # IDs are monotonic for notification creation. Using the boundary ID
+        # avoids SQLite's inconsistent fractional-second comparison semantics.
+        query = query.where(AppNotification.id < notification_id)
+    notifications = session.scalars(query.order_by(AppNotification.id.desc()).limit(limit + 1)).all()
+    page = notifications[:limit]
+    next_cursor = _cursor(page[-1]) if len(notifications) > limit else None
+    actor_ids = {item.actor_user_id for item in page}
+    summaries = _summaries(session, actor_ids)
+    following_ids = set(session.scalars(
+        select(Follow.followed_id).where(
+            Follow.follower_id == user.id,
+            Follow.followed_id.in_(actor_ids),
+        )
+    ).all()) if actor_ids else set()
+    return NotificationPageOut(
+        items=[
+            NotificationOut(
+                id=item.id,
+                notification_type=item.notification_type,
+                actor=summaries[item.actor_user_id],
+                created_at=item.created_at,
+                is_following=item.actor_user_id in following_ids,
+            )
+            for item in page
+        ],
+        next_cursor=next_cursor,
+    )
+
+
+@router.put("/api/v1/me/contacts", status_code=204)
+def link_contacts(
+    payload: ContactLinkIn,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    user = require_user(session, current)
+    try:
+        hashes = {_identifier_hash(settings, value) for value in payload.contact_identifiers}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    if payload.replace:
+        session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
+    existing_hashes = set(session.scalars(select(LinkedContact.identifier_hash).where(LinkedContact.user_id == user.id)).all())
+    session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes - existing_hashes)
+    try:
+        notify_linked_contacts(session, user, current, settings)
+    except HTTPException as error:
+        # Contact storage is useful independently of the optional join alert.
+        # A later preferences save or contact sync retries the idempotent match.
+        logger.warning(
+            "contact_join_matching_skipped user_id=%s status=%s",
+            user.id,
+            error.status_code,
+        )
+    session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/api/v1/me/contacts", response_model=ContactLinkStatusOut)
+def linked_contact_status(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> ContactLinkStatusOut:
+    user = stored_user(session, current)
+    if user is None:
+        return ContactLinkStatusOut(linked=False, contact_count=0)
+    contact_count = session.scalar(
+        select(func.count(LinkedContact.id)).where(LinkedContact.user_id == user.id)
+    ) or 0
+    return ContactLinkStatusOut(linked=contact_count > 0, contact_count=contact_count)
+
+
+@router.delete("/api/v1/me/contacts", status_code=204)
+def unlink_contacts(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    user = require_user(session, current)
+    session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
+    session.commit()
+    return Response(status_code=204)
+
+
+def notify_linked_contacts(session: Session, user: User, current: CurrentUser, settings: Settings) -> None:
+    """Notify contact owners when a verified account completes onboarding or syncs contacts."""
+    for identity in {_identifier_hash(settings, value) for value in verified_identifiers(current, settings)}:
+        recipients = session.scalars(select(LinkedContact.user_id).where(
+            LinkedContact.identifier_hash == identity,
+            LinkedContact.user_id != user.id,
+        )).all()
+        for recipient_id in set(recipients):
+            if user.id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
+                continue
+            existing = session.scalar(select(AppNotification.id).where(
+                AppNotification.recipient_user_id == recipient_id,
+                AppNotification.actor_user_id == user.id,
+                AppNotification.notification_type == "contact_joined",
+            ))
+            if existing is None:
+                session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
+
+
+def _notifications_enabled(session: Session, user_id: int) -> bool:
+    preferences = session.get(OnboardingPreference, user_id)
+    return not preferences or preferences.onboarding_data is None or preferences.onboarding_data.get("notifications") is not False
+
+
+def _identifier_hash(settings: Settings, value: str) -> str:
+    normalized = _canonical_identifier(value, settings.contact_phone_country_calling_code)
+    return hmac.new(settings.contact_identifier_hmac_key.encode(), normalized.encode(), hashlib.sha256).hexdigest()
+
+
+def _canonical_identifier(value: str, default_country_calling_code: str) -> str:
+    normalized = value.strip().lower()
+    if "@" in normalized:
+        return normalized
+    digits = re.sub(r"\D", "", normalized)
+    if normalized.startswith("00"):
+        digits = digits[2:]
+    elif not normalized.startswith("+"):
+        if len(digits) == 10:
+            digits = f"{default_country_calling_code}{digits}"
+    if not digits:
+        raise ValueError("contact identifier must be an email address or phone number")
+    return f"+{digits}"
 
 
 @router.delete("/api/v1/me/follows/{target_user_id}", status_code=204)
@@ -414,6 +628,7 @@ def activity_feed(
     visible_public_ids = followed_ids - excluded
     visible_friend_ids = mutual_ids - excluded
     statement = select(ActivityEvent).where(
+        ActivityEvent.event_type != "ranking_updated",
         or_(
             ActivityEvent.actor_user_id == user.id,
             and_(
@@ -462,7 +677,8 @@ def activity_feed(
             if actor is None:
                 continue
             course = None
-            course_id = event.event_data.get("course_id")
+            data = _activity_data(session, event)
+            course_id = data.get("course_id")
             if isinstance(course_id, int):
                 try:
                     stored_course = require_course(session, course_id)
@@ -474,7 +690,7 @@ def activity_feed(
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,
                 subject_id=event.subject_id, actor=_summary(session, actor), course=course,
-                data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+                data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
                 is_own_activity=event.actor_user_id == user.id,
                 created_at=event.created_at,
             ))
@@ -508,7 +724,8 @@ def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> Act
     if actor is None:
         raise HTTPException(404, "Activity not found")
     course = None
-    course_id = event.event_data.get("course_id")
+    data = _activity_data(session, event)
+    course_id = data.get("course_id")
     if isinstance(course_id, int):
         try:
             stored_course = require_course(session, course_id)
@@ -520,7 +737,7 @@ def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> Act
     return ActivityOut(
         id=event.id, event_type=event.event_type, subject_type=event.subject_type,
         subject_id=event.subject_id, actor=_summary(session, actor), course=course,
-        data=event.event_data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
+        data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
         is_own_activity=event.actor_user_id == viewer_id, created_at=event.created_at,
     )
 
@@ -575,15 +792,6 @@ def _relationship_target(session: Session, user_id: int, target_user_id: int) ->
     target = session.get(User, target_user_id)
     if target is None:
         raise HTTPException(404, "User not found")
-    followed_ids, _ = _relationship_sets(session, user_id)
-    follower_ids = set(session.scalars(
-        select(Follow.follower_id).where(Follow.followed_id == user_id)
-    ).all())
-    # A relationship may predate a target's switch to private visibility. Keep
-    # safety controls available for that known target, without making private
-    # profiles discoverable to strangers.
-    if target_user_id not in followed_ids | follower_ids and not _profile_is_visible_to(session, user_id, target_user_id):
-        raise HTTPException(404, "User not found")
     return target
 
 
@@ -621,17 +829,7 @@ def list_blocked_users(
         target = session.get(User, block.blocked_id)
         if target is None:
             continue
-        if _profile_is_visible_to(session, user.id, target.id):
-            summary = _summary(session, target)
-        else:
-            summary = UserSummaryOut(
-                id=target.id,
-                username=None,
-                display_name="Blocked account",
-                home_region=None,
-                follower_count=0,
-                following_count=0,
-            )
+        summary = _summary(session, target)
         output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
     return output
 

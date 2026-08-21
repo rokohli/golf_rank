@@ -2,6 +2,7 @@ import { ApiHeaders } from '../auth/useAuthToken'
 import {
   AIGolfPlan,
   Activity,
+  AppNotification,
   Course,
   CourseRegion,
   CourseSearchFilters,
@@ -313,6 +314,31 @@ export async function getFeed(headers: ApiHeaders, cursor?: string): Promise<Fee
   const response = await fetch(`${baseUrl}/api/v1/feed?${params}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load friends activity. Please try again.')
   return response.json()
+}
+
+export async function getNotifications(headers: ApiHeaders, cursor?: string): Promise<{ items: AppNotification[]; next_cursor: string | null }> {
+  const response = await fetch(`${baseUrl}/api/v1/me/notifications${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load notifications. Please try again.')
+  return response.json()
+}
+
+export async function syncLinkedContacts(input: { contact_identifiers: string[] }, headers: ApiHeaders): Promise<void> {
+  const unique = [...new Set(input.contact_identifiers.map((value) => value.trim()).filter(Boolean))]
+  for (let index = 0; index < Math.max(unique.length, 1); index += 2000) {
+    const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { method: 'PUT', headers, body: JSON.stringify({ contact_identifiers: unique.slice(index, index + 2000), replace: index === 0 }) })
+    if (!response.ok) throw await responseError(response, 'Unable to link contacts. Please try again.')
+  }
+}
+
+export async function getLinkedContactStatus(headers: ApiHeaders): Promise<{ linked: boolean; contact_count: number }> {
+  const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load linked-contact status. Please try again.')
+  return response.json()
+}
+
+export async function deleteLinkedContacts(headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/contacts`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to remove linked contacts. Please try again.')
 }
 
 export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSummary[]> {

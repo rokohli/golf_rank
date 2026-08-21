@@ -30,6 +30,7 @@ jest.mock('../../src/api/client', () => ({
 }))
 
 jest.mock('../../src/auth/useAuthToken', () => ({ useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }) }))
+jest.mock('../../src/auth/AuthProvider', () => ({ useAuthGate: () => ({ profileImageUrl: null, profileInitials: 'RK' }) }))
 
 const activity = {
   id: 8,
@@ -38,8 +39,8 @@ const activity = {
   subject_id: 3,
   actor: { id: 2, display_name: 'Maya Golfer', username: 'maya', home_region: 'San Diego, CA', follower_count: 2, following_count: 3 },
   course: { id: 1, name: 'Pebble Beach Golf Links', region: 'Monterey, CA', green_fee: null, difficulty: null, is_public: true },
-  data: { rating: 9.4 },
-  reaction_count: 0,
+  data: { rating: 9.4, note: 'Windy but fun.', favorite_hole: 7 },
+  reaction_count: 1,
   viewer_reacted: false,
   is_own_activity: false,
   created_at: new Date().toISOString(),
@@ -54,9 +55,13 @@ describe('Home social feed', () => {
 
   it('renders real activity and activates the reaction control', async () => {
     render(<Home />)
+    expect(screen.getByText('RK')).toBeOnTheScreen()
     expect(await screen.findByText('Maya Golfer rated')).toBeOnTheScreen()
     expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
     expect(screen.getByText('9.4/10')).toBeOnTheScreen()
+    expect(screen.getByText('Windy but fun.')).toBeOnTheScreen()
+    expect(screen.getByText('Favorite hole 7')).toBeOnTheScreen()
+    expect(screen.getByText('1 like')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: 'Like activity' }))
     await waitFor(() => expect(mockSetReaction).toHaveBeenCalledWith(8, true, expect.objectContaining({ Authorization: 'Bearer test-token' })))
@@ -81,6 +86,33 @@ describe('Home social feed', () => {
     render(<Home />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Feed unavailable')
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen()
+  })
+
+  it('shows a shared round score relative to the course par', async () => {
+    mockGetFeed.mockResolvedValue({ items: [{ ...activity, event_type: 'round_logged', course: { ...activity.course, par: 72 }, data: { score: 70 } }], next_cursor: null })
+    render(<Home />)
+    expect(await screen.findByText('70')).toBeOnTheScreen()
+    expect(screen.getByText('-2')).toBeOnTheScreen()
+  })
+
+  it('hides the like count when an activity has no likes', async () => {
+    mockGetFeed.mockResolvedValue({ items: [{ ...activity, reaction_count: 0 }], next_cursor: null })
+    render(<Home />)
+    await screen.findByText('Maya Golfer rated')
+    expect(screen.queryByText('0 likes')).toBeNull()
+  })
+
+  it('bounds long round notes in feed cards', async () => {
+    const longNote = 'A'.repeat(5_000)
+    mockGetFeed.mockResolvedValue({
+      items: [{ ...activity, data: { ...activity.data, note: longNote } }],
+      next_cursor: null,
+    })
+    render(<Home />)
+
+    const note = await screen.findByText(longNote)
+    expect(note).toHaveProp('numberOfLines', 3)
+    expect(note).toHaveProp('ellipsizeMode', 'tail')
   })
 })
 

@@ -43,6 +43,41 @@ def verify_clerk_token(token: str, settings: Settings) -> str:
     return subject
 
 
+def verified_identifiers(current: CurrentUser, settings: Settings) -> tuple[str, ...]:
+    """Load verified emails and phones from Clerk's server-side User record."""
+    if current.provider_subject.startswith("dev:"):
+        return ()
+    if not settings.clerk_secret_key:
+        raise HTTPException(status_code=503, detail="Identity provider is unavailable")
+    subject = current.provider_subject.removeprefix("clerk:")
+    try:
+        response = httpx.get(
+            f"https://api.clerk.com/v1/users/{subject}",
+            headers={"Authorization": f"Bearer {settings.clerk_secret_key}"},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Identity provider is unavailable") from exc
+    return _verified_identifiers(response.json())
+
+
+def _verified_identifiers(user: dict) -> tuple[str, ...]:
+    """Extract only verified identifiers returned by Clerk's Backend API."""
+    identifiers: list[str] = []
+    for email in user.get("email_addresses", []):
+        if isinstance(email, dict) and email.get("verification", {}).get("status") == "verified":
+            value = email.get("email_address")
+            if isinstance(value, str):
+                identifiers.append(value)
+    for phone in user.get("phone_numbers", []):
+        if isinstance(phone, dict) and phone.get("verification", {}).get("status") == "verified":
+            value = phone.get("phone_number")
+            if isinstance(value, str):
+                identifiers.append(value)
+    return tuple(dict.fromkeys(identifiers))
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 

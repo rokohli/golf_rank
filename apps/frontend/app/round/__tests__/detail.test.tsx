@@ -33,7 +33,7 @@ jest.mock('../../../src/auth/useAuthToken', () => ({
 
 const round = {
   id: 42,
-  course: { id: 7, name: 'Pasatiempo Golf Club', region: 'Santa Cruz, California', green_fee: 325, difficulty: 'challenging', is_public: true },
+  course: { id: 7, name: 'Pasatiempo Golf Club', region: 'Santa Cruz, California', green_fee: 325, difficulty: 'challenging', is_public: true, par: 70 },
   played_on: '2026-07-18',
   score: 79,
   note: 'Fast greens and a great finish on the back nine.',
@@ -59,7 +59,8 @@ describe('round summary', () => {
     render(<RoundDetail />)
 
     expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
-    expect(screen.getByLabelText('Round score 79')).toBeOnTheScreen()
+    expect(screen.getByText('+9')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Round score 79, 9 over par')).toBeOnTheScreen()
     expect(screen.getByText('Alex Morgan + 1')).toBeOnTheScreen()
     expect(screen.getByText(round.note)).toBeOnTheScreen()
 

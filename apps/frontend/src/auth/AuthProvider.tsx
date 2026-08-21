@@ -17,6 +17,7 @@ const ssoRedirectPath = 'sso-callback'
 WebBrowser.maybeCompleteAuthSession()
 
 type AuthGateActions = {
+  profileInitials: string
   profileImageUrl: string | null
   returnToGetStarted: () => boolean
   signOut: () => Promise<void>
@@ -25,6 +26,7 @@ type AuthGateActions = {
 }
 
 const AuthGateContext = createContext<AuthGateActions>({
+  profileInitials: 'GR',
   profileImageUrl: null,
   returnToGetStarted: () => false,
   signOut: async () => undefined,
@@ -34,6 +36,11 @@ const AuthGateContext = createContext<AuthGateActions>({
 
 export function useAuthGate() {
   return useContext(AuthGateContext)
+}
+
+function userInitials(user: { firstName?: string | null; lastName?: string | null; username?: string | null } | null | undefined) {
+  const name = [user?.firstName, user?.lastName].filter((part): part is string => Boolean(part?.trim())).join(' ').trim() || user?.username?.trim() || ''
+  return name.split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR'
 }
 
 function DevelopmentAuthGate({ children }: { children: ReactNode }) {
@@ -1114,6 +1121,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   return (
     <AuthGateContext.Provider
       value={{
+        profileInitials: userInitials(user),
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
         signOut,

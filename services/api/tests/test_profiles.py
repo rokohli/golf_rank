@@ -38,7 +38,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     assert response.status_code == 200
     assert response.json()["home_region"] == "Monterey, CA"
     assert response.json()["onboarding_data"]["played_course_ids"] == ["pebble"]
-    assert response.json()["onboarding_data"]["profile_visibility"] == "friends"
+    assert "profile_visibility" not in response.json()["onboarding_data"]
     assert response.json()["onboarding_data"]["default_round_visibility"] == "private"
 
     profile = client.get(
@@ -46,6 +46,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     )
     assert profile.status_code == 200
     assert profile.json()["onboarding_data"]["dream_course_ids"] == ["bandon"]
+    assert "profile_visibility" not in profile.json()["onboarding_data"]
 
     legacy_update = client.put(
         "/api/v1/me/onboarding-preferences",
@@ -100,6 +101,20 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
         "/api/v1/me/rounds", headers=bob,
         json={"course_id": 2, "played_on": "2026-07-02", "score": 90, "visibility": "private"},
     ).status_code == 201
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=alice,
+        json={"contact_identifiers": ["bob@example.com"]},
+    ).status_code == 204
+    assert client.put(
+        "/api/v1/me/contacts",
+        headers=bob,
+        json={"contact_identifiers": ["alice@example.com", "alice-mobile@example.com"]},
+    ).status_code == 204
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "exportalice"}).json()[0]["id"]
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "exportbob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
 
     response = client.get("/api/v1/me/data-export", headers=alice)
 
@@ -109,4 +124,8 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert exported["export_version"] == 1
     assert exported["profile"]["onboarding_data"]["username"] == "exportalice"
     assert [round_["score"] for round_ in exported["rounds"]] == [80]
+    assert len(exported["linked_contacts"]) == 1
+    assert len(exported["notifications"]) == 1
+    assert exported["notifications"][0]["recipient_user_id"] == alice_id
+    assert exported["notifications"][0]["actor_user_id"] == bob_id
     assert "provider_subject" not in str(exported)

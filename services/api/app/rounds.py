@@ -223,12 +223,19 @@ def _refresh_course_state(session: Session, user_id: int, course_id: int) -> Non
     session.add(state)
 
 
-def _event_data(round_: Round) -> dict:
-    return {
+def _event_data(session: Session, round_: Round) -> dict:
+    """Build the deliberately shared details for a round activity event."""
+    note = session.get(RoundNote, round_.id)
+    data = {
         "course_id": round_.course_id,
         "played_on": round_.played_on.isoformat(),
         "score": round_.score,
     }
+    if note and note.body:
+        data["note"] = note.body
+    if round_.favorite_hole is not None:
+        data["favorite_hole"] = round_.favorite_hole
+    return data
 
 
 def _delete_rating_ranking_evidence(
@@ -298,7 +305,7 @@ def create_round(
             subject_type="round",
             subject_id=round_.id,
             visibility=round_.visibility,
-            event_data=_event_data(round_),
+            event_data=_event_data(session, round_),
         )
     )
     session.commit()
@@ -438,7 +445,7 @@ def update_round(
     )
     if event is not None:
         event.visibility = round_.visibility
-        event_data = _event_data(round_)
+        event_data = _event_data(session, round_)
         if event.subject_type == "rating_round":
             event_data.update({
                 "rating": event.event_data.get("rating"),

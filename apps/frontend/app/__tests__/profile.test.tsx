@@ -4,13 +4,16 @@ import { Alert } from 'react-native'
 import EditProfile from '../profile/edit'
 import GolfPreferences from '../profile/preferences'
 import Profile from '../profile'
-import Notifications from '../notifications'
+import NotificationSettings from '../notification-settings'
 import Privacy from '../privacy'
 import Settings from '../settings'
 
 const mockGetProfile = jest.fn()
 const mockGetRoundSummary = jest.fn()
 const mockSavePreferences = jest.fn()
+const mockSyncLinkedContacts = jest.fn()
+const mockGetLinkedContactStatus = jest.fn()
+const mockDeleteLinkedContacts = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -27,6 +30,11 @@ jest.mock('expo-image-picker', () => ({
   launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
 }))
 
+jest.mock('@clerk/expo', () => ({ useUser: () => ({ user: { emailAddresses: [], phoneNumbers: [] } }) }))
+const mockRequestContactsPermission = jest.fn()
+const mockGetContacts = jest.fn()
+jest.mock('expo-contacts', () => ({ Fields: { Emails: 'emails', PhoneNumbers: 'phoneNumbers' }, requestPermissionsAsync: (...args: unknown[]) => mockRequestContactsPermission(...args), getContactsAsync: (...args: unknown[]) => mockGetContacts(...args) }))
+
 jest.mock('expo-router', () => {
   const React = require('react')
   return {
@@ -41,6 +49,9 @@ jest.mock('../../src/api/client', () => ({
   getProfile: (...args: unknown[]) => mockGetProfile(...args),
   getRoundSummary: (...args: unknown[]) => mockGetRoundSummary(...args),
   savePreferences: (...args: unknown[]) => mockSavePreferences(...args),
+  syncLinkedContacts: (...args: unknown[]) => mockSyncLinkedContacts(...args),
+  getLinkedContactStatus: (...args: unknown[]) => mockGetLinkedContactStatus(...args),
+  deleteLinkedContacts: (...args: unknown[]) => mockDeleteLinkedContacts(...args),
 }))
 
 jest.mock('../../src/auth/AuthProvider', () => ({
@@ -73,7 +84,7 @@ const profile = {
 
 const latestRound = {
   id: 42,
-  course: { id: 7, name: 'Pebble Beach Golf Links', region: 'Monterey, CA' },
+  course: { id: 7, name: 'Pebble Beach Golf Links', region: 'Monterey, CA', par: 72 },
   played_on: '2026-07-17', score: 84, note: null, favorite_hole: 7, companions: [], visibility: 'friends', is_favorite: true, is_rating_round: false, created_at: '', updated_at: '',
 }
 
@@ -83,6 +94,11 @@ describe('profile experience', () => {
     mockGetProfile.mockResolvedValue(profile)
     mockGetRoundSummary.mockResolvedValue({ total_rounds: 24, distinct_courses: 18, average_score: 84.1, best_score: 78, latest_round: latestRound })
     mockSavePreferences.mockResolvedValue(undefined)
+    mockSyncLinkedContacts.mockResolvedValue(undefined)
+    mockGetLinkedContactStatus.mockResolvedValue({ linked: false, contact_count: 0 })
+    mockDeleteLinkedContacts.mockResolvedValue(undefined)
+    mockRequestContactsPermission.mockResolvedValue({ status: 'granted' })
+    mockGetContacts.mockResolvedValue({ data: [] })
     mockUpdateUserProfile.mockResolvedValue(undefined)
     mockUpdateProfileImage.mockResolvedValue(undefined)
     mockSignOut.mockResolvedValue(undefined)
@@ -96,6 +112,7 @@ describe('profile experience', () => {
     expect(screen.getByText('@rohank')).toBeOnTheScreen()
     expect(screen.getByText('84.1')).toBeOnTheScreen()
     expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.getByText('+12')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: 'Profile settings' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/settings')
@@ -134,9 +151,9 @@ describe('profile experience', () => {
     await screen.findByText('Golf preferences')
     fireEvent.press(screen.getByText('Golf preferences'))
     expect(mockRouter.push).toHaveBeenCalledWith('/profile/preferences')
-    fireEvent.press(screen.getByText('Notifications'))
-    expect(mockRouter.push).toHaveBeenCalledWith('/notifications')
-    fireEvent.press(screen.getByText('Privacy & visibility'))
+    fireEvent.press(screen.getByText('Notification settings'))
+    expect(mockRouter.push).toHaveBeenCalledWith('/notification-settings')
+    fireEvent.press(screen.getByText('Round visibility'))
     expect(mockRouter.push).toHaveBeenCalledWith('/privacy')
     fireEvent.press(screen.getByText('Muted accounts'))
     expect(mockRouter.push).toHaveBeenCalledWith('/muted')
@@ -172,7 +189,7 @@ describe('profile experience', () => {
   })
 
   it('persists the master notification preference', async () => {
-    render(<Notifications />)
+    render(<NotificationSettings />)
 
     await screen.findByText('Stay in the loop')
     fireEvent(screen.getByLabelText('Allow notifications'), 'valueChange', false)
@@ -187,11 +204,39 @@ describe('profile experience', () => {
     })
   })
 
-  it('persists profile and default round visibility', async () => {
+  it('discloses and uploads normalized contact identifiers after permission', async () => {
+    mockGetContacts.mockResolvedValue({
+      data: [{
+        emails: [{ email: ' Golfer@Example.com ', label: 'home' }],
+        phoneNumbers: [{ countryCode: 'AU', label: 'mobile', number: '0412 345 678' }],
+      }],
+    })
+    render(<NotificationSettings />)
+
+    expect(await screen.findByText(/uploads your contacts’ email addresses and phone numbers/i)).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Link contacts' }))
+
+    await waitFor(() => expect(mockSyncLinkedContacts).toHaveBeenCalledWith({
+      contact_identifiers: ['golfer@example.com', '+61412345678'],
+    }, expect.anything()))
+  })
+
+  it('loads persisted contact-link status and removes stored contact hashes', async () => {
+    mockGetLinkedContactStatus.mockResolvedValue({ linked: true, contact_count: 2 })
+    render(<NotificationSettings />)
+
+    expect(await screen.findByText('Update linked contacts')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Remove linked contacts' }))
+
+    await waitFor(() => expect(mockDeleteLinkedContacts).toHaveBeenCalledWith(expect.anything()))
+    expect(screen.getByText('Link contacts')).toBeOnTheScreen()
+  })
+
+  it('persists default round visibility without a private-account setting', async () => {
     render(<Privacy />)
 
-    await screen.findByText('PROFILE VISIBILITY')
-    fireEvent.press(screen.getByRole('radio', { name: 'Private: Your profile is hidden from golfer search.' }))
+    await screen.findByText('DEFAULT ROUND VISIBILITY')
+    expect(screen.queryByText('PROFILE VISIBILITY')).not.toBeOnTheScreen()
     fireEvent.press(screen.getByRole('radio', { name: 'Public: Followers can see new rounds.' }))
     fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
 
@@ -199,9 +244,9 @@ describe('profile experience', () => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         onboarding_data: expect.objectContaining({
           default_round_visibility: 'public',
-          profile_visibility: 'private',
         }),
       }), expect.anything())
+      expect(mockSavePreferences.mock.calls[0][0].onboarding_data).not.toHaveProperty('profile_visibility')
       expect(mockRouter.back).toHaveBeenCalled()
     })
   })

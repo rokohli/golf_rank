@@ -14,7 +14,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "Allow GolfRank to let you choose a guest from your contacts."
+          "contactsPermission": "Allow GolfRank to upload your contacts' email addresses and phone numbers to securely match people who join."
         }
       ],
       [

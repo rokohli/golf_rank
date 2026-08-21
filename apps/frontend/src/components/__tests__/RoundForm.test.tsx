@@ -20,6 +20,8 @@ describe('RoundForm', () => {
 
   it('submits a distinct visit with optional round details', async () => {
     const onSubmit = jest.fn().mockResolvedValue(undefined)
+    const today = new Date()
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
     render(<RoundForm
       friends={[
         { id: 1, display_name: 'Alex Rivera', username: 'alex' },
@@ -34,7 +36,9 @@ describe('RoundForm', () => {
       submitLabel="Log round"
     />)
 
-    fireEvent.changeText(screen.getByLabelText('Played date'), '07/17/2026')
+    fireEvent.press(screen.getByLabelText('Played date'))
+    expect(screen.getByLabelText('Choose round date')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Select today' }))
     fireEvent.changeText(screen.getByLabelText('Score'), '84')
     fireEvent.press(screen.getByRole('button', { name: 'Favorite hole & notes' }))
     fireEvent.changeText(screen.getByLabelText('Favorite hole'), '7')
@@ -47,7 +51,7 @@ describe('RoundForm', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       course_id: 7,
-      played_on: '2026-07-17',
+      played_on: todayKey,
       score: 84,
       favorite_hole: 7,
       note: 'Fast greens',
@@ -92,5 +96,20 @@ describe('RoundForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Visibility' }))
     const selectedPrivate = screen.getAllByRole('button', { name: 'Private' }).find((button) => button.props.accessibilityState?.selected)
     expect(selectedPrivate?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }))
+  })
+
+  it('debounces course search after the third typed character', async () => {
+    const searchCourses = jest.fn().mockResolvedValue([course])
+    render(<RoundForm friends={[]} onSubmit={jest.fn()} searchCourses={searchCourses} submitLabel="Log round" />)
+
+    fireEvent.changeText(screen.getByLabelText('Course'), 'Te')
+    expect(searchCourses).not.toHaveBeenCalled()
+
+    fireEvent.changeText(screen.getByLabelText('Course'), 'Tes')
+    fireEvent.changeText(screen.getByLabelText('Course'), 'Test')
+    expect(searchCourses).not.toHaveBeenCalled()
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Test'))
+    expect(searchCourses).not.toHaveBeenCalledWith('Tes')
+    expect(await screen.findByRole('button', { name: 'Select Test Links' })).toBeOnTheScreen()
   })
 })

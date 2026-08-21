@@ -31,10 +31,12 @@ from .models import (
     CourseReconciliation,
     ActivityEvent,
     ActivityReaction,
+    AppNotification,
     Comparison,
     CourseCandidate,
     Follow,
     ItineraryItem,
+    LinkedContact,
     OnboardingPreference,
     Plan,
     PlanCandidate,
@@ -62,7 +64,7 @@ from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
 from .seed import seed_test_courses
-from .social import router as social_router
+from .social import notify_linked_contacts, router as social_router
 
 
 logger = logging.getLogger("golfrank.catalog")
@@ -175,7 +177,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stored_user = User(provider_subject=user.provider_subject)
             session.add(stored_user)
             session.flush()
-        profile = session.get(Profile, stored_user.id) or Profile(user_id=stored_user.id, home_region=payload.home_region)
+        profile = session.get(Profile, stored_user.id)
+        if profile is None:
+            profile = Profile(user_id=stored_user.id, home_region=payload.home_region)
         preferences = session.get(OnboardingPreference, stored_user.id) or OnboardingPreference(
             user_id=stored_user.id,
             max_green_fee=payload.max_green_fee,
@@ -191,6 +195,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.onboarding_data.model_dump() if payload.onboarding_data else None
             )
         session.add_all([profile, preferences])
+        try:
+            # Re-attempt on every authenticated preferences save so a transient
+            # Clerk outage during first onboarding cannot suppress this optional
+            # notification forever. Matching is idempotent.
+            notify_linked_contacts(session, stored_user, user, settings)
+        except HTTPException as error:
+            logger.warning("contact_join_matching_skipped user_id=%s status=%s", stored_user.id, error.status_code)
         session.commit()
         return ProfileOut(
             home_region=profile.home_region,
@@ -270,6 +281,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "muted_accounts": rows(UserMute, UserMute.muter_id == stored_user.id),
             "activity": rows(ActivityEvent, ActivityEvent.actor_user_id == stored_user.id),
             "activity_reactions": rows(ActivityReaction, ActivityReaction.user_id == stored_user.id),
+            "linked_contacts": rows(LinkedContact, LinkedContact.user_id == stored_user.id),
+            "notifications": rows(
+                AppNotification,
+                AppNotification.recipient_user_id == stored_user.id,
+            ),
             "course_candidates": rows(CourseCandidate, CourseCandidate.submitted_by_user_id == stored_user.id),
             "saved_lists": [_row_data(saved_list) for saved_list in saved_lists],
             "saved_courses": rows(SavedCourse, SavedCourse.list_id.in_(saved_list_ids)) if saved_list_ids else [],

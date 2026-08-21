@@ -9,6 +9,7 @@ import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, ProductScreen } from '../src/components/ProductUI'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
+import { scoreAccessibilityLabel, scoreToPar } from '../src/scorePresentation'
 import { Course, OnboardingPreferences, RoundSummary } from '../src/types'
 import { colors } from '../src/ui/theme'
 
@@ -47,6 +48,7 @@ export default function Profile() {
   const name = `${first} ${last}`.trim() || 'Golfer'
   const username = profile?.onboarding_data?.username?.trim() ?? ''
   const latestRound = summary?.latest_round
+  const latestRoundToPar = scoreToPar(latestRound?.score, latestRound?.course.par)
 
   return <>
     <Stack.Screen options={{ headerShown: false }} />
@@ -91,7 +93,7 @@ export default function Profile() {
             <Text numberOfLines={1} style={styles.recentTitle}>{latestRound.course.name}</Text>
             <Text numberOfLines={1} style={styles.recentMeta}>{formatDate(latestRound.played_on)} · {latestRound.course.region}</Text>
           </View>
-          <Text accessibilityLabel={latestRound.score == null ? 'No score recorded' : `Score ${latestRound.score}`} style={styles.recentScore}>{latestRound.score ?? '—'}</Text>
+          <View style={styles.recentScoreBlock}><Text accessibilityLabel={scoreAccessibilityLabel(latestRound.score, latestRound.course.par)} style={styles.recentScore}>{latestRound.score ?? '—'}</Text>{latestRoundToPar ? <View style={styles.recentToParBadge}><Text style={styles.recentToPar}>{latestRoundToPar}</Text></View> : null}</View>
           {latestRound.is_favorite ? <Feather accessibilityLabel="Favorite round" name="star" size={18} color={colors.gold} /> : null}
         </Pressable>
         <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/rounds')}><Text style={styles.viewAll}>View all rounds</Text></Pressable>
@@ -141,7 +143,10 @@ const styles = StyleSheet.create({
   recentCopy: { flex: 1, gap: 4 },
   recentTitle: { color: colors.ink, fontSize: 12, fontWeight: '800' },
   recentMeta: { color: colors.muted, fontSize: 9 },
+  recentScoreBlock: { alignItems: 'center', flexDirection: 'row', gap: 5, minWidth: 28 },
   recentScore: { color: colors.ink, fontFamily: 'Georgia', fontSize: 19, minWidth: 24, textAlign: 'right' },
+  recentToParBadge: { alignItems: 'center', borderColor: colors.muted, borderRadius: 11, borderWidth: 1, height: 22, justifyContent: 'center', minWidth: 22, paddingHorizontal: 3 },
+  recentToPar: { color: colors.muted, fontSize: 8, fontWeight: '700' },
   viewAll: { color: colors.pine, fontSize: 11, fontWeight: '800', textAlign: 'center' },
   state: { alignItems: 'center', gap: 12, paddingVertical: 20 },
   error: { color: colors.error, fontSize: 11, textAlign: 'center' },

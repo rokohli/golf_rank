@@ -29,7 +29,6 @@ class OnboardingData(BaseModel):
     preferred_tee_time: str = Field(max_length=120)
     transportation: Literal["Walking", "Cart", "Either"] | None = None
     notifications: bool | None = None
-    profile_visibility: Literal["public", "friends", "private"] = "public"
     default_round_visibility: Literal["private", "friends", "public"] = "friends"
 
 
@@ -43,6 +42,26 @@ class OnboardingPreferencesIn(BaseModel):
 
 class ProfileOut(OnboardingPreferencesIn):
     pass
+
+
+class ContactLinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contact_identifiers: list[str] = Field(default_factory=list, max_length=2000)
+    replace: bool = True
+
+    @field_validator("contact_identifiers")
+    @classmethod
+    def normalize_identifiers(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip().lower() for value in values if value.strip()))
+        if any(len(value) > 255 for value in normalized):
+            raise ValueError("contact identifiers must be at most 255 characters")
+        return normalized
+
+
+class ContactLinkStatusOut(BaseModel):
+    linked: bool
+    contact_count: int
 
 
 class CourseImageOut(BaseModel):

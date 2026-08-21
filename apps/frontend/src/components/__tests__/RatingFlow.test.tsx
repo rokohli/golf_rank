@@ -91,6 +91,14 @@ describe('RatingFlow', () => {
     expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
   })
 
+  it('keeps a new rating private by default', async () => {
+    render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
+    await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
+    expect(screen.getByLabelText('Share with friends').props.value).toBe(false)
+  })
+
   it.each([
     ['Pebble Beach Golf Links', 'course_a'],
     ['Spyglass Hill', 'course_b'],
