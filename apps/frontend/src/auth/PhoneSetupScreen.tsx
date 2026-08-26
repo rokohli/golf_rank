@@ -40,7 +40,7 @@ export function PhoneSetupScreen() {
 
   async function sendCode() {
     if (!user || !normalizedPhone) {
-      setErrorMessage('Enter a valid phone number including area code.')
+      setErrorMessage('Enter a valid phone number. Outside the US, start with your country code, e.g. +44.')
       return
     }
 
@@ -121,6 +121,7 @@ export function PhoneSetupScreen() {
                 placeholder="(415) 555-0100"
                 value={phoneNumber}
               />
+              <Text style={styles.fieldHint}>Outside the US? Start with your country code, e.g. +44 7911 123456.</Text>
               <PrimaryButton
                 disabled={loading || !normalizedPhone}
                 label={loading ? 'Sending Code...' : 'Send SMS Code'}
@@ -284,6 +285,12 @@ const styles = StyleSheet.create({
     color: '#1C2420',
     fontSize: 14,
     fontWeight: '800',
+  },
+  fieldHint: {
+    color: '#6C746F',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: -4,
   },
   inputShell: {
     alignItems: 'center',

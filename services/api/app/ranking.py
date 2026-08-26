@@ -391,15 +391,23 @@ def _stage_snapshot(
         for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()
     } if course_ids else {}
     counts = _comparison_counts(session, user_id)
+    # Incomplete (onboarding-placeholder) assignments occupy a tier slot but must not
+    # shift the personal_rating of the user's actual, finished courses in that tier —
+    # so they're counted and indexed separately from complete assignments.
     tier_counts = defaultdict(int)
+    incomplete_tier_counts = defaultdict(int)
     for assignment in assignments:
         if assignment.tier == "not_sure":
             continue
-        tier_counts[assignment.tier] += 1
+        if assignment.is_incomplete:
+            incomplete_tier_counts[assignment.tier] += 1
+        else:
+            tier_counts[assignment.tier] += 1
 
     entries: list[dict] = []
     confidence_scores: list[float] = []
     tier_indexes = defaultdict(int)
+    incomplete_tier_indexes = defaultdict(int)
     ranked_assignments = [item for item in assignments if item.tier != "not_sure"]
     unranked_assignments = [item for item in assignments if item.tier == "not_sure"]
     for rank, assignment in enumerate(ranked_assignments, start=1):
@@ -420,8 +428,14 @@ def _stage_snapshot(
         session.add(existing)
 
         course = courses[assignment.course_id]
-        tier_index = tier_indexes[assignment.tier]
-        tier_indexes[assignment.tier] += 1
+        if assignment.is_incomplete:
+            tier_index = incomplete_tier_indexes[assignment.tier]
+            incomplete_tier_indexes[assignment.tier] += 1
+            tier_count = incomplete_tier_counts[assignment.tier]
+        else:
+            tier_index = tier_indexes[assignment.tier]
+            tier_indexes[assignment.tier] += 1
+            tier_count = tier_counts[assignment.tier]
         entries.append(
             {
                 "rank": rank,
@@ -429,7 +443,7 @@ def _stage_snapshot(
                 "tier": assignment.tier,
                 "tier_position": assignment.ordinal_position,
                 "personal_rating": _rating(
-                    assignment.tier, tier_index, tier_counts[assignment.tier]
+                    assignment.tier, tier_index, tier_count
                 ),
                 "confidence": confidence,
                 "confidence_label": _confidence_label(confidence),
