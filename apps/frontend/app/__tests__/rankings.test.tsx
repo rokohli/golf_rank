@@ -273,6 +273,20 @@ describe('rankings refresh', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Find friends' }))
     expect(mockPush).toHaveBeenCalledWith('/friends')
   })
+
+  it('opens the full rate flow for incomplete onboarding courses', async () => {
+    const incomplete = rankingSnapshot('Onboarding Links', 7.7)
+    incomplete.entries[0].incomplete = true
+    mockGetRanking.mockResolvedValue(incomplete)
+
+    render(<Rankings />)
+
+    expect(await screen.findByText('Onboarding Links')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Needs finishing')).toBeOnTheScreen()
+    expect(screen.queryByText(/7\.7/)).toBeNull()
+    fireEvent.press(screen.getByText('Onboarding Links'))
+    expect(mockPush).toHaveBeenCalledWith('/rate/42')
+  })
 })
 
 async function refocus() {

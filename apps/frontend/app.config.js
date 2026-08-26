@@ -11,6 +11,15 @@ module.exports = ({ config }) => {
     ios: {
       ...config.ios,
       bundleIdentifier: 'com.rokohli.golfrank.dev',
+      // Dev Metro is served over HTTP. Tailscale (100.x) is not RFC1918, so
+      // NSAllowsLocalNetworking alone is not enough — allow cleartext in dev builds only.
+      infoPlist: {
+        ...config.ios?.infoPlist,
+        NSAppTransportSecurity: {
+          NSAllowsArbitraryLoads: true,
+          NSAllowsLocalNetworking: true,
+        },
+      },
     },
   }
 }

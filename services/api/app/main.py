@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -62,7 +62,7 @@ from .planner_narrative import build_planner_narrative_provider
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
-from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut
+from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut, normalize_username
 from .seed import seed_test_courses
 from .social import notify_linked_contacts, router as social_router
 
@@ -73,6 +73,13 @@ logger = logging.getLogger("golfrank.catalog")
 def _row_data(row: object) -> dict:
     table = row.__table__
     return {column.name: getattr(row, column.name) for column in table.columns}
+
+
+def _assign_unique_username(session: Session, profile: Profile, user_id: int, username: str) -> None:
+    owner_id = session.scalar(select(Profile.user_id).where(Profile.username == username))
+    if owner_id is not None and owner_id != user_id:
+        raise HTTPException(409, "That username is already taken.")
+    profile.username = username
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -191,10 +198,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preferences.difficulty = payload.difficulty
         preferences.access = payload.access
         if "onboarding_data" in payload.model_fields_set:
-            preferences.onboarding_data = (
-                payload.onboarding_data.model_dump() if payload.onboarding_data else None
-            )
+            onboarding_data = payload.onboarding_data.model_dump() if payload.onboarding_data else None
+            if onboarding_data is not None:
+                _assign_unique_username(session, profile, stored_user.id, onboarding_data["username"])
+            preferences.onboarding_data = onboarding_data
         session.add_all([profile, preferences])
+        try:
+            session.flush()
+        except IntegrityError as error:
+            session.rollback()
+            raise HTTPException(409, "That username is already taken.") from error
+        if preferences.onboarding_data:
+            from .ranking import seed_onboarding_rankings
+
+            seed_onboarding_rankings(session, stored_user.id, preferences.onboarding_data)
         try:
             # Re-attempt on every authenticated preferences save so a transient
             # Clerk outage during first onboarding cannot suppress this optional
@@ -210,6 +227,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             access=preferences.access,
             onboarding_data=preferences.onboarding_data,
         )
+
+    @app.get("/api/v1/usernames/available")
+    def username_available(
+        username: str,
+        _rate_limit: None = Depends(authenticated_rate_limit),
+        user: CurrentUser = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, bool | str]:
+        try:
+            normalized = normalize_username(username)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
+        owner_id = session.scalar(
+            select(Profile.user_id).where(Profile.username == normalized)
+        )
+        available = owner_id is None or (stored_user is not None and owner_id == stored_user.id)
+        return {"available": available, "username": normalized}
 
     @app.get("/api/v1/me/profile", response_model=ProfileOut)
     def profile(

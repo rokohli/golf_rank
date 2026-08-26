@@ -4,12 +4,14 @@ import { tokenCache } from '@clerk/expo/token-cache'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import * as AuthSession from 'expo-auth-session'
 import * as Linking from 'expo-linking'
+import { useRouter } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
-import { createContext, ReactNode, useContext, useState } from 'react'
+import { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
+import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
 
 const ssoRedirectScheme = 'golfrank'
 const ssoRedirectPath = 'sso-callback'
@@ -53,7 +55,14 @@ const compactAuth = screenHeight < 780
 function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [loadingAction, setLoadingAction] = useState<
-    'sign-in' | 'sign-up' | 'email-sign-in' | 'email-sign-up' | 'verify-email' | 'request-reset' | 'verify-reset' | 'update-password' | null
+    | 'sign-in'
+    | 'sign-up'
+    | 'email-sign-in'
+    | 'email-sign-up'
+    | 'request-reset'
+    | 'verify-reset'
+    | 'update-password'
+    | null
   >(null)
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>(initialMode)
   const [resetStep, setResetStep] = useState<'request' | 'verify' | 'new-password' | null>(null)
@@ -63,7 +72,6 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
   const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
-  const [verificationPending, setVerificationPending] = useState(false)
   const [emailFormVisible, setEmailFormVisible] = useState(false)
   const { startSSOFlow } = useSSO()
   const signInState = useSignIn()
@@ -170,30 +178,15 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
         return
       }
 
-      await signUpState.signUp.prepareEmailAddressVerification({ strategy: 'email_code' })
-      setVerificationPending(true)
+      console.info('Clerk email sign-up completed without a session', {
+        status: clerkResourceStatus(result),
+        missingFields: clerkStringArrayField(result, 'missingFields'),
+        unverifiedFields: clerkStringArrayField(result, 'unverifiedFields'),
+        requiredFields: clerkStringArrayField(result, 'requiredFields'),
+      })
+      setErrorMessage(signUpIncompleteMessage(result))
     } catch (reason) {
       setErrorMessage(authErrorMessage(reason, 'Unable to create an account with that email and password.'))
-    } finally {
-      setLoadingAction(null)
-    }
-  }
-
-  const verifyEmail = async () => {
-    if (!signUpState.isLoaded) return
-    setErrorMessage(null)
-    setLoadingAction('verify-email')
-
-    try {
-      const result = await signUpState.signUp.attemptEmailAddressVerification({ code: verificationCode.trim() })
-      if (result.createdSessionId) {
-        await signUpState.setActive({ session: result.createdSessionId })
-        return
-      }
-
-      setErrorMessage('Email verified, but Clerk did not return a session yet.')
-    } catch (reason) {
-      setErrorMessage(authErrorMessage(reason, 'Unable to verify that code. Please try again.'))
     } finally {
       setLoadingAction(null)
     }
@@ -288,7 +281,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     setMode(nextMode)
     setResetStep(null)
     setEmailFormVisible(false)
-    setVerificationPending(false)
+    setVerificationCode('')
     setErrorMessage(null)
   }
 
@@ -456,42 +449,19 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
             <PasswordChecklist password={password} />
           )}
 
-          {verificationPending ? (
-            <View style={authStyles.verifyStack}>
-              <Text style={authStyles.verifyText}>
-                Enter the verification code Clerk sent to {emailAddress.trim()}.
-              </Text>
-              <AuthField
-                autoCapitalize="none"
-                icon={<Feather name="hash" size={20} color="#6C746F" />}
-                inputMode="numeric"
-                keyboardType="number-pad"
-                label="Verification code"
-                onChangeText={setVerificationCode}
-                placeholder="123456"
-                value={verificationCode}
-              />
-              <PrimaryAuthButton
-                disabled={loadingAction !== null || verificationCode.trim().length < 1}
-                label={loadingAction === 'verify-email' ? 'Verifying...' : 'Verify Email'}
-                onPress={verifyEmail}
-              />
-            </View>
-          ) : (
-            <PrimaryAuthButton
-              disabled={mode === 'sign-in' ? formDisabled : signUpDisabled}
-              label={
-                mode === 'sign-in'
-                  ? loadingAction === 'email-sign-in'
-                    ? 'Signing In'
-                    : 'Sign In'
-                  : loadingAction === 'email-sign-up'
-                    ? 'Creating Account'
-                    : 'Create Account'
-              }
-              onPress={mode === 'sign-in' ? signInWithEmail : signUpWithEmail}
-            />
-          )}
+          <PrimaryAuthButton
+            disabled={mode === 'sign-in' ? formDisabled : signUpDisabled}
+            label={
+              mode === 'sign-in'
+                ? loadingAction === 'email-sign-in'
+                  ? 'Signing In'
+                  : 'Sign In'
+                : loadingAction === 'email-sign-up'
+                  ? 'Creating Account'
+                  : 'Create Account'
+            }
+            onPress={mode === 'sign-in' ? signInWithEmail : signUpWithEmail}
+          />
         </>
       ) : null}
 
@@ -579,17 +549,17 @@ function AuthField({
   value,
 }: {
   autoCapitalize: 'none' | 'sentences' | 'words' | 'characters'
-  autoComplete?: 'email' | 'current-password' | 'new-password'
+  autoComplete?: 'email' | 'current-password' | 'new-password' | 'tel'
   autoFocus?: boolean
   icon: ReactNode
-  inputMode?: 'email' | 'numeric' | 'text'
-  keyboardType?: 'default' | 'email-address' | 'number-pad'
+  inputMode?: 'email' | 'numeric' | 'tel' | 'text'
+  keyboardType?: 'default' | 'email-address' | 'number-pad' | 'phone-pad'
   label: string
   onChangeText: (value: string) => void
   placeholder: string
   rightIcon?: ReactNode
   secureTextEntry?: boolean
-  textContentType?: 'emailAddress' | 'password' | 'newPassword'
+  textContentType?: 'emailAddress' | 'password' | 'newPassword' | 'telephoneNumber'
   value: string
 }) {
   return (
@@ -672,6 +642,31 @@ function authErrorMessage(reason: unknown, fallback: string) {
   }
 
   return reason instanceof Error ? reason.message : fallback
+}
+
+function signUpIncompleteMessage(result: unknown) {
+  const status = clerkResourceStatus(result)
+  const missingFields = clerkStringArrayField(result, 'missingFields')
+  const unverifiedFields = clerkStringArrayField(result, 'unverifiedFields')
+  const requiredFields = clerkStringArrayField(result, 'requiredFields')
+
+  if (unverifiedFields.includes('email_address')) {
+    return 'Clerk still requires email verification at sign-up. In the Clerk dashboard, open User & authentication → Email and turn off Verify at sign-up.'
+  }
+  if (missingFields.includes('phone_number') || requiredFields.includes('phone_number')) {
+    return 'Clerk still requires a phone number at sign-up. In the Clerk dashboard, open User & authentication → Phone and set phone to optional (we collect and verify it after account creation).'
+  }
+  if (missingFields.includes('legal_accepted') || requiredFields.includes('legal_accepted')) {
+    return 'Clerk requires accepting terms at sign-up. Disable that requirement in the Clerk dashboard, or we can add a terms checkbox to this screen.'
+  }
+  if (missingFields.length > 0) {
+    return `Clerk needs more sign-up fields before creating a session: ${missingFields.join(', ')}. Check User & authentication settings in the Clerk dashboard.`
+  }
+  if (unverifiedFields.length > 0) {
+    return `Clerk still needs verification for: ${unverifiedFields.join(', ')}. Check verification settings in the Clerk dashboard.`
+  }
+
+  return `Clerk did not create a session (status: ${status}). Check User & authentication settings in the Clerk dashboard.`
 }
 
 function ssoMissingSessionMessage(redirectUrl: string, signIn: unknown, signUp: unknown) {
@@ -1112,11 +1107,41 @@ const authStyles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  signedInShell: {
+    flex: 1,
+  },
+  phoneGateOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#F8F6F1',
+    zIndex: 100,
+  },
 })
 
 function ClerkUserControls({ children }: { children: ReactNode }) {
+  const router = useRouter()
   const { signOut } = useAuth()
-  const { user } = useUser()
+  const { isLoaded, user } = useUser()
+  // useUser() returns user: undefined while Clerk is still loading. Treat that as
+  // "not ready" — not "missing phone" — or every cold start falsely opens the gate
+  // and router.replace('/') even for users who already verified a phone.
+  const needsPhone = Boolean(isLoaded && user && !hasVerifiedPhone(user))
+  const wasPhoneGated = useRef(false)
+
+  // Keep the app navigator mounted under the phone gate, and reset to `/` when
+  // that gate opens or closes. Unmounting the stack during SMS verification was
+  // remounting onto a stale `/course/...` route (often a legacy slug) afterward.
+  useEffect(() => {
+    if (!isLoaded) return
+    if (needsPhone) {
+      wasPhoneGated.current = true
+      router.replace('/')
+      return
+    }
+    if (wasPhoneGated.current) {
+      wasPhoneGated.current = false
+      router.replace('/')
+    }
+  }, [isLoaded, needsPhone, router])
 
   return (
     <AuthGateContext.Provider
@@ -1135,7 +1160,14 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         },
       }}
     >
-      {children}
+      <View style={authStyles.signedInShell}>
+        {children}
+        {needsPhone ? (
+          <View style={authStyles.phoneGateOverlay}>
+            <PhoneSetupScreen />
+          </View>
+        ) : null}
+      </View>
     </AuthGateContext.Provider>
   )
 }

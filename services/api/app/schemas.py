@@ -1,15 +1,26 @@
 from datetime import date, datetime
 from typing import Literal
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{2,64}$")
+
+
+def normalize_username(value: str) -> str:
+    normalized = value.strip().lstrip("@").lower()
+    if not USERNAME_PATTERN.fullmatch(normalized):
+        raise ValueError("Usernames must be 2-64 characters and use only letters, numbers, and underscores.")
+    return normalized
 
 
 class OnboardingData(BaseModel):
     """The richer onboarding answers used to personalize the product.
 
-    Course references are client-stable identifiers for now. Keeping them in the
-    onboarding snapshot lets the course catalog evolve without making account
-    creation depend on every course already existing in our seed database.
+    Course references are catalog course IDs stored as strings so the onboarding
+    snapshot stays compatible with JSON clients while joining cleanly against
+    the courses table.
     """
 
     first_name: str = Field(min_length=2, max_length=80)
@@ -30,6 +41,11 @@ class OnboardingData(BaseModel):
     transportation: Literal["Walking", "Cart", "Either"] | None = None
     notifications: bool | None = None
     default_round_visibility: Literal["private", "friends", "public"] = "friends"
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        return normalize_username(value)
 
 
 class OnboardingPreferencesIn(BaseModel):
@@ -199,6 +215,7 @@ class RankedCourseOut(BaseModel):
     personal_rating: float = Field(ge=1, le=10)
     confidence: float = Field(ge=0, le=1)
     confidence_label: Literal["low", "medium", "high"]
+    incomplete: bool = False
     round_count: int = 0
     best_score: int | None = None
 

@@ -1,14 +1,14 @@
 import * as SecureStore from 'expo-secure-store'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { OnboardingPreferences } from '../types'
+import { Course, OnboardingPreferences } from '../types'
 
 type Difficulty = OnboardingPreferences['difficulty']
 type Access = OnboardingPreferences['access']
 
-type CourseSeed = {
+type CourseOption = {
   id: string
   name: string
   location: string
@@ -36,6 +36,7 @@ type OnboardingDraft = {
   preferredTeeTime: string
   transportation: 'Walking' | 'Cart' | 'Either' | null
   notifications: boolean | null
+  courseCatalog: Record<string, CourseOption>
 }
 
 type StepKey =
@@ -51,6 +52,8 @@ type StepKey =
   | 'success'
 
 type OnboardingFormProps = {
+  searchCourses: (query: string) => Promise<Course[]>
+  checkUsername?: (username: string) => Promise<{ available: boolean; username: string }>
   submit: (input: OnboardingPreferences) => Promise<void>
   onComplete: (destination: 'home' | 'profile') => void
   onExit?: () => void
@@ -58,6 +61,8 @@ type OnboardingFormProps = {
 }
 
 const DRAFT_KEY = 'golfrank_onboarding_draft'
+const COURSE_SEARCH_MIN_CHARS = 3
+const COURSE_TONES = ['#8EA58D', '#78918E', '#546C5A', '#6D8FA0', '#A28E6D', '#8A9368', '#4C7A4D', '#7F8A75', '#668187', '#B0976A']
 
 const steps: StepKey[] = [
   'profile',
@@ -90,100 +95,8 @@ const initialDraft: OnboardingDraft = {
   preferredTeeTime: 'Weekend mornings',
   transportation: null,
   notifications: null,
+  courseCatalog: {},
 }
-
-const courses: CourseSeed[] = [
-  {
-    id: 'pasatiempo',
-    name: 'Pasatiempo Golf Club',
-    location: 'Santa Cruz, CA',
-    city: 'Santa Cruz',
-    region: 'CA',
-    imageTone: '#8EA58D',
-    meta: 'MacKenzie classic',
-  },
-  {
-    id: 'pebble',
-    name: 'Pebble Beach Golf Links',
-    location: 'Monterey, CA',
-    city: 'Monterey',
-    region: 'CA',
-    imageTone: '#78918E',
-    meta: 'Oceanfront icon',
-  },
-  {
-    id: 'spyglass',
-    name: 'Spyglass Hill Golf Course',
-    location: 'Pebble Beach, CA',
-    city: 'Pebble Beach',
-    region: 'CA',
-    imageTone: '#546C5A',
-    meta: 'Forest and dunes',
-  },
-  {
-    id: 'torrey',
-    name: 'Torrey Pines South',
-    location: 'La Jolla, CA',
-    city: 'La Jolla',
-    region: 'CA',
-    imageTone: '#6D8FA0',
-    meta: 'Cliffside municipal',
-  },
-  {
-    id: 'bandon',
-    name: 'Bandon Dunes',
-    location: 'Bandon, OR',
-    city: 'Bandon',
-    region: 'OR',
-    imageTone: '#A28E6D',
-    meta: 'Links destination',
-  },
-  {
-    id: 'pinehurst',
-    name: 'Pinehurst No. 2',
-    location: 'Pinehurst, NC',
-    city: 'Pinehurst',
-    region: 'NC',
-    imageTone: '#8A9368',
-    meta: 'Championship routing',
-  },
-  {
-    id: 'augusta',
-    name: 'Augusta National',
-    location: 'Augusta, GA',
-    city: 'Augusta',
-    region: 'GA',
-    imageTone: '#4C7A4D',
-    meta: 'Bucket list',
-  },
-  {
-    id: 'standrews',
-    name: 'St Andrews Old Course',
-    location: 'St Andrews, Scotland',
-    city: 'St Andrews',
-    region: 'Scotland',
-    imageTone: '#7F8A75',
-    meta: 'Home of golf',
-  },
-  {
-    id: 'cabot',
-    name: 'Cabot Cliffs',
-    location: 'Inverness, Canada',
-    city: 'Inverness',
-    region: 'NS',
-    imageTone: '#668187',
-    meta: 'Coastal drama',
-  },
-  {
-    id: 'taraiti',
-    name: 'Tara Iti',
-    location: 'Mangawhai, New Zealand',
-    city: 'Mangawhai',
-    region: 'NZ',
-    imageTone: '#B0976A',
-    meta: 'Pure links',
-  },
-]
 
 const preferenceOptions = [
   'Great value',
@@ -203,25 +116,43 @@ const preferenceOptions = [
   'Food & drinks',
 ]
 
-const rankPairs: [string, string][] = [
-  ['pebble', 'torrey'],
-  ['pasatiempo', 'spyglass'],
-  ['bandon', 'pinehurst'],
-  ['cabot', 'standrews'],
-]
-
-function selectedCourse(ids: string[], fallback = courses[0]) {
-  return ids.map((id) => courses.find((course) => course.id === id)).find(Boolean) ?? fallback
+function courseOptionFromApi(course: Course): CourseOption {
+  const city = course.city?.trim() || ''
+  const region = course.admin1_code?.trim() || course.region?.trim() || ''
+  const location = [city, region].filter(Boolean).join(', ') || course.region
+  return {
+    id: String(course.id),
+    name: course.name,
+    location,
+    city: city || course.region,
+    region: region || course.region,
+    imageTone: COURSE_TONES[Math.abs(course.id) % COURSE_TONES.length],
+    meta: course.difficulty ?? course.access ?? 'Course',
+  }
 }
 
-function filterCourses(query: string, source = courses) {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return source
-  return source.filter((course) => `${course.name} ${course.location}`.toLowerCase().includes(normalized))
+function homeRegionForCourse(course: CourseOption | null, fallbackSearch: string) {
+  if (!course) return fallbackSearch.trim()
+  const city = course.city.trim()
+  const region = course.region.trim()
+  if (city && region && city !== region) return `${city}, ${region}`
+  return city || region || fallbackSearch.trim()
+}
+
+function buildRankPairs(playedCourseIds: string[]): [string, string][] {
+  const pairs: [string, string][] = []
+  for (let index = 0; index + 1 < playedCourseIds.length && pairs.length < 3; index += 2) {
+    pairs.push([playedCourseIds[index], playedCourseIds[index + 1]])
+  }
+  return pairs
+}
+
+function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fallback: CourseOption | null = null) {
+  return ids.map((id) => catalog[id]).find(Boolean) ?? fallback
 }
 
 function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
-  const homeCourse = draft.homeCourseId ? courses.find((course) => course.id === draft.homeCourseId) : null
+  const homeCourse = draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null
   const maxGreenFee = draft.budget === '$' ? 125 : draft.budget === '$$' ? 225 : draft.budget === '$$$$' ? 650 : 350
   const difficulty: Difficulty = draft.preferences.includes('Beginner friendly')
     ? 'beginner'
@@ -237,12 +168,12 @@ function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   return {
     access,
     difficulty,
-    home_region: homeCourse ? `${homeCourse.city}, ${homeCourse.region}` : draft.homeCourseSearch.trim(),
+    home_region: homeRegionForCourse(homeCourse, draft.homeCourseSearch),
     max_green_fee: maxGreenFee,
     onboarding_data: {
       first_name: draft.firstName.trim(),
       last_name: draft.lastName.trim(),
-      username: draft.username.trim(),
+      username: draft.username.trim().replace(/^@+/, '').toLowerCase(),
       profile_photo_added: draft.profilePhotoAdded,
       home_course_id: draft.homeCourseId,
       home_course_search: draft.homeCourseSearch.trim(),
@@ -261,7 +192,60 @@ function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   }
 }
 
-export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: OnboardingFormProps) {
+function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, query: string) {
+  const [results, setResults] = useState<CourseOption[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const requestId = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+    requestId.current += 1
+  }, [])
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    requestId.current += 1
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    if (trimmed.length < COURSE_SEARCH_MIN_CHARS) {
+      setResults([])
+      setSearching(false)
+      setSearchError(null)
+      return
+    }
+
+    const currentRequest = requestId.current
+    timer.current = setTimeout(() => {
+      void (async () => {
+        setSearching(true)
+        setSearchError(null)
+        try {
+          const courses = await searchCourses(trimmed)
+          if (currentRequest !== requestId.current) return
+          setResults(courses.map(courseOptionFromApi))
+        } catch (reason) {
+          if (currentRequest !== requestId.current) return
+          setResults([])
+          setSearchError(reason instanceof Error ? reason.message : 'Unable to search courses.')
+        } finally {
+          if (currentRequest === requestId.current) setSearching(false)
+        }
+      })()
+    }, 300)
+
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [query, searchCourses])
+
+  return { results, searching, searchError }
+}
+
+export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
   const [courseQuery, setCourseQuery] = useState('')
@@ -274,6 +258,10 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
   const translateX = useRef(new Animated.Value(0)).current
 
   const step = steps[stepIndex]
+  const rankPairs = useMemo(() => buildRankPairs(draft.playedCourseIds), [draft.playedCourseIds])
+  const homeSearch = useCourseSearch(searchCourses, draft.homeCourseSearch || courseQuery)
+  const playedSearch = useCourseSearch(searchCourses, courseQuery)
+  const dreamSearch = useCourseSearch(searchCourses, dreamQuery)
 
   useEffect(() => {
     SecureStore.getItemAsync(DRAFT_KEY)
@@ -281,17 +269,30 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
         if (!stored) return
         const parsed = JSON.parse(stored) as Partial<OnboardingDraft> & { draftVersion?: number; name?: string; stepIndex?: number; rankIndex?: number }
         const [legacyFirstName = '', ...legacyLastNameParts] = parsed.name?.trim().split(/\s+/) ?? []
+        const courseCatalog = parsed.courseCatalog ?? {}
+        // Older drafts can carry course ids with no matching catalog entry (catalog
+        // wasn't persisted yet, or the shape changed) — drop those so downstream steps
+        // never look up an undefined course and dead-end.
+        const playedCourseIds = (parsed.playedCourseIds ?? initialDraft.playedCourseIds).filter((id) => courseCatalog[id])
+        const dreamCourseIds = (parsed.dreamCourseIds ?? initialDraft.dreamCourseIds).filter((id) => courseCatalog[id])
+        const favoriteWins = (parsed.favoriteWins ?? initialDraft.favoriteWins).filter((id) => courseCatalog[id])
+        const homeCourseId = parsed.homeCourseId && courseCatalog[parsed.homeCourseId] ? parsed.homeCourseId : null
         setDraft({
           ...initialDraft,
           ...parsed,
           firstName: parsed.firstName ?? legacyFirstName,
           lastName: parsed.lastName ?? legacyLastNameParts.join(' '),
+          courseCatalog,
+          playedCourseIds,
+          dreamCourseIds,
+          favoriteWins,
+          homeCourseId,
         })
         if (typeof parsed.stepIndex === 'number') {
           const migratedStepIndex = parsed.draftVersion && parsed.draftVersion >= 2 ? parsed.stepIndex : Math.max(parsed.stepIndex - 2, 0)
           setStepIndex(Math.min(migratedStepIndex, steps.length - 1))
         }
-        if (typeof parsed.rankIndex === 'number') setRankIndex(Math.min(parsed.rankIndex, rankPairs.length - 1))
+        if (typeof parsed.rankIndex === 'number') setRankIndex(parsed.rankIndex)
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true))
@@ -312,19 +313,41 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
 
   useEffect(() => {
     if (!hydrated) return
-    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 3, rankIndex, stepIndex })).catch(() => undefined)
+    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 4, rankIndex, stepIndex })).catch(() => undefined)
   }, [draft, hydrated, rankIndex, stepIndex])
 
-  const playedCourses = useMemo(() => draft.playedCourseIds.map((id) => courses.find((course) => course.id === id)).filter(Boolean) as CourseSeed[], [draft.playedCourseIds])
-  const homeSuggestions = filterCourses(draft.homeCourseSearch || courseQuery).slice(0, 4)
-  const playedSuggestions = filterCourses(courseQuery, courses.slice(0, 6))
-  const dreamSuggestions = filterCourses(dreamQuery, courses.slice(4))
+  useEffect(() => {
+    if (step !== 'rank') return
+    if (rankPairs.length === 0) {
+      setStepIndex((current) => Math.min(current + 1, steps.length - 1))
+      return
+    }
+    if (rankIndex >= rankPairs.length) setRankIndex(0)
+  }, [rankIndex, rankPairs.length, step])
+
+  const playedCourses = useMemo(
+    () => draft.playedCourseIds.map((id) => draft.courseCatalog[id]).filter(Boolean) as CourseOption[],
+    [draft.courseCatalog, draft.playedCourseIds],
+  )
   const currentPair = rankPairs[rankIndex]
-  const leftRankCourse = courses.find((course) => course.id === currentPair?.[0]) ?? courses[1]
-  const rightRankCourse = courses.find((course) => course.id === currentPair?.[1]) ?? courses[3]
+  const leftRankCourse = currentPair ? draft.courseCatalog[currentPair[0]] : null
+  const rightRankCourse = currentPair ? draft.courseCatalog[currentPair[1]] : null
+  const recommendation = selectedCourse(
+    [...draft.dreamCourseIds, ...draft.playedCourseIds],
+    draft.courseCatalog,
+    draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null,
+  )
 
   function patchDraft(patch: Partial<OnboardingDraft>) {
     setDraft((current) => ({ ...current, ...patch }))
+  }
+
+  function rememberCourses(courses: CourseOption[]) {
+    setDraft((current) => {
+      const courseCatalog = { ...current.courseCatalog }
+      for (const course of courses) courseCatalog[course.id] = course
+      return { ...current, courseCatalog }
+    })
   }
 
   function next() {
@@ -348,9 +371,20 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
     })
   }
 
+  function chooseCourse(course: CourseOption, mode: 'home' | 'played' | 'dream') {
+    rememberCourses([course])
+    if (mode === 'home') {
+      patchDraft({ homeCourseId: course.id, homeCourseSearch: course.name })
+      return
+    }
+    toggleList(mode === 'played' ? 'playedCourseIds' : 'dreamCourseIds', course.id)
+  }
+
   function chooseRankWinner(courseId: string) {
-    patchDraft({ favoriteWins: [...draft.favoriteWins, courseId] })
-    if (rankIndex >= Math.min(rankPairs.length, 3) - 1) {
+    // Write at the current pair index so going back and re-answering replaces
+    // stale wins instead of appending (seeding reads wins[i] for pair i).
+    patchDraft({ favoriteWins: [...draft.favoriteWins.slice(0, rankIndex), courseId] })
+    if (rankIndex >= rankPairs.length - 1) {
       next()
       return
     }
@@ -365,7 +399,18 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
       await SecureStore.deleteItemAsync(DRAFT_KEY)
       onComplete(destination)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save preferences. Please try again.')
+      const status = (reason as { status?: number })?.status
+      const message = reason instanceof Error ? reason.message : 'Unable to save preferences. Please try again.'
+      if (status === 409) {
+        // Backend uniqueness only runs at final submit, after Clerk's username was
+        // already claimed at the profile step — send the user back to pick a new one
+        // instead of leaving them stuck at the end of onboarding.
+        usernameAvailabilityCache.delete(normalizeUsernameInput(draft.username))
+        setStepIndex(steps.indexOf('profile'))
+        setError(message)
+        return
+      }
+      setError(message)
     } finally {
       setSaving(false)
     }
@@ -392,28 +437,34 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
 
       <Animated.View style={[styles.card, { opacity, transform: [{ translateX }] }]}>
         {step === 'profile' ? (
-          <ProfileStep draft={draft} onChange={patchDraft} onNext={next} saveProfile={saveProfile} />
+          <ProfileStep draft={draft} onChange={patchDraft} onNext={next} saveProfile={saveProfile} checkUsername={checkUsername} />
         ) : step === 'home' ? (
           <HomeCourseStep
             draft={draft}
-            suggestions={homeSuggestions}
+            searching={homeSearch.searching}
+            searchError={homeSearch.searchError}
+            suggestions={homeSearch.results.slice(0, 6)}
             onChange={patchDraft}
             onNext={next}
             onQuery={setCourseQuery}
+            onSelect={(course) => chooseCourse(course, 'home')}
           />
         ) : step === 'played' ? (
           <PlayedCoursesStep
+            catalog={draft.courseCatalog}
             query={courseQuery}
+            searching={playedSearch.searching}
+            searchError={playedSearch.searchError}
             selectedIds={draft.playedCourseIds}
-            suggestions={playedSuggestions}
+            suggestions={playedSearch.results.slice(0, 8)}
             onQuery={setCourseQuery}
-            onToggle={(courseId) => toggleList('playedCourseIds', courseId)}
+            onSelect={(course) => chooseCourse(course, 'played')}
             onNext={next}
           />
-        ) : step === 'rank' ? (
+        ) : step === 'rank' && leftRankCourse && rightRankCourse ? (
           <RankStep
             current={rankIndex}
-            total={Math.min(rankPairs.length, 3)}
+            total={rankPairs.length}
             left={leftRankCourse}
             right={rightRankCourse}
             onChoose={chooseRankWinner}
@@ -421,11 +472,14 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
           />
         ) : step === 'dreams' ? (
           <DreamCoursesStep
+            catalog={draft.courseCatalog}
             query={dreamQuery}
+            searching={dreamSearch.searching}
+            searchError={dreamSearch.searchError}
             selectedIds={draft.dreamCourseIds}
-            suggestions={dreamSuggestions}
+            suggestions={dreamSearch.results.slice(0, 8)}
             onQuery={setDreamQuery}
-            onToggle={(courseId) => toggleList('dreamCourseIds', courseId)}
+            onSelect={(course) => chooseCourse(course, 'dream')}
             onNext={next}
             onSkip={next}
           />
@@ -437,16 +491,16 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
           <PlanningStep draft={draft} onChange={patchDraft} onNext={next} />
         ) : step === 'notifications' ? (
           <NotificationsStep onAllow={() => { patchDraft({ notifications: true }); next() }} onSkip={() => { patchDraft({ notifications: false }); next() }} />
-        ) : (
+        ) : step === 'success' ? (
           <SuccessStep
             draft={draft}
-            recommendation={selectedCourse([...draft.dreamCourseIds, ...draft.playedCourseIds])}
+            recommendation={recommendation}
             playedCount={playedCourses.length}
             saving={saving}
             onExploreHome={() => finish('home')}
             onViewProfile={() => finish('profile')}
           />
-        )}
+        ) : null}
       </Animated.View>
 
       {error ? (
@@ -458,29 +512,116 @@ export function OnboardingForm({ submit, onComplete, onExit, saveProfile }: Onbo
   )
 }
 
+const USERNAME_CHECK_DEBOUNCE_MS = 550
+const usernameAvailabilityCache = new Map<string, boolean>()
+
 function ProfileStep({
   draft,
   onChange,
   onNext,
   saveProfile,
+  checkUsername,
 }: {
   draft: OnboardingDraft
   onChange: (patch: Partial<OnboardingDraft>) => void
   onNext: () => void
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
+  checkUsername?: (username: string) => Promise<{ available: boolean; username: string }>
 }) {
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
-  const disabled = draft.firstName.trim().length < 2 || draft.lastName.trim().length < 2 || draft.username.trim().length < 2 || savingProfile
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle')
+  const usernameRequest = useRef(0)
+  const usernameTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inFlightUsername = useRef<string | null>(null)
+  const normalizedUsername = normalizeUsernameInput(draft.username)
+  const checkUsernameRef = useRef(checkUsername)
+  checkUsernameRef.current = checkUsername
+  const disabled =
+    draft.firstName.trim().length < 2
+    || draft.lastName.trim().length < 2
+    || normalizedUsername.length < 2
+    || savingProfile
+    || usernameStatus === 'taken'
+    || usernameStatus === 'invalid'
+
+  useEffect(() => () => {
+    if (usernameTimer.current) clearTimeout(usernameTimer.current)
+    usernameRequest.current += 1
+  }, [])
+
+  useEffect(() => {
+    const check = checkUsernameRef.current
+    if (!check) {
+      setUsernameStatus(normalizedUsername.length >= 2 ? 'available' : 'idle')
+      return
+    }
+    usernameRequest.current += 1
+    if (usernameTimer.current) clearTimeout(usernameTimer.current)
+    if (normalizedUsername.length < 2) {
+      setUsernameStatus('idle')
+      return
+    }
+    if (!USERNAME_PATTERN.test(normalizedUsername)) {
+      setUsernameStatus('invalid')
+      return
+    }
+    const cached = usernameAvailabilityCache.get(normalizedUsername)
+    if (cached !== undefined) {
+      setUsernameStatus(cached ? 'available' : 'taken')
+      return
+    }
+    const request = usernameRequest.current
+    // Keep prior status until debounce fires so brief typing pauses don't flicker/check.
+    usernameTimer.current = setTimeout(() => {
+      if (request !== usernameRequest.current) return
+      if (inFlightUsername.current === normalizedUsername) return
+      const freshCache = usernameAvailabilityCache.get(normalizedUsername)
+      if (freshCache !== undefined) {
+        setUsernameStatus(freshCache ? 'available' : 'taken')
+        return
+      }
+      setUsernameStatus('checking')
+      inFlightUsername.current = normalizedUsername
+      void (async () => {
+        try {
+          const result = await check(normalizedUsername)
+          usernameAvailabilityCache.set(result.username, result.available)
+          if (request !== usernameRequest.current) return
+          setUsernameStatus(result.available ? 'available' : 'taken')
+        } catch (reason) {
+          if (request !== usernameRequest.current) return
+          // Allow Continue; continueWithProfile always re-checks and surfaces the error.
+          setUsernameStatus('idle')
+          setProfileError(reason instanceof Error ? reason.message : 'Unable to check that username.')
+        } finally {
+          if (inFlightUsername.current === normalizedUsername) inFlightUsername.current = null
+        }
+      })()
+    }, USERNAME_CHECK_DEBOUNCE_MS)
+  }, [normalizedUsername])
 
   async function continueWithProfile() {
     setSavingProfile(true)
     setProfileError(null)
     try {
+      const check = checkUsernameRef.current
+      if (check) {
+        // Always revalidate on Continue — a cached "available" can go stale.
+        const result = await check(normalizedUsername)
+        usernameAvailabilityCache.set(result.username, result.available)
+        if (!result.available) {
+          setUsernameStatus('taken')
+          setProfileError('That username is already taken.')
+          return
+        }
+        setUsernameStatus('available')
+      }
+      onChange({ username: normalizedUsername })
       await saveProfile?.({
         firstName: draft.firstName.trim(),
         lastName: draft.lastName.trim(),
-        username: draft.username.trim(),
+        username: normalizedUsername,
       })
       onNext()
     } catch (reason) {
@@ -503,7 +644,7 @@ function ProfileStep({
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.previewName}>{`${draft.firstName} ${draft.lastName}`.trim() || 'Your name'}</Text>
-          <Text style={styles.previewMeta}>@{draft.username || 'username'} / {draft.playedCourseIds.length} courses</Text>
+          <Text style={styles.previewMeta}>@{normalizedUsername || 'username'} / {draft.playedCourseIds.length} courses</Text>
         </View>
       </View>
       <Field label="First Name" value={draft.firstName} onChangeText={(firstName) => onChange({ firstName })} placeholder="Rohan" />
@@ -511,33 +652,55 @@ function ProfileStep({
       <Field
         label="Username"
         value={draft.username}
-        onChangeText={(username) => onChange({ username })}
+        onChangeText={(username) => {
+          setProfileError(null)
+          onChange({ username })
+        }}
         placeholder="rohank"
         autoCapitalize="none"
-        rightIcon={draft.username.trim() ? <Ionicons name="checkmark-circle" size={20} color="#2C5F48" /> : null}
+        rightIcon={
+          usernameStatus === 'checking' ? <ActivityIndicator color="#2C5F48" />
+            : usernameStatus === 'available' ? <Ionicons name="checkmark-circle" size={20} color="#2C5F48" />
+              : usernameStatus === 'taken' || usernameStatus === 'invalid' ? <Ionicons name="close-circle" size={20} color="#B42318" />
+                : null
+        }
       />
+      {usernameStatus === 'taken' ? <Text accessibilityRole="alert" style={styles.errorText}>That username is already taken.</Text> : null}
+      {usernameStatus === 'invalid' ? <Text accessibilityRole="alert" style={styles.errorText}>Use 2-64 letters, numbers, or underscores.</Text> : null}
       {profileError ? <Text accessibilityRole="alert" style={styles.errorText}>{profileError}</Text> : null}
       <PrimaryButton disabled={disabled} label={savingProfile ? 'Saving Profile' : 'Continue'} onPress={continueWithProfile} />
     </View>
   )
 }
 
+const USERNAME_PATTERN = /^[a-z0-9_]{2,64}$/
+
+function normalizeUsernameInput(value: string) {
+  return value.trim().replace(/^@+/, '').toLowerCase()
+}
+
 function HomeCourseStep({
   draft,
+  searching,
+  searchError,
   suggestions,
   onChange,
   onNext,
   onQuery,
+  onSelect,
 }: {
   draft: OnboardingDraft
-  suggestions: CourseSeed[]
+  searching: boolean
+  searchError: string | null
+  suggestions: CourseOption[]
   onChange: (patch: Partial<OnboardingDraft>) => void
   onNext: () => void
   onQuery: (query: string) => void
+  onSelect: (course: CourseOption) => void
 }) {
   return (
     <View style={styles.step}>
-      <Heading title="What's your home course?" subtitle="This helps us personalize your experience and find local friends." />
+      <Heading title="What's your home course?" subtitle="Search the catalog so we can personalize local friends and recommendations." />
       <Field
         label="Home course"
         value={draft.homeCourseSearch}
@@ -547,13 +710,21 @@ function HomeCourseStep({
         }}
         placeholder="Search courses"
       />
+      <CourseSearchStatus
+        searching={searching}
+        searchError={searchError}
+        query={draft.homeCourseSearch}
+        emptyLabel="Type at least 3 characters to search the course catalog."
+        noResultsLabel="No courses matched that search."
+        resultCount={suggestions.length}
+      />
       <View style={styles.listStack}>
         {suggestions.map((course) => (
           <CourseButton
             key={course.id}
             course={course}
             selected={draft.homeCourseId === course.id}
-            onPress={() => onChange({ homeCourseId: course.id, homeCourseSearch: course.name })}
+            onPress={() => onSelect(course)}
           />
         ))}
       </View>
@@ -563,27 +734,48 @@ function HomeCourseStep({
 }
 
 function PlayedCoursesStep({
+  catalog,
   query,
+  searching,
+  searchError,
   selectedIds,
   suggestions,
   onQuery,
-  onToggle,
+  onSelect,
   onNext,
 }: {
+  catalog: Record<string, CourseOption>
   query: string
+  searching: boolean
+  searchError: string | null
   selectedIds: string[]
-  suggestions: CourseSeed[]
+  suggestions: CourseOption[]
   onQuery: (query: string) => void
-  onToggle: (courseId: string) => void
+  onSelect: (course: CourseOption) => void
   onNext: () => void
 }) {
+  const selectedCourses = selectedIds.map((id) => catalog[id]).filter(Boolean) as CourseOption[]
+  const suggestionIds = new Set(suggestions.map((course) => course.id))
+  const visibleCourses = [
+    ...selectedCourses.filter((course) => !suggestionIds.has(course.id)),
+    ...suggestions,
+  ]
+
   return (
     <View style={styles.step}>
-      <Heading title="Which courses have you played?" subtitle="Select all that apply." />
-      <Field label="Search" value={query} onChangeText={onQuery} placeholder="Search popular nearby courses" />
+      <Heading title="Which courses have you played?" subtitle="Search and select courses from the catalog." />
+      <Field label="Search" value={query} onChangeText={onQuery} placeholder="Search courses you've played" />
+      <CourseSearchStatus
+        searching={searching}
+        searchError={searchError}
+        query={query}
+        emptyLabel="Type at least 3 characters to find courses you've played."
+        noResultsLabel="No courses matched that search."
+        resultCount={suggestions.length}
+      />
       <View style={styles.courseGrid}>
-        {suggestions.map((course) => (
-          <CourseCard key={course.id} course={course} selected={selectedIds.includes(course.id)} onPress={() => onToggle(course.id)} />
+        {visibleCourses.map((course) => (
+          <CourseCard key={course.id} course={course} selected={selectedIds.includes(course.id)} onPress={() => onSelect(course)} />
         ))}
       </View>
       <PrimaryButton label={selectedIds.length ? `Continue with ${selectedIds.length} selected` : 'Skip for now'} onPress={onNext} />
@@ -601,14 +793,14 @@ function RankStep({
 }: {
   current: number
   total: number
-  left: CourseSeed
-  right: CourseSeed
+  left: CourseOption
+  right: CourseOption
   onChoose: (courseId: string) => void
   onSkip: () => void
 }) {
   return (
     <View style={styles.step}>
-      <Heading title="Which would you rather play again?" subtitle="Swipe or tap to choose." />
+      <Heading title="Which would you rather play again?" subtitle="Choose between courses you've played." />
       <View style={styles.miniProgressTrack}>
         <View style={[styles.progressFill, { width: `${((current + 1) / total) * 100}%` }]} />
       </View>
@@ -621,29 +813,50 @@ function RankStep({
 }
 
 function DreamCoursesStep({
+  catalog,
   query,
+  searching,
+  searchError,
   selectedIds,
   suggestions,
   onQuery,
-  onToggle,
+  onSelect,
   onNext,
   onSkip,
 }: {
+  catalog: Record<string, CourseOption>
   query: string
+  searching: boolean
+  searchError: string | null
   selectedIds: string[]
-  suggestions: CourseSeed[]
+  suggestions: CourseOption[]
   onQuery: (query: string) => void
-  onToggle: (courseId: string) => void
+  onSelect: (course: CourseOption) => void
   onNext: () => void
   onSkip: () => void
 }) {
+  const selectedCourses = selectedIds.map((id) => catalog[id]).filter(Boolean) as CourseOption[]
+  const suggestionIds = new Set(suggestions.map((course) => course.id))
+  const visibleCourses = [
+    ...selectedCourses.filter((course) => !suggestionIds.has(course.id)),
+    ...suggestions,
+  ]
+
   return (
     <View style={styles.step}>
-      <Heading title="What courses are on your bucket list?" subtitle="Save the courses you dream of playing one day." />
+      <Heading title="What courses are on your bucket list?" subtitle="Search the catalog for courses you dream of playing." />
       <Field label="Search dream courses" value={query} onChangeText={onQuery} placeholder="Augusta, Bandon, Pinehurst" />
+      <CourseSearchStatus
+        searching={searching}
+        searchError={searchError}
+        query={query}
+        emptyLabel="Type at least 3 characters to search dream courses."
+        noResultsLabel="No courses matched that search."
+        resultCount={suggestions.length}
+      />
       <View style={styles.courseGrid}>
-        {suggestions.map((course) => (
-          <CourseCard key={course.id} course={course} selected={selectedIds.includes(course.id)} onPress={() => onToggle(course.id)} />
+        {visibleCourses.map((course) => (
+          <CourseCard key={course.id} course={course} selected={selectedIds.includes(course.id)} onPress={() => onSelect(course)} />
         ))}
       </View>
       <PrimaryButton label={selectedIds.length ? `Save ${selectedIds.length} dream courses` : 'Continue'} onPress={onNext} />
@@ -734,7 +947,7 @@ function SuccessStep({
   onViewProfile,
 }: {
   draft: OnboardingDraft
-  recommendation: CourseSeed
+  recommendation: CourseOption | null
   playedCount: number
   saving: boolean
   onExploreHome: () => void
@@ -750,11 +963,46 @@ function SuccessStep({
         <SummaryLine text="AI recommendations ready" />
         <SummaryLine text={draft.friendSearch ? 'Friends search queued' : 'Friends waiting'} />
       </View>
-      <CourseCard course={recommendation} selected={false} onPress={() => undefined} />
+      {recommendation ? <CourseCard course={recommendation} selected={false} onPress={() => undefined} /> : null}
       <PrimaryButton disabled={saving} label={saving ? 'Saving profile' : 'Explore Home'} onPress={onExploreHome} />
       <InlineButton disabled={saving} label="Go to My Profile" onPress={onViewProfile} />
     </View>
   )
+}
+
+function CourseSearchStatus({
+  searching,
+  searchError,
+  query,
+  emptyLabel,
+  noResultsLabel,
+  resultCount,
+}: {
+  searching: boolean
+  searchError: string | null
+  query: string
+  emptyLabel: string
+  noResultsLabel: string
+  resultCount: number
+}) {
+  if (searching) {
+    return (
+      <View style={styles.searchStatusRow}>
+        <ActivityIndicator accessibilityLabel="Searching courses" color="#214D3B" />
+        <Text style={styles.searchStatusText}>Searching courses…</Text>
+      </View>
+    )
+  }
+  if (searchError) {
+    return <Text accessibilityRole="alert" style={styles.errorText}>{searchError}</Text>
+  }
+  if (query.trim().length < COURSE_SEARCH_MIN_CHARS) {
+    return <Text style={styles.searchStatusText}>{emptyLabel}</Text>
+  }
+  if (resultCount === 0) {
+    return <Text style={styles.searchStatusText}>{noResultsLabel}</Text>
+  }
+  return null
 }
 
 function Heading({ title, subtitle }: { title: string; subtitle: string }) {
@@ -838,7 +1086,7 @@ function InlineButton({ label, onPress, disabled = false }: { label: string; onP
   )
 }
 
-function CourseButton({ course, selected, onPress }: { course: CourseSeed; selected: boolean; onPress: () => void }) {
+function CourseButton({ course, selected, onPress }: { course: CourseOption; selected: boolean; onPress: () => void }) {
   return (
     <Pressable
       accessibilityLabel={`${course.name} ${course.location}`}
@@ -856,7 +1104,7 @@ function CourseButton({ course, selected, onPress }: { course: CourseSeed; selec
   )
 }
 
-function CourseCard({ course, selected, onPress }: { course: CourseSeed; selected: boolean; onPress: () => void }) {
+function CourseCard({ course, selected, onPress }: { course: CourseOption; selected: boolean; onPress: () => void }) {
   return (
     <Pressable
       accessibilityLabel={`${course.name} ${course.location}`}
@@ -874,7 +1122,7 @@ function CourseCard({ course, selected, onPress }: { course: CourseSeed; selecte
   )
 }
 
-function CourseDuelButton({ course, onPress }: { course: CourseSeed; onPress: () => void }) {
+function CourseDuelButton({ course, onPress }: { course: CourseOption; onPress: () => void }) {
   return (
     <Pressable
       accessibilityLabel={`Choose ${course.name}`}
@@ -1375,5 +1623,15 @@ const styles = StyleSheet.create({
     color: '#B42318',
     fontSize: 15,
     lineHeight: 21,
+  },
+  searchStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchStatusText: {
+    color: '#66736B',
+    fontSize: 14,
+    lineHeight: 20,
   },
 })

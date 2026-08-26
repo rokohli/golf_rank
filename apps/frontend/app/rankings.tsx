@@ -64,7 +64,7 @@ export default function Rankings() {
   }, [refreshRanking]))
 
   const ranked = useMemo(() => {
-    return snapshot?.entries.map((entry, index): CoursePresentation => ({
+    return snapshot?.entries.map((entry): CoursePresentation & { incomplete?: boolean } => ({
       id: String(entry.course.id),
       name: entry.course.name,
       location: entry.course.region,
@@ -76,6 +76,7 @@ export default function Rankings() {
       personalRank: entry.rank,
       personalRating: entry.personal_rating,
       tier: entry.tier,
+      incomplete: Boolean(entry.incomplete),
     })) ?? []
   }, [snapshot])
   const leader = ranked[0]
@@ -93,6 +94,10 @@ export default function Rankings() {
     setCompletedComparisons(0)
     setRefinementError(null)
     setRefining(true)
+  }
+
+  function openCourse(courseId: string, incomplete?: boolean) {
+    router.push((incomplete ? `/rate/${courseId}` : `/course/${courseId}`) as never)
   }
 
   function selectScope(nextScope: 'Courses' | 'Friends') {
@@ -141,16 +146,16 @@ export default function Rankings() {
         {snapshot && snapshot.entries.length === 0 ? <View style={styles.emptyState}><Feather name="flag" size={24} color={colors.pine} /><Text style={styles.emptyTitle}>Your rankings are ready to begin</Text><Text style={styles.emptyBody}>Rate a course to start building your personal list.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/discover' as never)} style={styles.outlineButton}><Text style={styles.outlineText}>Find a course to rate</Text></Pressable></View> : null}
 
         {leader ? <>
-          <Pressable onPress={() => router.push(`/course/${leader.id}` as never)} style={styles.leader}>
+          <Pressable onPress={() => openCourse(leader.id, leader.incomplete)} style={styles.leader}>
             <CourseVisual course={leader} height={218}>
               <View style={styles.rankMark}><Text style={styles.rankMarkText}>1</Text></View>
               <View style={styles.leaderScrim} />
-              <View style={styles.leaderInfo}><View style={{ flex: 1 }}><Text style={styles.leaderTitle}>{leader.name}</Text><Text style={styles.leaderMeta}>{leader.location}</Text></View><View style={{ alignItems: 'flex-end' }}><Text style={styles.leaderRating}>{leader.personalRating?.toFixed(1)}<Text style={styles.ratingScale}> / 10</Text></Text><Text style={styles.leaderMeta}>{tierLabel(leader.tier)} · My rating</Text></View></View>
+              <View style={styles.leaderInfo}><View style={{ flex: 1 }}><Text style={styles.leaderTitle}>{leader.name}</Text><Text style={styles.leaderMeta}>{leader.location}</Text></View><View style={{ alignItems: 'flex-end' }}>{leader.incomplete ? <IncompleteBadge /> : <><Text style={styles.leaderRating}>{leader.personalRating?.toFixed(1)}<Text style={styles.ratingScale}> / 10</Text></Text><Text style={styles.leaderMeta}>{tierLabel(leader.tier)} · My rating</Text></>}</View></View>
             </CourseVisual>
-            <View style={styles.leaderFacts}><Text style={styles.fact}>Best score: <Text style={styles.factStrong}>{snapshot?.entries[0]?.best_score ?? '—'}</Text></Text><Text style={styles.fact}>Played {snapshot?.entries[0]?.round_count ?? 0} {snapshot?.entries[0]?.round_count === 1 ? 'time' : 'times'}</Text></View>
+            <View style={styles.leaderFacts}>{leader.incomplete ? <Text style={styles.fact}>From onboarding · tap to rate this course</Text> : <><Text style={styles.fact}>Best score: <Text style={styles.factStrong}>{snapshot?.entries[0]?.best_score ?? '—'}</Text></Text><Text style={styles.fact}>Played {snapshot?.entries[0]?.round_count ?? 0} {snapshot?.entries[0]?.round_count === 1 ? 'time' : 'times'}</Text></>}</View>
           </Pressable>
 
-          <View>{ranked.slice(1).map((course) => <CourseRow key={course.id} course={course} index={course.personalRank} showRating={false} onPress={() => router.push(`/course/${course.id}` as never)} trailing={<View style={styles.rowRatingWrap}><Text style={styles.rowRating}>{course.personalRating?.toFixed(1)}<Text style={styles.rowScale}> / 10</Text></Text><Text style={styles.tierLabel}>{tierLabel(course.tier)}</Text></View>} />)}</View>
+          <View>{ranked.slice(1).map((course) => <CourseRow key={course.id} course={course} index={course.personalRank} showRating={false} onPress={() => openCourse(course.id, course.incomplete)} trailing={course.incomplete ? <IncompleteBadge /> : <View style={styles.rowRatingWrap}><Text style={styles.rowRating}>{course.personalRating?.toFixed(1)}<Text style={styles.rowScale}> / 10</Text></Text><Text style={styles.tierLabel}>{tierLabel(course.tier)}</Text></View>} />)}</View>
 
           <Pressable accessibilityRole="button" disabled={availableComparisons === 0} onPress={openRefinement} style={[styles.outlineButton, availableComparisons === 0 && styles.disabledButton]}><Text style={[styles.outlineText, availableComparisons === 0 && styles.disabledText]}>Refine my rankings</Text></Pressable>
           <View style={styles.note}><Feather name="award" size={19} color={colors.pine} /><View style={{ flex: 1 }}><Text style={styles.noteTitle}>{availableComparisons ? 'Your list is taking shape' : 'Add another course to refine'}</Text><Text style={styles.noteBody}>{availableComparisons ? `${availableComparisons} same-tier ${availableComparisons === 1 ? 'comparison' : 'comparisons'} can improve your ranking confidence.` : 'Pairwise refinement becomes available when two courses share a tier.'}</Text></View></View>
@@ -192,11 +197,19 @@ const styles = StyleSheet.create({
   tabs: { borderBottomColor: '#D8D9D4', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row' }, tab: { alignItems: 'center', flex: 1, paddingBottom: 10 }, tabActive: { borderBottomColor: colors.pine, borderBottomWidth: 2 }, tabText: { color: colors.muted, fontSize: 9, fontWeight: '700', letterSpacing: 0.7 }, tabTextActive: { color: colors.pine },
   status: { alignItems: 'center', gap: 12, paddingVertical: 28 }, statusText: { color: colors.muted, fontSize: 11 }, errorText: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' }, inlineStatus: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }, inlineError: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 9, borderWidth: 1, gap: 9, padding: 12 }, retryButton: { borderColor: colors.pine, borderRadius: 18, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 8 }, retryText: { color: colors.pine, fontSize: 10, fontWeight: '800' }, emptyState: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 10, borderWidth: 1, gap: 9, padding: 24 }, emptyTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18, marginTop: 3, textAlign: 'center' }, emptyBody: { color: colors.muted, fontSize: 11, lineHeight: 17, marginBottom: 5, textAlign: 'center' },
   leader: { borderColor: '#D7D8D3', borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' }, rankMark: { left: 13, position: 'absolute', top: 8 }, rankMarkText: { color: '#FFF', fontFamily: 'Georgia', fontSize: 36 }, leaderScrim: { backgroundColor: 'rgba(6, 22, 14, 0.58)', bottom: 0, height: 70, left: 0, position: 'absolute', right: 0 }, leaderInfo: { alignItems: 'flex-end', bottom: 11, flexDirection: 'row', left: 13, position: 'absolute', right: 13 }, leaderTitle: { color: '#FFF', fontFamily: 'Georgia', fontSize: 21 }, leaderMeta: { color: '#E4E9E5', fontSize: 9, marginTop: 2 }, leaderRating: { color: '#FFF', fontFamily: 'Georgia', fontSize: 26 }, ratingScale: { fontFamily: undefined, fontSize: 10 }, leaderFacts: { flexDirection: 'row', justifyContent: 'space-between', padding: 11 }, fact: { color: colors.muted, fontSize: 9 }, factStrong: { color: colors.ink, fontWeight: '700' },
-  rowRatingWrap: { alignItems: 'flex-end' }, rowRating: { color: colors.ink, fontFamily: 'Georgia', fontSize: 16 }, rowScale: { color: colors.muted, fontFamily: undefined, fontSize: 8 }, tierLabel: { color: colors.pine, fontSize: 8, fontWeight: '700', marginTop: 3, textTransform: 'uppercase' }, outlineButton: { alignItems: 'center', borderColor: colors.pine, borderRadius: 7, borderWidth: 1, paddingVertical: 12 }, outlineText: { color: colors.pine, fontSize: 12, fontWeight: '700' }, disabledButton: { borderColor: colors.line }, disabledText: { color: colors.muted },
+  rowRatingWrap: { alignItems: 'flex-end' }, rowRating: { color: colors.ink, fontFamily: 'Georgia', fontSize: 16 }, rowScale: { color: colors.muted, fontFamily: undefined, fontSize: 8 }, tierLabel: { color: colors.pine, fontSize: 8, fontWeight: '700', marginTop: 3, textTransform: 'uppercase' }, incompleteBadge: { alignItems: 'center', backgroundColor: '#F0A04B', borderRadius: 12, height: 24, justifyContent: 'center', width: 24 }, outlineButton: { alignItems: 'center', borderColor: colors.pine, borderRadius: 7, borderWidth: 1, paddingVertical: 12 }, outlineText: { color: colors.pine, fontSize: 12, fontWeight: '700' }, disabledButton: { borderColor: colors.line }, disabledText: { color: colors.muted },
   note: { alignItems: 'center', borderBottomColor: '#D8D9D4', borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: '#D8D9D4', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 13 }, noteTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14 }, noteBody: { color: colors.muted, fontSize: 9, lineHeight: 14, marginTop: 3 },
   friendSection: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 9 }, friendHeader: { alignItems: 'center', flexDirection: 'row', gap: 10, paddingVertical: 12 }, friendName: { color: colors.ink, fontFamily: 'Georgia', fontSize: 16 }, friendHandle: { color: colors.muted, fontSize: 9, marginTop: 2 }, friendCourse: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 11 }, friendRank: { color: colors.pine, fontFamily: 'Georgia', fontSize: 18, textAlign: 'center', width: 24 }, friendCourseName: { color: colors.ink, fontSize: 12, fontWeight: '700' }, friendCourseMeta: { color: colors.muted, fontSize: 9, marginTop: 3 }, friendRating: { color: colors.ink, fontFamily: 'Georgia', fontSize: 17 }, friendNoCourses: { color: colors.muted, fontSize: 10, paddingBottom: 12 },
   refinementScreen: { backgroundColor: colors.background, flex: 1, paddingHorizontal: 22, paddingTop: 22 }, refinementHeader: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' }, refinementKicker: { color: colors.pine, fontSize: 9, fontWeight: '800', letterSpacing: 1.1 }, refinementTitle: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 25, lineHeight: 31, marginTop: 6 }, closeButton: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 20, borderWidth: 1, height: 40, justifyContent: 'center', width: 40 }, refinementBody: { gap: 15, paddingTop: 30 }, refinementHelp: { color: colors.muted, fontSize: 11, lineHeight: 17, textAlign: 'center' }, comparisonCourse: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 12, borderWidth: 1, gap: 5, padding: 20 }, comparisonRank: { color: colors.pine, fontSize: 9, fontWeight: '800', letterSpacing: 0.7 }, comparisonName: { color: colors.ink, fontFamily: 'Georgia', fontSize: 21 }, comparisonMeta: { color: colors.muted, fontSize: 10 }, orRow: { alignItems: 'center', flexDirection: 'row', gap: 10 }, orLine: { backgroundColor: colors.line, flex: 1, height: StyleSheet.hairlineWidth }, orText: { color: colors.muted, fontSize: 9, fontWeight: '700' }, secondaryChoices: { flexDirection: 'row', gap: 10 }, secondaryChoice: { alignItems: 'center', borderColor: colors.pine, borderRadius: 7, borderWidth: 1, flex: 1, paddingVertical: 11 }, secondaryChoiceText: { color: colors.pine, fontSize: 11, fontWeight: '700' }, savingRow: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' }, progressText: { color: colors.muted, fontSize: 9, textAlign: 'center' }, refinementComplete: { alignItems: 'center', flex: 1, gap: 14, justifyContent: 'center', paddingHorizontal: 28 }, primaryButton: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: colors.pine, borderRadius: 8, paddingVertical: 13 }, primaryButtonText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
 })
+
+function IncompleteBadge() {
+  return (
+    <View accessible accessibilityLabel="Needs finishing" style={styles.incompleteBadge}>
+      <Feather name="alert-circle" size={14} color="#FFFFFF" />
+    </View>
+  )
+}
 
 function FriendsRankingsView({ error, loading, onCourse, onFindFriends, onRetry, rankings }: { error: string | null; loading: boolean; onCourse: (courseId: number) => void; onFindFriends: () => void; onRetry: () => Promise<void>; rankings: FriendRanking[] | null }) {
   return <>
@@ -221,8 +234,9 @@ function ComparisonCourse({ entry, disabled, label, onPress }: { entry: RankedCo
 
 function nextRefinementPair(entries: RankedCourse[], excluded: Set<string>): [RankedCourse, RankedCourse] | null {
   const candidates: [RankedCourse, RankedCourse][] = []
-  for (let index = 0; index < entries.length - 1; index += 1) {
-    const pair: [RankedCourse, RankedCourse] = [entries[index], entries[index + 1]]
+  const ranked = entries.filter((entry) => !entry.incomplete)
+  for (let index = 0; index < ranked.length - 1; index += 1) {
+    const pair: [RankedCourse, RankedCourse] = [ranked[index], ranked[index + 1]]
     if (pair[0].tier === pair[1].tier && !excluded.has(pairKey(...pair))) candidates.push(pair)
   }
   candidates.sort((left, right) => {
@@ -234,7 +248,8 @@ function nextRefinementPair(entries: RankedCourse[], excluded: Set<string>): [Ra
 }
 
 function refinementPairCount(entries: RankedCourse[]): number {
-  return entries.slice(0, -1).filter((entry, index) => entry.tier === entries[index + 1].tier).length
+  const ranked = entries.filter((entry) => !entry.incomplete)
+  return ranked.slice(0, -1).filter((entry, index) => entry.tier === ranked[index + 1].tier).length
 }
 
 function pairKey(first: RankedCourse, second: RankedCourse): string {

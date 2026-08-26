@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -196,6 +196,188 @@ def _confidence(decisive: int, uncertain: int) -> float:
     return round(max(0.15, min(0.95, 0.35 + decisive * 0.15 - uncertain * 0.1)), 2)
 
 
+def _build_onboarding_rank_pairs(played_course_ids: list[str]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for index in range(0, len(played_course_ids) - 1, 2):
+        if len(pairs) >= 3:
+            break
+        pairs.append((played_course_ids[index], played_course_ids[index + 1]))
+    return pairs
+
+
+def _parse_course_id(raw: str) -> int | None:
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def seed_onboarding_rankings(session: Session, user_id: int, onboarding_data: dict | None) -> bool:
+    """Seed incomplete personal rankings from onboarding head-to-head answers.
+
+    Returns True when a new snapshot was staged.
+    """
+    if not isinstance(onboarding_data, dict):
+        return False
+    played = onboarding_data.get("played_course_ids") or []
+    wins = onboarding_data.get("favorite_wins") or []
+    if not isinstance(played, list) or not isinstance(wins, list):
+        return False
+    pairs = _build_onboarding_rank_pairs([str(item) for item in played])
+    if not pairs or not wins:
+        return False
+
+    # Cheap pre-check on raw ids: once every course from onboarding pairs already
+    # has a completed (non-incomplete) assignment, seeding is permanently a no-op
+    # for this user — skip the require_course round trips below on every GET /rankings.
+    raw_ids = {
+        parsed
+        for raw in {item for pair in pairs for item in pair}
+        if (parsed := _parse_course_id(raw)) is not None
+    }
+    if raw_ids:
+        settled = set(session.scalars(
+            select(TierAssignment.course_id).where(
+                TierAssignment.user_id == user_id,
+                TierAssignment.course_id.in_(raw_ids),
+                TierAssignment.is_incomplete.is_(False),
+            )
+        ).all())
+        if raw_ids <= settled:
+            return False
+
+    resolved_pairs: list[tuple[int, int, int]] = []
+    for index, (left_raw, right_raw) in enumerate(pairs):
+        if index >= len(wins):
+            break
+        left_id = _parse_course_id(left_raw)
+        right_id = _parse_course_id(right_raw)
+        winner_id = _parse_course_id(str(wins[index]))
+        if left_id is None or right_id is None or winner_id is None:
+            continue
+        if winner_id not in (left_id, right_id) or left_id == right_id:
+            continue
+        try:
+            left = require_course(session, left_id).id
+            right = require_course(session, right_id).id
+            winner = require_course(session, winner_id).id
+        except HTTPException:
+            continue
+        if winner not in (left, right) or left == right:
+            continue
+        resolved_pairs.append((left, right, winner))
+
+    if not resolved_pairs:
+        return False
+
+    course_ids = list(dict.fromkeys(
+        course_id
+        for left, right, _ in resolved_pairs
+        for course_id in (left, right)
+    ))
+    existing = {
+        assignment.course_id: assignment
+        for assignment in session.scalars(
+            select(TierAssignment).where(
+                TierAssignment.user_id == user_id,
+                TierAssignment.course_id.in_(course_ids),
+            )
+        ).all()
+    }
+    # Never reshape courses the user already finished ranking.
+    seed_ids = [course_id for course_id in course_ids if course_id not in existing or existing[course_id].is_incomplete]
+    if not seed_ids:
+        return False
+
+    win_counts: dict[int, int] = {course_id: 0 for course_id in seed_ids}
+    for left, right, winner in resolved_pairs:
+        if winner in win_counts:
+            win_counts[winner] += 1
+    ordered = sorted(
+        seed_ids,
+        key=lambda course_id: (-win_counts[course_id], course_ids.index(course_id)),
+    )
+    # A resubmission with a corrected favorite can reorder already-seeded incomplete
+    # courses without adding any new ones — only skip when nothing would actually change.
+    current_order = sorted(
+        (course_id for course_id in seed_ids if course_id in existing),
+        key=lambda course_id: existing[course_id].ordinal_position,
+    )
+    if ordered == current_order and all(course_id in existing for course_id in seed_ids):
+        return False
+
+    _lock_user_for_ranking_update(session, user_id)
+    fairway_peers = list(
+        session.scalars(
+            select(TierAssignment).where(
+                TierAssignment.user_id == user_id,
+                TierAssignment.tier == "fairway",
+                TierAssignment.course_id.not_in(seed_ids),
+            )
+        ).all()
+    )
+    start_position = len(fairway_peers) + 1
+    for offset, course_id in enumerate(ordered):
+        assignment = existing.get(course_id)
+        if assignment is None:
+            assignment = TierAssignment(user_id=user_id, course_id=course_id)
+        elif not assignment.is_incomplete:
+            continue
+        assignment.tier = "fairway"
+        assignment.ordinal_position = start_position + offset
+        assignment.is_incomplete = True
+        session.add(assignment)
+
+    for left, right, winner in resolved_pairs:
+        if left not in seed_ids or right not in seed_ids:
+            continue
+        already = session.scalar(
+            select(Comparison.id).where(
+                Comparison.user_id == user_id,
+                or_(
+                    and_(Comparison.course_a_id == left, Comparison.course_b_id == right),
+                    and_(Comparison.course_a_id == right, Comparison.course_b_id == left),
+                ),
+                Comparison.outcome.in_(("course_a", "course_b")),
+            )
+        )
+        if already is not None:
+            continue
+        session.add(
+            Comparison(
+                user_id=user_id,
+                course_a_id=left,
+                course_b_id=right,
+                preferred_course_id=winner,
+                outcome="course_a" if winner == left else "course_b",
+            )
+        )
+
+    session.flush()
+    _stage_snapshot(session, user_id, emit_activity=False)
+    return True
+
+
+def _with_incomplete_flags(session: Session, user_id: int, entries: list[dict]) -> list[dict]:
+    course_ids = [entry["course"]["id"] for entry in entries]
+    if not course_ids:
+        return entries
+    incomplete_ids = set(
+        session.scalars(
+            select(TierAssignment.course_id).where(
+                TierAssignment.user_id == user_id,
+                TierAssignment.course_id.in_(course_ids),
+                TierAssignment.is_incomplete.is_(True),
+            )
+        ).all()
+    )
+    return [
+        {**entry, "incomplete": entry["course"]["id"] in incomplete_ids or bool(entry.get("incomplete"))}
+        for entry in entries
+    ]
+
+
 def _stage_snapshot(
     session: Session, user_id: int, *, emit_activity: bool = True
 ) -> RankingSnapshotOut:
@@ -251,6 +433,7 @@ def _stage_snapshot(
                 ),
                 "confidence": confidence,
                 "confidence_label": _confidence_label(confidence),
+                "incomplete": bool(assignment.is_incomplete),
             }
         )
 
@@ -348,6 +531,10 @@ def get_ranking(
             entries=[],
             unranked_courses=[],
         )
+    preferences = session.get(OnboardingPreference, stored.id)
+    onboarding_data = preferences.onboarding_data if preferences else None
+    if seed_onboarding_rankings(session, stored.id, onboarding_data):
+        session.commit()
     latest = session.scalar(
         select(RankingSnapshot)
         .where(RankingSnapshot.user_id == stored.id)
@@ -362,11 +549,15 @@ def get_ranking(
             entries=[],
             unranked_courses=[],
         )
-    entries = _with_round_stats(
+    entries = _with_incomplete_flags(
         session,
         stored.id,
-        _with_current_course_data(
-            session, _adapt_snapshot_entries(latest.ranking_data["entries"])
+        _with_round_stats(
+            session,
+            stored.id,
+            _with_current_course_data(
+                session, _adapt_snapshot_entries(latest.ranking_data["entries"])
+            ),
         ),
     )
     return RankingSnapshotOut(
@@ -408,18 +599,27 @@ def get_friend_rankings(
             .order_by(RankingSnapshot.version.desc())
             .limit(1)
         )
-        entries = (
+        flagged = (
             []
             if latest is None
-            else _with_round_stats(
-                session,
-                friend_id,
-                _with_current_course_data(
+            else [
+                entry
+                for entry in _with_incomplete_flags(
                     session,
-                    _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
-                ),
-            )
+                    friend_id,
+                    _with_round_stats(
+                        session,
+                        friend_id,
+                        _with_current_course_data(
+                            session,
+                            _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
+                        ),
+                    ),
+                )
+                if not entry.get("incomplete")
+            ]
         )
+        entries = [{**entry, "rank": index} for index, entry in enumerate(flagged, start=1)]
         output.append(FriendRankingOut(
             user=_friend_identity(session, friend),
             version=latest.version if latest else 0,
@@ -455,6 +655,7 @@ def place_in_tiers(
         if assignment is None:
             assignment = TierAssignment(user_id=stored.id, course_id=course_id)
         assignment.tier = placement.tier
+        assignment.is_incomplete = False
         # Put the course at the requested slot and shift its neighbors. This
         # supports one-course moves as well as the initial batch tier drop.
         peers = list(

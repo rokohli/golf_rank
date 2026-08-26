@@ -1,4 +1,4 @@
-import { contactIdentifiers } from '../contactIdentifiers'
+import { contactIdentifiers, normalizeAccountPhone } from '../contactIdentifiers'
 
 describe('contactIdentifiers', () => {
   it('normalizes local phone numbers using each contact country', () => {
@@ -24,5 +24,17 @@ describe('contactIdentifiers', () => {
         ],
       },
     ])).toEqual(['+14155551212'])
+  })
+})
+
+describe('normalizeAccountPhone', () => {
+  it('normalizes US local numbers to E.164 for Clerk signup', () => {
+    expect(normalizeAccountPhone('(415) 555-1212')).toBe('+14155551212')
+    expect(normalizeAccountPhone('+1 415 555 1212')).toBe('+14155551212')
+  })
+
+  it('rejects incomplete phone numbers', () => {
+    expect(normalizeAccountPhone('415')).toBeNull()
+    expect(normalizeAccountPhone('')).toBeNull()
   })
 })
