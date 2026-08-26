@@ -37,22 +37,33 @@ preferences = sa.table(
 def upgrade() -> None:
     op.add_column("profiles", sa.Column("username", sa.String(length=64), nullable=True))
     connection = op.get_bind()
-    claimed: set[str] = set()
-    rows = connection.execute(
-        sa.select(preferences.c.user_id, preferences.c.onboarding_data).where(
-            preferences.c.onboarding_data.is_not(None)
-        )
-    )
+    # Order deterministically, and give already-valid usernames priority over ones
+    # that need sanitizing — otherwise which row happens to be read first decides
+    # who keeps a contested name, and a dirty username (e.g. "golf-er") could claim
+    # a clean one's exact handle (e.g. "golfer") before the clean row is even seen.
+    rows = list(connection.execute(
+        sa.select(preferences.c.user_id, preferences.c.onboarding_data)
+        .where(preferences.c.onboarding_data.is_not(None))
+        .order_by(preferences.c.user_id)
+    ))
+
+    candidates: list[tuple[int, dict, str, bool]] = []
     for user_id, onboarding_data in rows:
         if not isinstance(onboarding_data, dict):
             continue
         raw = onboarding_data.get("username")
         if not isinstance(raw, str):
             continue
-        normalized = _INVALID_USERNAME_CHARS.sub("", raw.strip().lstrip("@").lower())
-        if len(normalized) < 2:
-            normalized = f"golfer_{user_id}"
-        normalized = normalized[:64]
+        stripped_lower = raw.strip().lstrip("@").lower()
+        sanitized = _INVALID_USERNAME_CHARS.sub("", stripped_lower)
+        is_clean = sanitized == stripped_lower and len(sanitized) >= 2
+        if len(sanitized) < 2:
+            sanitized = f"golfer_{user_id}"
+        candidates.append((user_id, onboarding_data, sanitized[:64], is_clean))
+
+    claimed: set[str] = set()
+    ordered_candidates = [c for c in candidates if c[3]] + [c for c in candidates if not c[3]]
+    for user_id, onboarding_data, normalized, _is_clean in ordered_candidates:
         candidate = normalized
         suffix = 0
         while candidate in claimed:
@@ -62,7 +73,7 @@ def upgrade() -> None:
         connection.execute(
             sa.update(profiles).where(profiles.c.user_id == user_id).values(username=candidate)
         )
-        if candidate != raw:
+        if candidate != onboarding_data.get("username"):
             # Keep onboarding_data in sync with the sanitized username — schemas.py
             # validates onboarding_data.username against the same pattern on read,
             # so leaving the original raw value here would fail every future load.

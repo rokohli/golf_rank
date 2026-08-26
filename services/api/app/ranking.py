@@ -276,6 +276,11 @@ def seed_onboarding_rankings(session: Session, user_id: int, onboarding_data: di
         for left, right, _ in resolved_pairs
         for course_id in (left, right)
     ))
+    # Lock before reading current assignment state, not after: two concurrent
+    # GET /rankings requests could otherwise both read the same "not seeded yet"
+    # snapshot, both decide to insert, and the second hits a duplicate-row
+    # IntegrityError once serialized behind the lock.
+    _lock_user_for_ranking_update(session, user_id)
     existing = {
         assignment.course_id: assignment
         for assignment in session.scalars(
