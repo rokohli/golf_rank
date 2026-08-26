@@ -58,7 +58,7 @@ export default function EditProfile() {
   const save = async () => {
     const normalizedFirst = firstName.trim()
     const normalizedLast = lastName.trim()
-    const normalizedUsername = username.trim().replace(/^@+/, '')
+    const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase()
     const normalizedRegion = homeRegion.trim()
     if ([normalizedFirst, normalizedLast, normalizedUsername, normalizedRegion].some((value) => value.length < 2)) {
       setError('Complete each profile field before saving.')
@@ -80,7 +80,7 @@ export default function EditProfile() {
           first_name: normalizedFirst,
           last_name: normalizedLast,
           profile_photo_added: profile.onboarding_data.profile_photo_added || Boolean(pendingImageUri),
-          username: normalizedUsername.toLowerCase().replace(/^@+/, ''),
+          username: normalizedUsername,
         },
       }
       await savePreferences(nextProfile, await getAuthHeaders())

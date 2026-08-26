@@ -312,7 +312,6 @@ def seed_onboarding_rankings(session: Session, user_id: int, onboarding_data: di
     if ordered == current_order and all(course_id in existing for course_id in seed_ids):
         return False
 
-    _lock_user_for_ranking_update(session, user_id)
     fairway_peers = list(
         session.scalars(
             select(TierAssignment).where(
@@ -378,7 +377,7 @@ def _with_incomplete_flags(session: Session, user_id: int, entries: list[dict]) 
         ).all()
     )
     return [
-        {**entry, "incomplete": entry["course"]["id"] in incomplete_ids or bool(entry.get("incomplete"))}
+        {**entry, "incomplete": entry["course"]["id"] in incomplete_ids}
         for entry in entries
     ]
 
@@ -713,6 +712,7 @@ def compare_courses(
     stored = _stored_user(session, user, create=False)
     if stored is None:
         raise HTTPException(409, "Place both courses into tiers before comparing them")
+    _lock_user_for_ranking_update(session, stored.id)
     assignments = list(
         session.scalars(
             select(TierAssignment).where(
