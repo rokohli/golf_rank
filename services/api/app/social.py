@@ -202,9 +202,9 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
     return followed_ids, followed_ids & reverse_ids
 
 
-def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
-    preferences = session.get(OnboardingPreference, user.id)
-    profile = session.get(Profile, user.id)
+def _thought_identity(
+    user: User, preferences: OnboardingPreference | None, profile: Profile | None
+) -> FriendCourseThoughtUserOut:
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     display_name = " ".join(
         item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
@@ -278,6 +278,18 @@ def course_friend_thoughts(
         note.round_id: note
         for note in session.scalars(select(RoundNote).where(RoundNote.round_id.in_(rating_round_ids))).all()
     }
+    preferences_by_friend = {
+        preference.user_id: preference
+        for preference in session.scalars(
+            select(OnboardingPreference).where(OnboardingPreference.user_id.in_(friend_ids))
+        ).all()
+    }
+    profiles_by_friend = {
+        profile.user_id: profile
+        for profile in session.scalars(
+            select(Profile).where(Profile.user_id.in_(friend_ids))
+        ).all()
+    }
     activity_ids: dict[tuple[int, int], int] = {}
     for event in session.scalars(
         select(ActivityEvent)
@@ -306,7 +318,9 @@ def course_friend_thoughts(
             note = stored_note.body if stored_note else None
             favorite_hole = round_.favorite_hole
         entries.append(FriendCourseThoughtOut(
-            user=_thought_identity(session, friend),
+            user=_thought_identity(
+                friend, preferences_by_friend.get(friend.id), profiles_by_friend.get(friend.id)
+            ),
             # A previously shared rating activity is not a target for a later
             # private round; the current round's visibility remains authoritative.
             activity_id=activity_ids.get((friend.id, rating.round_id)) if round_ is not None and round_.visibility == "friends" else None,
