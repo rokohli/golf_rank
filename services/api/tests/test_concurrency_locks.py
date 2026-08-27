@@ -62,3 +62,17 @@ def test_concurrency_locks_in_ranking_comparisons_and_tier_placements() -> None:
     final_ranking = client.get("/api/v1/me/rankings", headers=headers).json()
     assert len(final_ranking["entries"]) == 3
     assert final_ranking["version"] == 6
+
+    # Successive tier updates also serialize and advance version monotonically
+    tier_update = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=headers,
+        json={
+            "assignments": [
+                {"course_id": 1, "tier": "green", "position": 1},
+            ]
+        },
+    )
+    assert tier_update.status_code == 200
+    assert tier_update.json()["version"] == 7
+

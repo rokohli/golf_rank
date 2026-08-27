@@ -61,8 +61,9 @@ jobs:
         run: |
           export PATH="$HOME/.maestro/bin:$PATH"
           echo "Maestro version: $(maestro --version)"
-          # Run declarative E2E test flows
-          # maestro test apps/frontend/.maestro/flows/
+          cd apps/frontend
+          npx expo prebuild --platform ios --clean || true
+          maestro test .maestro/flows/
 
       - name: Upload Maestro Failure Artifacts
         if: failure()

@@ -133,9 +133,10 @@ def _summary_out(
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
     display_name = " ".join(item for item in (first_name, last_name) if item).strip()
+    username = profile.username if profile and profile.username else onboarding.get("username")
     return UserSummaryOut(
         id=user.id,
-        username=onboarding.get("username"),
+        username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
         follower_count=follower_count,
@@ -195,14 +196,16 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
 
 def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
     preferences = session.get(OnboardingPreference, user.id)
+    profile = session.get(Profile, user.id)
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     display_name = " ".join(
         item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
     ).strip()
+    username = profile.username if profile and profile.username else onboarding.get("username")
     return FriendCourseThoughtUserOut(
         id=user.id,
         display_name=display_name or f"Golfer {user.id}",
-        username=onboarding.get("username"),
+        username=username,
     )
 
 

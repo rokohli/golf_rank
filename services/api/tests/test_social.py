@@ -933,3 +933,26 @@ def test_notification_actor_summary_queries_do_not_scale_with_page_size() -> Non
     assert full["items"][0]["actor"]["follower_count"] == 1
     assert full["items"][0]["actor"]["following_count"] == 1
     assert full["items"][0]["is_following"] is True
+
+
+def test_canonical_profile_username_is_used_in_social_summaries() -> None:
+    """Verify that Profile.username is preferred in user summaries and search."""
+    app = create_app()
+    client = TestClient(app)
+    viewer_headers = {"X-Development-Subject": "dev:searcher-viewer"}
+
+    with app.state.session_factory() as session:
+        target = User(provider_subject="dev:canonical-user")
+        viewer = User(provider_subject="dev:searcher-viewer")
+        session.add_all([target, viewer])
+        session.flush()
+        session.add(Profile(user_id=target.id, home_region="Monterey, CA", username="canonical_handle"))
+        session.commit()
+
+    search = client.get("/api/v1/users", headers=viewer_headers, params={"q": "canonical_handle"})
+    assert search.status_code == 200
+    results = search.json()
+    assert len(results) == 1
+    assert results[0]["username"] == "canonical_handle"
+    assert results[0]["id"] == target.id
+
