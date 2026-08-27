@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
+import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
 import { Course, CourseRatingState, FriendsCourseThoughts, RoundPatch, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
@@ -299,7 +300,7 @@ export default function CourseDetail() {
         <DisclosureRow expanded={openDetails === 'personal'} icon="edit-3" label="Your thoughts & details" onPress={() => setOpenDetails((current) => current === 'personal' ? null : 'personal')} />
         {openDetails === 'personal' ? <PersonalDetails onSave={updatePersonalDetail} rating={rating} /> : null}
         <DisclosureRow expanded={openDetails === 'friends'} icon="users" label="Friends’ thoughts & details" onPress={() => setOpenDetails((current) => current === 'friends' ? null : 'friends')} />
-        {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as never)} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
+        {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as never)} onOpenProfile={(userId) => openUserProfile(router, userId)} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
       </View>
     </ProductScreen>
   </>
@@ -312,13 +313,13 @@ function CourseAction({ disabled = false, icon, label, onPress }: { disabled?: b
 }
 
 function DisclosureRow({ expanded, icon, label, onPress }: { expanded: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ expanded }} onPress={onPress} style={styles.disclosureRow}><Feather name={icon} size={18} color={colors.pineDark} /><Text style={styles.disclosureLabel}>{label}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={18} color={colors.pineDark} /></Pressable> }
-function FriendsThoughts({ error, loading, onOpenActivity, onRetry, thoughts }: { error: string | null; loading: boolean; onOpenActivity: (activityId: number) => void; onRetry: () => Promise<void>; thoughts: FriendsCourseThoughts | null }) {
+function FriendsThoughts({ error, loading, onOpenActivity, onOpenProfile, onRetry, thoughts }: { error: string | null; loading: boolean; onOpenActivity: (activityId: number) => void; onOpenProfile: (userId: number) => void; onRetry: () => Promise<void>; thoughts: FriendsCourseThoughts | null }) {
   if (loading) return <View style={styles.disclosureBody}><ActivityIndicator accessibilityLabel="Loading friends’ thoughts" color={colors.pine} /><Text style={styles.emptyText}>Loading friends’ thoughts…</Text></View>
   if (error) return <View style={styles.disclosureBody}><Text accessibilityRole="alert" style={styles.detailError}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void onRetry()}><Text style={styles.retryText}>Retry friends’ thoughts</Text></Pressable></View>
   if (!thoughts || thoughts.rating_count === 0) return <View style={styles.disclosureBody}><Text style={styles.emptyText}>No friends have rated this course yet.</Text></View>
   return <View style={styles.friendsThoughts}>
     <View style={styles.friendAggregate}><Text accessibilityLabel={`Friends rating ${thoughts.average_rating?.toFixed(1)} out of 10`} style={styles.friendAggregateValue}>{thoughts.average_rating?.toFixed(1)}<Text style={styles.ratingScale}>/10</Text></Text><Text style={styles.friendAggregateLabel}>Friends’ rating · {thoughts.rating_count === 1 ? '1 rating' : `${thoughts.rating_count} ratings`}</Text></View>
-    {thoughts.entries.map((entry) => <View key={entry.user.id} style={styles.friendThought}><View style={styles.friendThoughtHeader}><Text style={styles.friendName}>{entry.user.display_name}</Text><Text style={styles.friendRating}>{entry.rating.toFixed(1)}/10 · {titleCase(entry.tier)}</Text></View>{entry.note ? <Text style={styles.friendNote}>{entry.note}</Text> : null}{entry.favorite_hole != null ? <Text style={styles.friendHole}>Favorite hole {entry.favorite_hole}</Text> : null}{entry.activity_id != null ? <Pressable accessibilityRole="button" accessibilityLabel={`Open ${entry.user.display_name}'s shared activity`} onPress={() => onOpenActivity(entry.activity_id)}><Text style={styles.retryText}>View activity</Text></Pressable> : null}</View>)}
+    {thoughts.entries.map((entry) => <View key={entry.user.id} style={styles.friendThought}><View style={styles.friendThoughtHeader}><Pressable accessibilityRole="button" accessibilityLabel={`Open ${entry.user.display_name}'s profile`} onPress={() => onOpenProfile(entry.user.id)}><Text style={styles.friendName}>{entry.user.display_name}</Text></Pressable><Text style={styles.friendRating}>{entry.rating.toFixed(1)}/10 · {titleCase(entry.tier)}</Text></View>{entry.note ? <Text style={styles.friendNote}>{entry.note}</Text> : null}{entry.favorite_hole != null ? <Text style={styles.friendHole}>Favorite hole {entry.favorite_hole}</Text> : null}{entry.activity_id != null ? <Pressable accessibilityRole="button" accessibilityLabel={`Open ${entry.user.display_name}'s shared activity`} onPress={() => onOpenActivity(entry.activity_id)}><Text style={styles.retryText}>View activity</Text></Pressable> : null}</View>)}
   </View>
 }
 type EditableDetail = 'score' | 'note' | 'favorite_hole'

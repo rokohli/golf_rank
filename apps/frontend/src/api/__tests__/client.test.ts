@@ -16,6 +16,7 @@ import {
   getMutedUsers,
   getLinkedContactStatus,
   getProfile,
+  getUserProfile,
   getPlan,
   getPlans,
   getRanking,
@@ -392,13 +393,15 @@ describe('api client', () => {
     await getFeed(headers, 'next page')
     await getFollows(headers)
     await searchUsers('Maya Golfer', headers)
+    await getUserProfile(42, headers)
     await getCourseRegions()
     await setActivityReaction(7, true, headers)
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8000/api/v1/feed?limit=20&cursor=next+page', { headers })
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8000/api/v1/me/follows', { headers })
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:8000/api/v1/users?q=Maya%20Golfer', { headers })
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/course-regions')
-    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/feed/7/reactions/like', { method: 'PUT', headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/users/42', { headers })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/course-regions')
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/feed/7/reactions/like', { method: 'PUT', headers })
   })
 })

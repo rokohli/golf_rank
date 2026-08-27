@@ -69,6 +69,7 @@ Creates an authenticated pending catalog-review candidate with `name`, optional 
 ## Social graph and feed
 
 - `GET /api/v1/users?q=...` searches golfers without exposing provider identities and excludes blocks in either direction.
+- `GET /api/v1/users/{user_id}` returns a public profile summary with relationship state for the authenticated viewer. Blocked users and missing accounts return `404`.
 - `PUT` and `DELETE /api/v1/me/follows/{user_id}` manage one-way follows. Mutual follows are presented as Friends.
 - `GET /api/v1/me/follows` returns followed-user envelopes with `is_mutual`.
 - `PUT /api/v1/me/contacts` replaces or appends bounded batches of contact identifiers, which are canonicalized and stored only as keyed hashes. `GET` returns the authenticated owner's persisted link status and count; `DELETE` removes all of that owner's stored contact hashes.

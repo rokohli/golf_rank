@@ -28,6 +28,7 @@ import {
   RoundSummary,
   SavedList,
   TierPlacement,
+  PublicProfile,
   UserSummary,
   BlockedUser,
   MutedUser,
@@ -354,6 +355,12 @@ export async function deleteLinkedContacts(headers: ApiHeaders): Promise<void> {
 export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSummary[]> {
   const response = await fetch(`${baseUrl}/api/v1/users?q=${encodeURIComponent(query)}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to search golfers. Please try again.')
+  return response.json()
+}
+
+export async function getUserProfile(userId: number, headers: ApiHeaders): Promise<PublicProfile> {
+  const response = await fetch(`${baseUrl}/api/v1/users/${userId}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load this profile. Please try again.')
   return response.json()
 }
 
