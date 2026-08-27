@@ -1,0 +1,31 @@
+appId: com.rokohli.golfrank.dev
+---
+# Flow 2: Phone Setup Screen & SMS Verification Overlay Gate
+- launchApp
+
+# 1. Sign up with email
+- tapOn: "Get Started"
+- tapOn: "Continue with Email"
+- tapOn: "Email"
+- inputText: "newuser@example.com"
+- tapOn: "Password"
+- inputText: "correct horse battery staple"
+- tapOn: "Create Account"
+
+# 2. Phone Gate Overlay appears
+- assertVisible: "Add your phone"
+- assertVisible: "Outside the US? Start with your country code, e.g. +44 7911 123456."
+
+# 3. Enter phone number and send code
+- tapOn: "Phone number"
+- inputText: "(415) 555-0100"
+- tapOn: "Send SMS Code"
+
+# 4. Verify SMS code step
+- assertVisible: "Verify your phone"
+- tapOn: "SMS verification code"
+- inputText: "123456"
+- tapOn: "Verify Phone"
+
+# 5. Gate dismisses cleanly into onboarding/home
+- assertVisible: "Build Your Profile"

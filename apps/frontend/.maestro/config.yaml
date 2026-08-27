@@ -1,0 +1,6 @@
+appId: com.rokohli.golfrank.dev
+---
+# Global Maestro configuration for GolfRank Mobile E2E tests
+env:
+  DEFAULT_TIMEOUT_MS: 15000
+  AUTH_MODE: "development"
