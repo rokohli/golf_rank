@@ -462,7 +462,6 @@ def test_onboarding_rank_seed_is_idempotent_and_skips_complete_courses() -> None
     assert by_id[2]["incomplete"] is False
     assert by_id[2]["tier"] == "green"
 
-
 def test_friend_rankings_uses_canonical_profile_username() -> None:
     """Verify that friend ranking endpoints prefer Profile.username column."""
     app = create_app()
