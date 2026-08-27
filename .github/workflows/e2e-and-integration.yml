@@ -61,8 +61,8 @@ jobs:
         run: |
           export PATH="$HOME/.maestro/bin:$PATH"
           echo "Maestro version: $(maestro --version)"
-          # Run declarative E2E test flows (requires prebuilt .app on simulator)
-          # maestro test apps/frontend/.maestro/flows/
+          echo "::error::No iOS simulator build is wired up yet, so apps/frontend/.maestro/flows/ cannot run. This job intentionally fails instead of reporting a false pass -- see apps/frontend/.maestro/flows/ for the flows that still need a build step (and matching backend test fixtures) before 'maestro test' can run here."
+          exit 1
 
       - name: Upload Maestro Failure Artifacts
         if: failure()
