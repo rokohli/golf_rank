@@ -55,6 +55,14 @@ class UserSummaryOut(BaseModel):
     following_count: int
 
 
+class PublicProfileOut(UserSummaryOut):
+    is_self: bool = False
+    is_following: bool = False
+    is_followed_by: bool = False
+    is_mutual: bool = False
+    is_muted: bool = False
+
+
 class FollowOut(BaseModel):
     user: UserSummaryOut
     is_mutual: bool
@@ -133,9 +141,10 @@ def _summary_out(
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
     display_name = " ".join(item for item in (first_name, last_name) if item).strip()
+    username = profile.username if profile and profile.username else onboarding.get("username")
     return UserSummaryOut(
         id=user.id,
-        username=onboarding.get("username"),
+        username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
         follower_count=follower_count,
@@ -195,14 +204,16 @@ def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[in
 
 def _thought_identity(session: Session, user: User) -> FriendCourseThoughtUserOut:
     preferences = session.get(OnboardingPreference, user.id)
+    profile = session.get(Profile, user.id)
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     display_name = " ".join(
         item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
     ).strip()
+    username = profile.username if profile and profile.username else onboarding.get("username")
     return FriendCourseThoughtUserOut(
         id=user.id,
         display_name=display_name or f"Golfer {user.id}",
-        username=onboarding.get("username"),
+        username=username,
     )
 
 
@@ -407,6 +418,37 @@ def search_users(
         if len(results) == 25:
             break
     return results
+
+
+@router.get("/api/v1/users/{user_id}", response_model=PublicProfileOut)
+def get_user_profile(
+    user_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> PublicProfileOut:
+    viewer = require_user(session, current)
+    if user_id == viewer.id:
+        summary = _summary(session, viewer)
+        return PublicProfileOut(**summary.model_dump(), is_self=True)
+    if user_id in _blocked_ids(session, viewer.id):
+        raise HTTPException(404, "User not found")
+    target = session.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "User not found")
+    followed_ids, _mutual_ids = _relationship_sets(session, viewer.id)
+    muted_ids = _muted_ids(session, viewer.id)
+    summary = _summary(session, target)
+    is_following = user_id in followed_ids
+    is_followed_by = session.scalar(
+        select(Follow.id).where(Follow.follower_id == user_id, Follow.followed_id == viewer.id)
+    ) is not None
+    return PublicProfileOut(
+        **summary.model_dump(),
+        is_following=is_following,
+        is_followed_by=is_followed_by,
+        is_mutual=is_following and is_followed_by,
+        is_muted=user_id in muted_ids,
+    )
 
 
 @router.put("/api/v1/me/follows/{target_user_id}", response_model=FollowOut)

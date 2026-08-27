@@ -331,6 +331,48 @@ def test_user_search_does_not_expose_provider_subjects() -> None:
     assert "provider_subject" not in result.json()[0]
 
 
+def test_get_user_profile_returns_summary_and_relationship() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:profile-view-alice", "Alice", "profileviewalice")
+    bob = _profile(client, "dev:profile-view-bob", "Bob", "profileviewbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "profileviewbob"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "profileviewalice"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    profile = client.get(f"/api/v1/users/{bob_id}", headers=alice).json()
+    assert profile["id"] == bob_id
+    assert profile["display_name"] == "Bob Golfer"
+    assert profile["username"] == "profileviewbob"
+    assert profile["is_self"] is False
+    assert profile["is_following"] is True
+    assert profile["is_followed_by"] is False
+    assert profile["is_mutual"] is False
+    assert profile["is_muted"] is False
+
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    mutual = client.get(f"/api/v1/users/{bob_id}", headers=alice).json()
+    assert mutual["is_mutual"] is True
+    assert mutual["is_followed_by"] is True
+
+
+def test_get_user_profile_self_and_blocked() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:profile-self-alice", "Alice", "profileselfalice")
+    bob = _profile(client, "dev:profile-self-bob", "Bob", "profileselfbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "profileselfbob"}).json()[0]["id"]
+    with client.app.state.session_factory() as session:
+        alice_id = session.scalar(select(User.id).where(User.provider_subject == "dev:profile-self-alice"))
+        assert alice_id is not None
+
+    self_profile = client.get(f"/api/v1/users/{alice_id}", headers=alice).json()
+    assert self_profile["is_self"] is True
+    assert self_profile["is_following"] is False
+
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.get(f"/api/v1/users/{bob_id}", headers=alice).status_code == 404
+    assert client.get("/api/v1/users/999999", headers=alice).status_code == 404
+
+
 def test_legacy_profile_visibility_is_ignored_for_search_and_shared_posts() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:privacy-alice", "Alice", "privacyalice")
@@ -933,3 +975,26 @@ def test_notification_actor_summary_queries_do_not_scale_with_page_size() -> Non
     assert full["items"][0]["actor"]["follower_count"] == 1
     assert full["items"][0]["actor"]["following_count"] == 1
     assert full["items"][0]["is_following"] is True
+
+
+def test_canonical_profile_username_is_used_in_social_summaries() -> None:
+    """Verify that Profile.username is preferred in user summaries and search."""
+    app = create_app()
+    client = TestClient(app)
+    viewer_headers = {"X-Development-Subject": "dev:searcher-viewer"}
+
+    with app.state.session_factory() as session:
+        target = User(provider_subject="dev:canonical-user")
+        viewer = User(provider_subject="dev:searcher-viewer")
+        session.add_all([target, viewer])
+        session.flush()
+        session.add(Profile(user_id=target.id, home_region="Monterey, CA", username="canonical_handle"))
+        session.commit()
+
+    search = client.get("/api/v1/users", headers=viewer_headers, params={"q": "canonical_handle"})
+    assert search.status_code == 200
+    results = search.json()
+    assert len(results) == 1
+    assert results[0]["username"] == "canonical_handle"
+    assert results[0]["id"] == target.id
+

@@ -158,6 +158,14 @@ export type UserSummary = FriendSummary & {
   following_count: number
 }
 
+export type PublicProfile = UserSummary & {
+  is_self: boolean
+  is_following: boolean
+  is_followed_by: boolean
+  is_mutual: boolean
+  is_muted: boolean
+}
+
 export type Follow = {
   user: UserSummary
   is_mutual: boolean

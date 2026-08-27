@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native'
 import { getActivity } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { ProductScreen, ScreenHeader } from '../../src/components/ProductUI'
+import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { Activity } from '../../src/types'
 
 export default function ActivityDetail() {
@@ -33,6 +34,6 @@ export default function ActivityDetail() {
   return <><Stack.Screen options={{ headerShown: false }} /><ProductScreen><ScreenHeader title="Friend activity" onBack={() => router.back()} />
     {!activity && !error ? <ActivityIndicator accessibilityLabel="Loading activity" /> : null}
     {error ? <View><Text accessibilityRole="alert">{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()}><Text>Retry activity</Text></Pressable></View> : null}
-    {activity ? <View><Text>{activity.actor.display_name}</Text><Text>{activity.event_type === 'course_rated' ? 'rated' : 'played'} {activity.course?.name ?? 'a course'}</Text>{typeof activity.data.rating === 'number' ? <Text>{activity.data.rating.toFixed(1)}/10</Text> : null}</View> : null}
+    {activity ? <View><Pressable accessibilityRole="button" accessibilityLabel={`Open ${activity.actor.display_name}'s profile`} onPress={() => openUserProfile(router, activity.actor.id)}><Text>{activity.actor.display_name}</Text></Pressable><Text>{activity.event_type === 'course_rated' ? 'rated' : 'played'} {activity.course?.name ?? 'a course'}</Text>{typeof activity.data.rating === 'number' ? <Text>{activity.data.rating.toFixed(1)}/10</Text> : null}</View> : null}
   </ProductScreen></>
 }
