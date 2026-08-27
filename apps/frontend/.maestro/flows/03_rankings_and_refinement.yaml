@@ -1,0 +1,28 @@
+appId: com.rokohli.golfrank.dev
+---
+# Flow 3: Rankings View, Incomplete Badges & Pairwise Refinement Modal
+- launchApp
+
+# 1. Navigate to Rankings tab
+- tapOn: "Rankings"
+- assertVisible: "MY COURSES"
+
+# 2. Tap incomplete course badge / card to rate it
+- tapOn:
+    text: "From onboarding · tap to rate this course"
+- assertVisible: "Rate Round"
+- tapOn: "Green"
+- tapOn: "Save Rating"
+
+# 3. Open Pairwise Refinement
+- assertVisible: "Refine my rankings"
+- tapOn: "Refine my rankings"
+
+# 4. Refinement duel choice
+- assertVisible: "Which would you play again?"
+- tapOn:
+    text: "CURRENTLY #.*"
+
+# 5. Dismiss refinement modal
+- tapOn: "Close ranking refinement"
+- assertVisible: "MY COURSES"

@@ -461,3 +461,28 @@ def test_onboarding_rank_seed_is_idempotent_and_skips_complete_courses() -> None
     by_id = {entry["course"]["id"]: entry for entry in again["entries"]}
     assert by_id[2]["incomplete"] is False
     assert by_id[2]["tier"] == "green"
+
+def test_friend_rankings_uses_canonical_profile_username() -> None:
+    """Verify that friend ranking endpoints prefer Profile.username column."""
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        u1 = User(provider_subject="dev:friend-u1")
+        u2 = User(provider_subject="dev:friend-u2")
+        session.add_all([u1, u2])
+        session.flush()
+        session.add(Profile(user_id=u2.id, home_region="Monterey, CA", username="canonical_friend"))
+        session.add_all([
+            Follow(follower_id=u1.id, followed_id=u2.id),
+            Follow(follower_id=u2.id, followed_id=u1.id),
+        ])
+        session.commit()
+
+    headers = {"X-Development-Subject": "dev:friend-u1"}
+    res = client.get("/api/v1/me/rankings/friends", headers=headers)
+    assert res.status_code == 200
+    friends = res.json()
+    assert len(friends) == 1
+    assert friends[0]["user"]["username"] == "canonical_friend"
+

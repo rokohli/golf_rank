@@ -1,0 +1,27 @@
+appId: com.rokohli.golfrank.dev
+---
+# Flow 4: Friends List, Search & Mute/Block Actions
+- launchApp
+
+# 1. Open Friends screen from Rankings header
+- tapOn: "Rankings"
+- tapOn: "Manage friends"
+- assertVisible: "Following"
+
+# 2. Search for golfers
+- tapOn: "Search golfers"
+- inputText: "Bob"
+- assertVisible: "Follow"
+- tapOn: "Follow"
+- assertVisible: "Following"
+
+# 3. Open Options menu for a followed golfer
+- tapOn:
+    text: "More options for .*"
+- assertVisible: "Mute"
+- assertVisible: "Block"
+
+# 4. Cancel confirmation modal
+- tapOn: "Mute"
+- assertVisible: "Cancel"
+- tapOn: "Cancel"

@@ -1,0 +1,50 @@
+appId: com.rokohli.golfrank.dev
+---
+# Flow 1: Onboarding Profile Creation & Real-Time Username Check
+- launchApp:
+    clearState: true
+
+- assertVisible: "Build Your Profile"
+
+# 1. Fill profile names
+- tapOn: "First Name"
+- inputText: "Alice"
+- tapOn: "Last Name"
+- inputText: "Walker"
+
+# 2. Test taken username error state
+- tapOn: "Username"
+- inputText: "taken_user"
+- assertVisible: "That username is already taken."
+
+# 3. Enter unique username
+- eraseText
+- inputText: "alice_golfs"
+- assertVisible: "Continue"
+- tapOn: "Continue"
+
+# 4. Home course search step
+- assertVisible: "What's your home course?"
+- tapOn: "Search courses"
+- inputText: "Pebble"
+- tapOn: "Pebble Beach Golf Links Monterey, CA"
+- tapOn: "Continue"
+
+# 5. Played courses step
+- assertVisible: "Which courses have you played?"
+- tapOn: "Search courses you've played"
+- inputText: "Spyglass"
+- tapOn: "Spyglass Hill Golf Course Monterey, CA"
+- tapOn:
+    text: "Continue with .* selected"
+
+# 6. Head-to-Head ranking duel step
+- assertVisible: "Which would you rather play again?"
+- tapOn:
+    text: "Choose .*"
+
+# 7. Complete remaining steps and land on Home
+- tapOn: "Skip for now"
+- tapOn: "Continue"
+- tapOn: "Explore Home"
+- assertVisible: "Featured Courses"

@@ -131,10 +131,11 @@ def _friend_identity(session: Session, user: User) -> FriendRankingUserOut:
     display_name = " ".join(
         value for value in (onboarding.get("first_name"), onboarding.get("last_name")) if value
     ).strip()
+    username = profile.username if profile and profile.username else onboarding.get("username")
     return FriendRankingUserOut(
         id=user.id,
         display_name=display_name or f"Golfer {user.id}",
-        username=onboarding.get("username"),
+        username=username,
         home_region=profile.home_region if profile else None,
     )
 
@@ -663,6 +664,7 @@ def place_in_tiers(
 
     stored = _stored_user(session, user, create=True)
     assert stored is not None
+    _lock_user_for_ranking_update(session, stored.id)
     for placement, course_id in placements:
         assignment = session.scalar(
             select(TierAssignment).where(

@@ -1,0 +1,30 @@
+name: E2E and Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-integration:
+    name: Backend Migrations & Concurrency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv and dependencies
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          cd services/api
+          uv sync --extra dev
+
+      - name: Run Backend Integration Tests
+        run: |
+          cd services/api
+          uv run pytest tests/test_migration_lifecycle.py tests/test_concurrency_locks.py tests/test_contract_drift.py -v
