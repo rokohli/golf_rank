@@ -3,7 +3,9 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start",
+    "start": "expo start --localhost",
+    "start:lan": "expo start --lan",
+    "start:ios": "expo start --localhost --ios",
     "test": "jest"
   },
   "dependencies": {

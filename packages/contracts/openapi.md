@@ -11,10 +11,14 @@ Development-only authorization: `X-Development-Subject: dev:<subject>`.
 Request body:
 
 ```json
-{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"pebble","home_course_search":"Pebble Beach Golf Links","played_course_ids":["pebble"],"favorite_wins":["pebble"],"dream_course_ids":["bandon"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true,"default_round_visibility":"friends"}}
+{"home_region":"Monterey, CA","max_green_fee":250,"difficulty":"challenging","access":"public","onboarding_data":{"first_name":"Alice","last_name":"Golfer","username":"alice","home_course_id":"12","home_course_search":"Pebble Beach Golf Links","played_course_ids":["12"],"favorite_wins":["12"],"dream_course_ids":["15"],"friend_search":"","preferences":["Scenic views"],"group_size":"Foursome","budget":"$$$","travel_distance":"Up to 45 minutes","preferred_tee_time":"Weekend mornings","transportation":"Cart","notifications":true,"default_round_visibility":"friends"}}
 ```
 
-Returns the validated preference object. `onboarding_data` is optional for backward compatibility and stores the complete onboarding snapshot when supplied. Invalid fields return `422`; missing development identity returns `401`.
+Returns the validated preference object. `onboarding_data` is optional for backward compatibility and stores the complete onboarding snapshot when supplied. Usernames are normalized to lowercase and must be unique across profiles; conflicts return `409`. Invalid fields return `422`; missing development identity returns `401`.
+
+## `GET /api/v1/usernames/available`
+
+Authenticated username availability check. Query parameter: `username`. Returns `{"available":true,"username":"alice"}` after normalization. The current user's own username counts as available. Invalid usernames return `422`.
 
 ## `GET /api/v1/me/profile`
 

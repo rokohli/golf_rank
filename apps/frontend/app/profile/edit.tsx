@@ -58,7 +58,7 @@ export default function EditProfile() {
   const save = async () => {
     const normalizedFirst = firstName.trim()
     const normalizedLast = lastName.trim()
-    const normalizedUsername = username.trim().replace(/^@+/, '')
+    const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase()
     const normalizedRegion = homeRegion.trim()
     if ([normalizedFirst, normalizedLast, normalizedUsername, normalizedRegion].some((value) => value.length < 2)) {
       setError('Complete each profile field before saving.')
@@ -83,12 +83,23 @@ export default function EditProfile() {
           username: normalizedUsername,
         },
       }
-      const tasks: Promise<unknown>[] = [
-        updateUserProfile({ firstName: normalizedFirst, lastName: normalizedLast, username: normalizedUsername }),
-        getAuthHeaders().then((headers) => savePreferences(nextProfile, headers)),
-      ]
-      if (pendingImageUri) tasks.push(updateProfileImage(pendingImageUri))
-      await Promise.all(tasks)
+      await savePreferences(nextProfile, await getAuthHeaders())
+      // The backend save above is the source of truth and has already committed —
+      // a failure past this point must not be reported as "unable to save", since
+      // that would be false and would invite a confusing, unnecessary retry.
+      try {
+        await updateUserProfile({
+          firstName: normalizedFirst,
+          lastName: normalizedLast,
+          username: nextProfile.onboarding_data.username,
+        })
+        if (pendingImageUri) await updateProfileImage(pendingImageUri)
+      } catch (reason) {
+        // No background retry exists — the only way this actually gets retried is
+        // the user pressing Save again, so don't promise more than that.
+        setError(message(reason, 'Your profile was saved, but syncing your name and photo to your account failed. Tap Save changes to try again.'))
+        return
+      }
       router.back()
     } catch (reason) {
       setError(message(reason, 'Unable to save your profile. Please try again.'))

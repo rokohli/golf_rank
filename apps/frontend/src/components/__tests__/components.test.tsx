@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import * as SecureStore from 'expo-secure-store'
 
 import { CourseList } from '../CourseList'
 import { OnboardingForm } from '../OnboardingForm'
 import { CourseCard } from '../ProductUI'
+import { Course } from '../../types'
 
 jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn().mockResolvedValue(undefined),
@@ -11,12 +12,50 @@ jest.mock('expo-secure-store', () => ({
   setItemAsync: jest.fn().mockResolvedValue(undefined),
 }))
 
+const pasatiempo: Course = {
+  id: 11,
+  name: 'Pasatiempo Golf Club',
+  region: 'Santa Cruz, CA',
+  green_fee: 410,
+  difficulty: 'challenging',
+  is_public: true,
+  city: 'Santa Cruz',
+  admin1_code: 'CA',
+}
+
+const pebble: Course = {
+  id: 12,
+  name: 'Pebble Beach Golf Links',
+  region: 'Monterey, CA',
+  green_fee: 675,
+  difficulty: 'challenging',
+  is_public: true,
+  city: 'Monterey',
+  admin1_code: 'CA',
+}
+
+const spyglass: Course = {
+  id: 13,
+  name: 'Spyglass Hill Golf Course',
+  region: 'Pebble Beach, CA',
+  green_fee: 495,
+  difficulty: 'challenging',
+  is_public: true,
+  city: 'Pebble Beach',
+  admin1_code: 'CA',
+}
+
 describe('OnboardingForm', () => {
-  it('guides users through the premium onboarding flow and submits mapped preferences', async () => {
+  it('guides users through catalog-backed onboarding and submits mapped preferences', async () => {
+    jest.useFakeTimers()
     const submit = jest.fn().mockResolvedValue(undefined)
     const onComplete = jest.fn()
+    const searchCourses = jest.fn(async (query: string) => {
+      const normalized = query.toLowerCase()
+      return [pasatiempo, pebble, spyglass].filter((course) => course.name.toLowerCase().includes(normalized))
+    })
 
-    render(<OnboardingForm submit={submit} onComplete={onComplete} />)
+    render(<OnboardingForm searchCourses={searchCourses} submit={submit} onComplete={onComplete} />)
 
     expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
 
@@ -30,16 +69,30 @@ describe('OnboardingForm', () => {
     })
 
     expect(await screen.findByText("What's your home course?")).toBeOnTheScreen()
-    fireEvent.changeText(screen.getByLabelText('Home course'), 'Pasatiempo')
-    fireEvent.press(screen.getByRole('button', { name: 'Pasatiempo Golf Club Santa Cruz, CA' }))
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Pas')
+    await act(async () => {
+      jest.advanceTimersByTime(300)
+    })
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Pas'))
+    fireEvent.press(await screen.findByRole('button', { name: 'Pasatiempo Golf Club Santa Cruz, CA' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
-    fireEvent.press(screen.getByRole('button', { name: 'Pebble Beach Golf Links Monterey, CA' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Spyglass Hill Golf Course Pebble Beach, CA' }))
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Peb')
+    await act(async () => {
+      jest.advanceTimersByTime(300)
+    })
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Peb'))
+    fireEvent.press(await screen.findByRole('button', { name: 'Pebble Beach Golf Links Monterey, CA' }))
+
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Spy')
+    await act(async () => {
+      jest.advanceTimersByTime(300)
+    })
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledWith('Spy'))
+    fireEvent.press(await screen.findByRole('button', { name: 'Spyglass Hill Golf Course Pebble Beach, CA' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue with 2 selected' }))
 
     fireEvent.press(screen.getByRole('button', { name: /Choose Pebble Beach Golf Links/ }))
-    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
 
@@ -65,9 +118,9 @@ describe('OnboardingForm', () => {
           first_name: 'Rohan',
           last_name: 'Kohli',
           username: 'rohank',
-          home_course_id: 'pasatiempo',
-          played_course_ids: ['pebble', 'spyglass'],
-          favorite_wins: ['pebble'],
+          home_course_id: '11',
+          played_course_ids: ['12', '13'],
+          favorite_wins: ['12'],
           preferences: ['Scenic views', 'Public courses'],
           group_size: 'Foursome',
           budget: '$$$',
@@ -77,6 +130,8 @@ describe('OnboardingForm', () => {
       })
       expect(onComplete).toHaveBeenCalledWith('profile')
     })
+
+    jest.useRealTimers()
   })
 })
 

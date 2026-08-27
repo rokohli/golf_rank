@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import Index from '../index'
 import { ApiResponseError } from '../../src/api/client'
 
+const mockSignOut = jest.fn()
 const mockGetProfile = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
@@ -29,6 +30,7 @@ jest.mock('../../src/api/client', () => ({
 jest.mock('../../src/auth/AuthProvider', () => ({
   useAuthGate: () => ({
     returnToGetStarted: jest.fn(() => false),
+    signOut: (...args: unknown[]) => mockSignOut(...args),
     updateUserProfile: jest.fn(),
   }),
 }))
@@ -38,8 +40,17 @@ jest.mock('../../src/auth/useAuthToken', () => ({
 }))
 
 jest.mock('../../src/components/OnboardingForm', () => {
-  const { Text } = require('react-native')
-  return { OnboardingForm: () => <Text>Onboarding form</Text> }
+  const { Pressable, Text } = require('react-native')
+  return {
+    OnboardingForm: ({ onExit }: { onExit?: () => void }) => (
+      <>
+        <Text>Onboarding form</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={onExit}>
+          <Text>Back</Text>
+        </Pressable>
+      </>
+    ),
+  }
 })
 
 describe('startup profile routing', () => {
@@ -72,6 +83,18 @@ describe('startup profile routing', () => {
 
     expect(await screen.findByText('Onboarding form')).toBeOnTheScreen()
     expect(mockReplace).not.toHaveBeenCalled()
+  })
+
+  it('signs out from the first onboarding step when there is no navigation history', async () => {
+    mockGetProfile.mockRejectedValue(new ApiResponseError('Profile not found', 404))
+
+    render(<Index />)
+
+    expect(await screen.findByText('Onboarding form')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
+
+    expect(mockSignOut).toHaveBeenCalled()
+    expect(mockRouter.back).not.toHaveBeenCalled()
   })
 
   it('does not mistake a temporary profile error for a new account', async () => {

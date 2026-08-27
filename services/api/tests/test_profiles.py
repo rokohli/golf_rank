@@ -16,7 +16,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
             "onboarding_data": {
                 "first_name": "Alice",
                 "last_name": "Golfer",
-                "username": "alice",
+                "username": "Alice",
                 "home_course_id": "pebble",
                 "home_course_search": "Pebble Beach Golf Links",
                 "played_course_ids": ["pebble"],
@@ -38,6 +38,7 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     assert response.status_code == 200
     assert response.json()["home_region"] == "Monterey, CA"
     assert response.json()["onboarding_data"]["played_course_ids"] == ["pebble"]
+    assert response.json()["onboarding_data"]["username"] == "alice"
     assert "profile_visibility" not in response.json()["onboarding_data"]
     assert response.json()["onboarding_data"]["default_round_visibility"] == "private"
 
@@ -60,6 +61,66 @@ def test_onboarding_upserts_current_user_preferences() -> None:
     )
     assert legacy_update.status_code == 200
     assert legacy_update.json()["onboarding_data"]["dream_course_ids"] == ["bandon"]
+
+
+def test_usernames_are_unique_across_profiles() -> None:
+    client = TestClient(create_app())
+    payload = {
+        "home_region": "Monterey, CA",
+        "max_green_fee": 250,
+        "difficulty": "any",
+        "access": "any",
+        "onboarding_data": {
+            "first_name": "Alice",
+            "last_name": "Golfer",
+            "username": "fairway_ace",
+            "home_course_search": "Pebble Beach",
+            "travel_distance": "Any",
+            "preferred_tee_time": "Morning",
+        },
+    }
+    assert client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers={"X-Development-Subject": "dev:alice-unique"},
+        json=payload,
+    ).status_code == 200
+
+    duplicate = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers={"X-Development-Subject": "dev:bob-unique"},
+        json={
+            **payload,
+            "onboarding_data": {
+                **payload["onboarding_data"],
+                "first_name": "Bob",
+                "username": "Fairway_Ace",
+            },
+        },
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "That username is already taken."
+
+    available = client.get(
+        "/api/v1/usernames/available",
+        headers={"X-Development-Subject": "dev:bob-unique"},
+        params={"username": "Fairway_Ace"},
+    )
+    assert available.status_code == 200
+    assert available.json() == {"available": False, "username": "fairway_ace"}
+
+    own = client.get(
+        "/api/v1/usernames/available",
+        headers={"X-Development-Subject": "dev:alice-unique"},
+        params={"username": "@fairway_ace"},
+    )
+    assert own.status_code == 200
+    assert own.json() == {"available": True, "username": "fairway_ace"}
+
+    assert client.get(
+        "/api/v1/usernames/available",
+        headers={"X-Development-Subject": "dev:bob-unique"},
+        params={"username": "new_golfer"},
+    ).json() == {"available": True, "username": "new_golfer"}
 
 
 def test_profile_is_scoped_to_current_user() -> None:

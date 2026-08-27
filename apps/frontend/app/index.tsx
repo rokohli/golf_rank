@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
-import { ApiResponseError, getProfile, savePreferences } from '../src/api/client'
+import { ApiResponseError, checkUsernameAvailable, getProfile, savePreferences, searchCourses } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { OnboardingForm } from '../src/components/OnboardingForm'
@@ -13,7 +13,7 @@ type ProfileState = 'checking' | 'needs-onboarding' | 'error'
 
 export default function Index() {
   const router = useRouter()
-  const { returnToGetStarted, updateUserProfile } = useAuthGate()
+  const { returnToGetStarted, signOut, updateUserProfile } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
   const [profileState, setProfileState] = useState<ProfileState>('checking')
 
@@ -37,8 +37,27 @@ export default function Index() {
 
   const goBack = () => {
     if (returnToGetStarted()) return
-    if (router.canGoBack()) router.back()
+    if (router.canGoBack()) {
+      router.back()
+      return
+    }
+    void signOut()
   }
+
+  const checkUsername = useCallback(
+    async (username: string) => checkUsernameAvailable(username, await getAuthHeaders()),
+    [getAuthHeaders],
+  )
+
+  const searchOnboardingCourses = useCallback(
+    (query: string) => searchCourses({ q: query, limit: 20 }),
+    [],
+  )
+
+  const submitOnboarding = useCallback(
+    async (input: Parameters<typeof savePreferences>[0]) => savePreferences(input, await getAuthHeaders()),
+    [getAuthHeaders],
+  )
 
   if (profileState === 'checking') {
     return (
@@ -76,7 +95,9 @@ export default function Index() {
           contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingBottom: 18 }}
         >
           <OnboardingForm
-            submit={async (input) => savePreferences(input, await getAuthHeaders())}
+            searchCourses={searchOnboardingCourses}
+            checkUsername={checkUsername}
+            submit={submitOnboarding}
             saveProfile={updateUserProfile}
             onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}

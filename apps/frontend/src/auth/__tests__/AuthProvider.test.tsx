@@ -9,8 +9,6 @@ const mockSignInCreate = jest.fn()
 const mockAttemptFirstFactor = jest.fn()
 const mockResetPassword = jest.fn()
 const mockSignUpCreate = jest.fn()
-const mockPrepareEmailAddressVerification = jest.fn()
-const mockAttemptEmailAddressVerification = jest.fn()
 let mockUrlListener: ((event: { url: string }) => void) | null = null
 
 jest.mock('@clerk/expo', () => ({
@@ -19,7 +17,7 @@ jest.mock('@clerk/expo', () => ({
     when === 'signed-out' ? <>{children}</> : null,
   useAuth: () => ({ signOut: jest.fn() }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
-  useUser: () => ({ user: null }),
+  useUser: () => ({ isLoaded: true, isSignedIn: false, user: null }),
 }))
 
 jest.mock('@clerk/expo/legacy', () => ({
@@ -36,9 +34,7 @@ jest.mock('@clerk/expo/legacy', () => ({
     isLoaded: true,
     setActive: mockSetActive,
     signUp: {
-      attemptEmailAddressVerification: mockAttemptEmailAddressVerification,
       create: mockSignUpCreate,
-      prepareEmailAddressVerification: mockPrepareEmailAddressVerification,
     },
   }),
 }))
@@ -49,6 +45,12 @@ jest.mock('@clerk/expo/token-cache', () => ({
 
 jest.mock('expo-auth-session', () => ({
   makeRedirectUri: jest.fn(() => 'golfrank://sso-callback'),
+}))
+
+jest.mock('expo-router', () => ({
+  useRouter: () => ({
+    replace: jest.fn(),
+  }),
 }))
 
 jest.mock('expo-linking', () => ({
@@ -364,12 +366,10 @@ describe('AuthProvider', () => {
     })
   })
 
-  it('creates a Clerk email and password account and completes email code verification', async () => {
+  it('creates a Clerk email and password account without email OTP', async () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
-    mockSignUpCreate.mockResolvedValue({ createdSessionId: null })
-    mockPrepareEmailAddressVerification.mockResolvedValue(undefined)
-    mockAttemptEmailAddressVerification.mockResolvedValue({ createdSessionId: 'sess_new' })
+    mockSignUpCreate.mockResolvedValue({ createdSessionId: 'sess_new' })
 
     render(
       <AuthProvider>
@@ -381,9 +381,11 @@ describe('AuthProvider', () => {
     expect(screen.getAllByText('Create Account').length).toBeGreaterThan(0)
     expect(screen.queryByLabelText('Full Name')).not.toBeOnTheScreen()
     expect(screen.queryByLabelText('Username')).not.toBeOnTheScreen()
+    expect(screen.queryByLabelText('Phone number')).not.toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
     fireEvent.changeText(screen.getByLabelText('Email'), 'new@example.com')
     fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
+    expect(screen.queryByLabelText('Phone number')).not.toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Create Account' }))
 
     await waitFor(() => {
@@ -393,15 +395,39 @@ describe('AuthProvider', () => {
         password: 'correct horse battery staple',
         username: expect.stringMatching(/^golfer_/),
       }))
-      expect(mockPrepareEmailAddressVerification).toHaveBeenCalledWith({ strategy: 'email_code' })
-    })
-
-    fireEvent.changeText(screen.getByLabelText('Verification code'), '123456')
-    fireEvent.press(screen.getByRole('button', { name: 'Verify Email' }))
-
-    await waitFor(() => {
-      expect(mockAttemptEmailAddressVerification).toHaveBeenCalledWith({ code: '123456' })
+      expect(mockSignUpCreate.mock.calls[0][0].phoneNumber).toBeUndefined()
       expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_new' })
     })
+
+    expect(screen.queryByLabelText('Verification code')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Verify Email' })).toBeNull()
+  })
+
+  it('explains when Clerk still requires a phone number at sign-up', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockSignUpCreate.mockResolvedValue({
+      createdSessionId: null,
+      missingFields: ['phone_number'],
+      requiredFields: ['email_address', 'phone_number', 'password'],
+      status: 'missing_requirements',
+      unverifiedFields: [],
+    })
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Get Started' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+    fireEvent.changeText(screen.getByLabelText('Email'), 'new@example.com')
+    fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
+    fireEvent.press(screen.getByRole('button', { name: 'Create Account' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Clerk still requires a phone number at sign-up. In the Clerk dashboard, open User & authentication → Phone and set phone to optional (we collect and verify it after account creation).',
+    )
   })
 })

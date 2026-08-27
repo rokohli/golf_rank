@@ -15,6 +15,14 @@ export function contactIdentifiers(contacts: ContactIdentifiers[]): string[] {
   return [...new Set(identifiers.filter((value): value is string => Boolean(value)))]
 }
 
+/** Normalize a user-entered phone into E.164 for Clerk account signup. */
+export function normalizeAccountPhone(value: string, defaultCountry: CountryCode = 'US'): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = parsePhoneNumberFromString(trimmed, defaultCountry)
+  return parsed?.isValid() ? parsed.number : null
+}
+
 function normalizePhoneNumber(phone: NonNullable<Contact['phoneNumbers']>[number]): string | null {
   const value = phone.number?.trim() || phone.digits?.trim()
   if (!value) return null

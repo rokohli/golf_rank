@@ -292,6 +292,7 @@ export type RankedCourse = {
   personal_rating: number
   confidence: number
   confidence_label: 'low' | 'medium' | 'high'
+  incomplete?: boolean
   round_count: number
   best_score: number | null
 }

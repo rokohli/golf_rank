@@ -61,6 +61,16 @@ export async function savePreferences(input: OnboardingPreferences, headers: Api
   if (!response.ok) throw await responseError(response, 'Unable to save preferences. Please try again.')
 }
 
+export async function checkUsernameAvailable(
+  username: string,
+  headers: ApiHeaders,
+): Promise<{ available: boolean; username: string }> {
+  const params = new URLSearchParams({ username })
+  const response = await fetch(`${baseUrl}/api/v1/usernames/available?${params}`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to check that username. Please try again.')
+  return response.json()
+}
+
 export async function getProfile(headers: ApiHeaders): Promise<OnboardingPreferences> {
   const response = await fetch(`${baseUrl}/api/v1/me/profile`, {
     headers,

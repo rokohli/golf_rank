@@ -62,16 +62,24 @@ def verified_identifiers(current: CurrentUser, settings: Settings) -> tuple[str,
     return _verified_identifiers(response.json())
 
 
+def _verification_status(entry: dict) -> str | None:
+    verification = entry.get("verification")
+    if not isinstance(verification, dict):
+        return None
+    status = verification.get("status")
+    return status if isinstance(status, str) else None
+
+
 def _verified_identifiers(user: dict) -> tuple[str, ...]:
     """Extract only verified identifiers returned by Clerk's Backend API."""
     identifiers: list[str] = []
     for email in user.get("email_addresses", []):
-        if isinstance(email, dict) and email.get("verification", {}).get("status") == "verified":
+        if isinstance(email, dict) and _verification_status(email) == "verified":
             value = email.get("email_address")
             if isinstance(value, str):
                 identifiers.append(value)
     for phone in user.get("phone_numbers", []):
-        if isinstance(phone, dict) and phone.get("verification", {}).get("status") == "verified":
+        if isinstance(phone, dict) and _verification_status(phone) == "verified":
             value = phone.get("phone_number")
             if isinstance(value, str):
                 identifiers.append(value)

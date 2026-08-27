@@ -107,6 +107,8 @@ def test_only_verified_clerk_contact_identifiers_are_extracted_from_backend_user
         "phone_numbers": [{"phone_number": "+14155551212", "verification": {"status": "verified"}}],
     }) == ("golfer@example.com", "+14155551212")
     assert _verified_identifiers({"email_addresses": [{"email_address": "unverified@example.com", "verification": {"status": "unverified"}}]}) == ()
+    assert _verified_identifiers({"email_addresses": [{"email_address": "pending@example.com", "verification": None}]}) == ()
+    assert _verified_identifiers({"phone_numbers": [{"phone_number": "+14155550000", "verification": None}]}) == ()
 
 
 def test_verified_identifiers_load_from_clerk_backend_api() -> None:

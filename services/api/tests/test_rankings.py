@@ -380,3 +380,84 @@ def test_legacy_snapshot_tiers_are_adapted_without_rewriting_history() -> None:
         assert [entry["tier"] for entry in stored.ranking_data["entries"]] == list(
             legacy_tiers
         )
+
+
+def _onboarding_payload(*, played: list[str], wins: list[str], username: str = "rankseed") -> dict:
+    return {
+        "home_region": "Monterey, CA",
+        "max_green_fee": 250,
+        "difficulty": "challenging",
+        "access": "public",
+        "onboarding_data": {
+            "first_name": "Rank",
+            "last_name": "Seeder",
+            "username": username,
+            "home_course_id": played[0],
+            "home_course_search": "Pebble Beach Golf Links",
+            "played_course_ids": played,
+            "favorite_wins": wins,
+            "dream_course_ids": [],
+            "preferences": ["Scenic views"],
+            "group_size": "Foursome",
+            "budget": "$$$",
+            "travel_distance": "Up to 45 minutes",
+            "preferred_tee_time": "Weekend mornings",
+            "transportation": "Cart",
+            "notifications": True,
+            "default_round_visibility": "private",
+        },
+    }
+
+
+def test_onboarding_head_to_head_courses_seed_incomplete_rankings() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-rank-seed"}
+    saved = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json=_onboarding_payload(played=["1", "2", "3"], wins=["2"], username="onboardrank"),
+    )
+    assert saved.status_code == 200
+
+    ranking = client.get("/api/v1/me/rankings", headers=headers)
+    assert ranking.status_code == 200
+    entries = ranking.json()["entries"]
+    # Only the head-to-head pair (1 vs 2) is seeded; course 3 was played but not compared.
+    assert [entry["course"]["id"] for entry in entries] == [2, 1]
+    assert all(entry["incomplete"] for entry in entries)
+    assert all(entry["tier"] == "fairway" for entry in entries)
+
+    rated = client.put(
+        "/api/v1/me/course-ratings/2",
+        headers=headers,
+        json={"tier": "green", "played_on": "2026-07-01", "score": 80},
+    )
+    assert rated.status_code == 200
+    assert rated.json()["personal_rating"] is not None
+    ranking = client.get("/api/v1/me/rankings", headers=headers).json()
+    by_id = {entry["course"]["id"]: entry for entry in ranking["entries"]}
+    assert by_id[2]["incomplete"] is False
+    assert by_id[2]["tier"] == "green"
+    assert by_id[1]["incomplete"] is True
+
+
+def test_onboarding_rank_seed_is_idempotent_and_skips_complete_courses() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-rank-idempotent"}
+    payload = _onboarding_payload(played=["1", "2"], wins=["2"], username="idempotentseed")
+    assert client.put("/api/v1/me/onboarding-preferences", headers=headers, json=payload).status_code == 200
+    first = client.get("/api/v1/me/rankings", headers=headers).json()
+    second = client.get("/api/v1/me/rankings", headers=headers).json()
+    assert first["version"] == second["version"]
+    assert [entry["course"]["id"] for entry in first["entries"]] == [2, 1]
+
+    assert client.put(
+        "/api/v1/me/course-ratings/2",
+        headers=headers,
+        json={"tier": "green", "played_on": "2026-07-01", "score": 80},
+    ).status_code == 200
+    assert client.put("/api/v1/me/onboarding-preferences", headers=headers, json=payload).status_code == 200
+    again = client.get("/api/v1/me/rankings", headers=headers).json()
+    by_id = {entry["course"]["id"]: entry for entry in again["entries"]}
+    assert by_id[2]["incomplete"] is False
+    assert by_id[2]["tier"] == "green"

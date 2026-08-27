@@ -122,6 +122,8 @@ def _place_assignment(
         )
     )
     if assignment is not None and assignment.tier == tier:
+        assignment.is_incomplete = False
+        session.add(assignment)
         return assignment
     if assignment is None:
         assignment = TierAssignment(user_id=user_id, course_id=course_id)
@@ -138,6 +140,7 @@ def _place_assignment(
     )
     assignment.tier = tier
     assignment.ordinal_position = len(peers) + 1
+    assignment.is_incomplete = False
     session.add(assignment)
     return assignment
 
