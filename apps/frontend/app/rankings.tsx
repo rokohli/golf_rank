@@ -6,6 +6,7 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'rea
 import { getFriendRankings, getRanking, saveComparison as saveRankingComparison } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseRow, CourseVisual, IconButton, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
+import { openUserProfile } from '../src/navigation/openUserProfile'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { ComparisonResult, FriendRanking, RankedCourse, RankingSnapshot, RankingTier } from '../src/types'
 import { colors } from '../src/ui/theme'
@@ -160,7 +161,7 @@ export default function Rankings() {
           <Pressable accessibilityRole="button" disabled={availableComparisons === 0} onPress={openRefinement} style={[styles.outlineButton, availableComparisons === 0 && styles.disabledButton]}><Text style={[styles.outlineText, availableComparisons === 0 && styles.disabledText]}>Refine my rankings</Text></Pressable>
           <View style={styles.note}><Feather name="award" size={19} color={colors.pine} /><View style={{ flex: 1 }}><Text style={styles.noteTitle}>{availableComparisons ? 'Your list is taking shape' : 'Add another course to refine'}</Text><Text style={styles.noteBody}>{availableComparisons ? `${availableComparisons} same-tier ${availableComparisons === 1 ? 'comparison' : 'comparisons'} can improve your ranking confidence.` : 'Pairwise refinement becomes available when two courses share a tier.'}</Text></View></View>
         </> : null}
-        </> : <FriendsRankingsView error={friendsError} loading={friendsLoading} onCourse={(courseId) => router.push(`/course/${courseId}` as never)} onFindFriends={() => router.push('/friends')} onRetry={refreshFriendRankings} rankings={friendRankings} />}
+        </> : <FriendsRankingsView error={friendsError} loading={friendsLoading} onCourse={(courseId) => router.push(`/course/${courseId}` as never)} onFindFriends={() => router.push('/friends')} onOpenProfile={(userId) => openUserProfile(router, userId)} onRetry={refreshFriendRankings} rankings={friendRankings} />}
       </ProductScreen>
       <BottomNav />
       <Modal animationType="slide" onRequestClose={() => setRefining(false)} presentationStyle="pageSheet" visible={refining}>
@@ -211,14 +212,14 @@ function IncompleteBadge() {
   )
 }
 
-function FriendsRankingsView({ error, loading, onCourse, onFindFriends, onRetry, rankings }: { error: string | null; loading: boolean; onCourse: (courseId: number) => void; onFindFriends: () => void; onRetry: () => Promise<void>; rankings: FriendRanking[] | null }) {
+function FriendsRankingsView({ error, loading, onCourse, onFindFriends, onOpenProfile, onRetry, rankings }: { error: string | null; loading: boolean; onCourse: (courseId: number) => void; onFindFriends: () => void; onOpenProfile: (userId: number) => void; onRetry: () => Promise<void>; rankings: FriendRanking[] | null }) {
   return <>
     <SectionTitle title="FRIENDS' COURSES" />
     {loading && rankings === null ? <View style={styles.status}><ActivityIndicator accessibilityLabel="Loading friends rankings" color={colors.pine} /><Text style={styles.statusText}>Loading friends’ rankings...</Text></View> : null}
     {error ? <View style={styles.status}><Text accessibilityRole="alert" style={styles.errorText}>{error}</Text><RetryButton onPress={onRetry} /></View> : null}
     {!loading && !error && rankings?.length === 0 ? <View style={styles.emptyState}><Feather name="users" size={24} color={colors.pine} /><Text style={styles.emptyTitle}>No friends’ rankings yet</Text><Text style={styles.emptyBody}>Mutual friends will appear here when they start ranking courses.</Text><Pressable accessibilityRole="button" hitSlop={8} onPress={onFindFriends}><Text style={styles.outlineText}>Find friends</Text></Pressable></View> : null}
     {rankings?.map((ranking) => <View key={ranking.user.id} style={styles.friendSection}>
-      <View style={styles.friendHeader}><Avatar initials={initials(ranking.user.display_name)} size={38} color="#6E8B84" /><View style={{ flex: 1 }}><Text style={styles.friendName}>{ranking.user.display_name}</Text><Text style={styles.friendHandle}>{ranking.user.username ? `@${ranking.user.username}` : ranking.user.home_region ?? 'Golfer'}</Text></View></View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Open ${ranking.user.display_name}'s profile`} onPress={() => onOpenProfile(ranking.user.id)} style={styles.friendHeader}><Avatar initials={initials(ranking.user.display_name)} size={38} color="#6E8B84" /><View style={{ flex: 1 }}><Text style={styles.friendName}>{ranking.user.display_name}</Text><Text style={styles.friendHandle}>{ranking.user.username ? `@${ranking.user.username}` : ranking.user.home_region ?? 'Golfer'}</Text></View></Pressable>
       {ranking.entries.length ? ranking.entries.slice(0, 5).map((entry) => <Pressable accessibilityRole="button" key={entry.course.id} onPress={() => onCourse(entry.course.id)} style={({ pressed }) => [styles.friendCourse, pressed && { opacity: 0.6 }]}><Text style={styles.friendRank}>{entry.rank}</Text><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.friendCourseName}>{entry.course.name}</Text><Text numberOfLines={1} style={styles.friendCourseMeta}>{entry.course.region}</Text></View><Text style={styles.friendRating}>{entry.personal_rating.toFixed(1)}<Text style={styles.rowScale}> / 10</Text></Text><Feather name="chevron-right" size={15} color={colors.muted} /></Pressable>) : <Text style={styles.friendNoCourses}>No ranked courses yet.</Text>}
     </View>)}
   </>

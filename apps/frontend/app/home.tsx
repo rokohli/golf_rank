@@ -7,6 +7,7 @@ import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
+import { openUserProfile } from '../src/navigation/openUserProfile'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreToPar } from '../src/scorePresentation'
 import { Activity, Course } from '../src/types'
@@ -97,21 +98,21 @@ export default function Home() {
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : null}
       {!loading && !error && !activities.length ? <View style={styles.state}><Feather name="users" size={26} color={colors.muted} /><Text style={styles.emptyTitle}>Your feed is quiet</Text><Text style={styles.muted}>Follow golfers to see their rounds, ratings, rankings, and saved courses.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/friends')} style={styles.retry}><Text style={styles.retryText}>Find golfers</Text></Pressable></View> : null}
 
-      {featured?.course ? <FeaturedActivity activity={featured} onOpen={() => openActivity(featured, router)} onReact={() => void toggleReaction(featured)} /> : null}
-      {recent.length ? <><SectionTitle title="RECENT ACTIVITY" /><View>{recent.map((activity, index) => <RecentActivity key={activity.id} activity={activity} last={index === recent.length - 1} onOpen={() => openActivity(activity, router)} onMute={() => void mute(activity)} onReact={() => void toggleReaction(activity)} />)}</View></> : null}
+      {featured?.course ? <FeaturedActivity activity={featured} onOpen={() => openActivity(featured, router)} onOpenProfile={() => openUserProfile(router, featured.actor.id)} onReact={() => void toggleReaction(featured)} /> : null}
+      {recent.length ? <><SectionTitle title="RECENT ACTIVITY" /><View>{recent.map((activity, index) => <RecentActivity key={activity.id} activity={activity} last={index === recent.length - 1} onOpen={() => openActivity(activity, router)} onOpenProfile={() => openUserProfile(router, activity.actor.id)} onMute={() => void mute(activity)} onReact={() => void toggleReaction(activity)} />)}</View></> : null}
       {nextCursor ? <Pressable accessibilityRole="button" disabled={loadingMore} onPress={() => void loadMore()} style={styles.loadMore}>{loadingMore ? <ActivityIndicator color={colors.pine} /> : <Text style={styles.loadMoreText}>Load more</Text>}</Pressable> : null}
     </ProductScreen>
     <BottomNav />
   </>
 }
 
-function FeaturedActivity({ activity, onOpen, onReact }: { activity: Activity; onOpen: () => void; onReact: () => void }) {
+function FeaturedActivity({ activity, onOpen, onOpenProfile, onReact }: { activity: Activity; onOpen: () => void; onOpenProfile: () => void; onReact: () => void }) {
   const presentation = eventPresentation(activity)
   return <>
     <Pressable accessibilityRole="button" accessibilityLabel={presentation.accessibilityLabel} onPress={onOpen}>
       <CourseVisual course={toDisplayCourse(activity.course!, activity.id)} height={228}>
         <View style={styles.storyScrim} />
-        <View style={styles.storyContent}><View style={styles.storyIdentity}><Avatar initials={initials(activity.actor.display_name)} size={36} /><View style={{ flex: 1 }}><Text style={styles.storyKicker}>{activity.actor.display_name} {presentation.action}</Text><Text style={styles.storyTitle}>{activity.course!.name}</Text><Text style={styles.storyMeta}>{activity.course!.region}</Text></View></View><ActivityMetric activity={activity} light /></View>
+        <View style={styles.storyContent}><View style={styles.storyIdentity}><Pressable accessibilityRole="button" accessibilityLabel={`Open ${activity.actor.display_name}'s profile`} onPress={onOpenProfile}><Avatar initials={initials(activity.actor.display_name)} size={36} /></Pressable><View style={{ flex: 1 }}><Pressable accessibilityRole="button" accessibilityLabel={`Open ${activity.actor.display_name}'s profile`} onPress={onOpenProfile}><Text style={styles.storyKicker}>{activity.actor.display_name} {presentation.action}</Text></Pressable><Text style={styles.storyTitle}>{activity.course!.name}</Text><Text style={styles.storyMeta}>{activity.course!.region}</Text></View></View><ActivityMetric activity={activity} light /></View>
       </CourseVisual>
     </Pressable>
     <ActivityDetails activity={activity} />
@@ -119,9 +120,9 @@ function FeaturedActivity({ activity, onOpen, onReact }: { activity: Activity; o
   </>
 }
 
-function RecentActivity({ activity, last, onOpen, onMute, onReact }: { activity: Activity; last: boolean; onOpen: () => void; onMute: () => void; onReact: () => void }) {
+function RecentActivity({ activity, last, onOpen, onOpenProfile, onMute, onReact }: { activity: Activity; last: boolean; onOpen: () => void; onOpenProfile: () => void; onMute: () => void; onReact: () => void }) {
   const presentation = eventPresentation(activity)
-  return <View style={[styles.activityRow, last && styles.lastRow]}><Avatar initials={initials(activity.actor.display_name)} size={38} /><View style={styles.activityBody}><Pressable accessibilityRole="button" accessibilityLabel={presentation.accessibilityLabel} onPress={onOpen} style={styles.activityCopy}><Text style={styles.activityPerson}>{activity.actor.display_name} {presentation.action}</Text><Text style={styles.activityCourse}>{activity.course?.name ?? presentation.title}</Text></Pressable><ActivityDetails activity={activity} /><View style={styles.activityFooter}><Text style={styles.muted}>{relativeTime(activity.created_at)}</Text></View></View><View style={styles.activitySide}><View style={styles.activitySideTop}><ActivityMetric activity={activity} />{!activity.is_own_activity ? <Pressable accessibilityRole="button" accessibilityLabel={`Mute ${activity.actor.display_name}`} onPress={onMute} style={styles.muteButton}><Feather name="more-horizontal" size={16} color={colors.muted} /></Pressable> : null}</View><View style={styles.footerReaction}><Pressable accessibilityRole="button" accessibilityLabel={activity.viewer_reacted ? 'Unlike activity' : 'Like activity'} onPress={onReact}><Feather name="heart" size={15} color={activity.viewer_reacted ? '#A14E4E' : colors.muted} /></Pressable>{activity.reaction_count > 0 ? <Text style={styles.likeCount}>{likeLabel(activity.reaction_count)}</Text> : null}</View></View></View>
+  return <View style={[styles.activityRow, last && styles.lastRow]}><Pressable accessibilityRole="button" accessibilityLabel={`Open ${activity.actor.display_name}'s profile`} onPress={onOpenProfile}><Avatar initials={initials(activity.actor.display_name)} size={38} /></Pressable><View style={styles.activityBody}><View style={styles.activityCopy}><Pressable accessibilityRole="button" accessibilityLabel={`Open ${activity.actor.display_name}'s profile`} onPress={onOpenProfile}><Text style={styles.activityPerson}>{activity.actor.display_name} {presentation.action}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={presentation.accessibilityLabel} onPress={onOpen}><Text style={styles.activityCourse}>{activity.course?.name ?? presentation.title}</Text></Pressable></View><ActivityDetails activity={activity} /><View style={styles.activityFooter}><Text style={styles.muted}>{relativeTime(activity.created_at)}</Text></View></View><View style={styles.activitySide}><View style={styles.activitySideTop}><ActivityMetric activity={activity} />{!activity.is_own_activity ? <Pressable accessibilityRole="button" accessibilityLabel={`Mute ${activity.actor.display_name}`} onPress={onMute} style={styles.muteButton}><Feather name="more-horizontal" size={16} color={colors.muted} /></Pressable> : null}</View><View style={styles.footerReaction}><Pressable accessibilityRole="button" accessibilityLabel={activity.viewer_reacted ? 'Unlike activity' : 'Like activity'} onPress={onReact}><Feather name="heart" size={15} color={activity.viewer_reacted ? '#A14E4E' : colors.muted} /></Pressable>{activity.reaction_count > 0 ? <Text style={styles.likeCount}>{likeLabel(activity.reaction_count)}</Text> : null}</View></View></View>
 }
 
 function ActivityMetric({ activity, light = false }: { activity: Activity; light?: boolean }) {
