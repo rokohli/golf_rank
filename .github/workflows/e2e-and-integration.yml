@@ -22,7 +22,7 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           cd services/api
-          uv sync
+          uv sync --extra dev
 
       - name: Run Backend Integration Tests
         run: |
