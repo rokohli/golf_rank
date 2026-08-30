@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     clerk_audience: str | None = None
     clerk_secret_key: str | None = None
     course_image_base_url: str | None = None
+    r2_account_id: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket_name: str | None = None
+    google_places_api_key: str | None = None
     redis_url: str | None = None
     rate_limit_enabled: bool = False
     rate_limit_key_salt: str = "development-rate-limit-key"

@@ -34,14 +34,14 @@ class User(Base):
 
 class Profile(Base):
     __tablename__ = "profiles"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     home_region: Mapped[str] = mapped_column(String(120))
     username: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
 
 
 class OnboardingPreference(Base):
     __tablename__ = "onboarding_preferences"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     max_green_fee: Mapped[int] = mapped_column(Integer)
     difficulty: Mapped[str] = mapped_column(String(20))
     access: Mapped[str] = mapped_column(String(20))

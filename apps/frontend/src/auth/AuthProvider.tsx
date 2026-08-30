@@ -7,7 +7,7 @@ import * as Linking from 'expo-linking'
 import { useRouter } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
 import { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
-import { Dimensions, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
@@ -478,7 +478,9 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
         </Pressable>
       </View>
 
-      {mode === 'sign-in' && !resetMode ? <GolfScene /> : null}
+      {mode === 'sign-in' && !resetMode ? (
+        <Image resizeMode="cover" source={require('../../assets/course-images/parkland-course.png')} style={authStyles.golfScene} />
+      ) : null}
 
       {errorMessage ? (
         <Text accessibilityRole="alert" style={authStyles.errorText}>
@@ -618,19 +620,6 @@ function PasswordChecklist({ password }: { password: string }) {
           <Text style={authStyles.checkText}>{label}</Text>
         </View>
       ))}
-    </View>
-  )
-}
-
-function GolfScene() {
-  return (
-    <View style={authStyles.golfScene}>
-      <View style={authStyles.skyBand} />
-      <View style={authStyles.hillBack} />
-      <View style={authStyles.fairwayOne} />
-      <View style={authStyles.fairwayTwo} />
-      <View style={authStyles.bunker} />
-      <View style={authStyles.water} />
     </View>
   )
 }
@@ -1039,61 +1028,7 @@ const authStyles = StyleSheet.create({
     marginHorizontal: -10,
     marginTop: compactAuth ? 4 : 10,
     overflow: 'hidden',
-  },
-  skyBand: {
-    backgroundColor: '#D9DED6',
-    height: '42%',
-    width: '100%',
-  },
-  hillBack: {
-    backgroundColor: '#A9A999',
-    borderRadius: 160,
-    height: 120,
-    position: 'absolute',
-    right: -50,
-    top: compactAuth ? 34 : 58,
-    transform: [{ rotate: '-8deg' }],
-    width: 300,
-  },
-  fairwayOne: {
-    backgroundColor: '#6F8E55',
-    borderRadius: 180,
-    bottom: -68,
-    height: compactAuth ? 142 : 175,
-    left: 45,
-    position: 'absolute',
-    transform: [{ rotate: '-10deg' }],
-    width: 360,
-  },
-  fairwayTwo: {
-    backgroundColor: '#3E6A3D',
-    borderRadius: 140,
-    bottom: -38,
-    height: compactAuth ? 94 : 125,
-    left: 110,
-    position: 'absolute',
-    transform: [{ rotate: '8deg' }],
-    width: 230,
-  },
-  bunker: {
-    backgroundColor: '#D8D2BC',
-    borderRadius: 999,
-    bottom: compactAuth ? 35 : 54,
-    height: compactAuth ? 20 : 28,
-    left: 178,
-    position: 'absolute',
-    transform: [{ rotate: '-7deg' }],
-    width: compactAuth ? 82 : 110,
-  },
-  water: {
-    backgroundColor: '#526F73',
-    borderRadius: 110,
-    bottom: -48,
-    height: compactAuth ? 118 : 150,
-    left: -54,
-    position: 'absolute',
-    transform: [{ rotate: '-17deg' }],
-    width: compactAuth ? 130 : 170,
+    width: 'auto',
   },
   pressed: {
     opacity: 0.86,

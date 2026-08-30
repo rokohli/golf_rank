@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .core.auth import CurrentUser, current_user
+from .core.auth import CurrentUser, current_user, delete_clerk_user
 from .core.config import Settings
 from .core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from .core.rate_limit import (
@@ -334,6 +334,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content=jsonable_encoder(data),
             headers={"Content-Disposition": 'attachment; filename="golfrank-data-export.json"'},
         )
+
+    @app.delete("/api/v1/me")
+    def delete_account(
+        _rate_limit: None = Depends(authenticated_rate_limit),
+        user: CurrentUser = Depends(current_user),
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
+        if stored_user is not None:
+            # Deleting the user row cascades to every table that references it
+            # (profiles, rounds, rankings, follows, saved lists, plans, ...).
+            session.delete(stored_user)
+            session.commit()
+        try:
+            delete_clerk_user(user.provider_subject, settings)
+        except HTTPException as error:
+            # App data is already gone; the Clerk identity can be cleaned up
+            # separately (e.g. via the delete_account admin script) if this
+            # call fails, so don't block the user on it.
+            logger.error(
+                "clerk_account_deletion_failed provider_subject=%s status=%s",
+                user.provider_subject, error.status_code,
+            )
+        return JSONResponse(content={"status": "deleted"})
 
     @app.get("/api/v1/courses", response_model=list[CourseOut])
     def courses(
