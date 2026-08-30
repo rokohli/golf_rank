@@ -72,6 +72,11 @@ export async function checkUsernameAvailable(
   return response.json()
 }
 
+export async function deleteAccount(headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to delete your account. Please try again.')
+}
+
 export async function getProfile(headers: ApiHeaders): Promise<OnboardingPreferences> {
   const response = await fetch(`${baseUrl}/api/v1/me/profile`, {
     headers,

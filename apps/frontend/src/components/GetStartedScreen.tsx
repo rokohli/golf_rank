@@ -109,9 +109,7 @@ export function GetStartedScreen({ onGetStarted, onLogin }: GetStartedScreenProp
 
           <FloatingItem size={80 * itemScale} style={styles.ratingCardItem} rotation="12deg">
             <View style={styles.ratingCard}>
-              <View style={styles.ratingImage}>
-                <MaterialCommunityIcons name="image-filter-hdr" size={20} color="#EAF3EC" />
-              </View>
+              <View style={styles.ratingImage} />
               <Text style={styles.ratingName}>Pine Valley</Text>
               <Text accessibilityLabel="Rating 9.5 out of 10" style={styles.ratingScore}>9.5/10</Text>
             </View>

@@ -43,22 +43,32 @@ def verify_clerk_token(token: str, settings: Settings) -> str:
     return subject
 
 
-def verified_identifiers(current: CurrentUser, settings: Settings) -> tuple[str, ...]:
-    """Load verified emails and phones from Clerk's server-side User record."""
-    if current.provider_subject.startswith("dev:"):
-        return ()
+def _clerk_user_request(
+    method: str, provider_subject: str, settings: Settings, *, ignore_not_found: bool = False
+) -> httpx.Response:
+    """Call Clerk's Backend API for a single user, wrapping transport/HTTP errors."""
     if not settings.clerk_secret_key:
         raise HTTPException(status_code=503, detail="Identity provider is unavailable")
-    subject = current.provider_subject.removeprefix("clerk:")
+    subject = provider_subject.removeprefix("clerk:")
+    request_fn = httpx.get if method == "GET" else httpx.delete
     try:
-        response = httpx.get(
+        response = request_fn(
             f"https://api.clerk.com/v1/users/{subject}",
             headers={"Authorization": f"Bearer {settings.clerk_secret_key}"},
             timeout=5.0,
         )
-        response.raise_for_status()
+        if not (ignore_not_found and response.status_code == 404):
+            response.raise_for_status()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="Identity provider is unavailable") from exc
+    return response
+
+
+def verified_identifiers(current: CurrentUser, settings: Settings) -> tuple[str, ...]:
+    """Load verified emails and phones from Clerk's server-side User record."""
+    if current.provider_subject.startswith("dev:"):
+        return ()
+    response = _clerk_user_request("GET", current.provider_subject, settings)
     return _verified_identifiers(response.json())
 
 
@@ -84,6 +94,18 @@ def _verified_identifiers(user: dict) -> tuple[str, ...]:
             if isinstance(value, str):
                 identifiers.append(value)
     return tuple(dict.fromkeys(identifiers))
+
+
+def delete_clerk_user(provider_subject: str, settings: Settings) -> None:
+    """Permanently delete the Clerk identity backing an account-deletion request.
+
+    A 404 from Clerk means the identity is already gone (e.g. deleted from the
+    Clerk dashboard, or a retry after a prior partial failure) and is treated
+    as success so the caller can still clean up its own data.
+    """
+    if provider_subject.startswith("dev:"):
+        return
+    _clerk_user_request("DELETE", provider_subject, settings, ignore_not_found=True)
 
 
 def get_settings(request: Request) -> Settings:
