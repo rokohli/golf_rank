@@ -57,7 +57,7 @@ NEGATIVE_TITLE_SIGNALS = {
     # Famous course-adjacent events (e.g. the Pebble Beach Concours
     # d'Elegance car show) put unrelated subjects under the course's name.
     "car", "cars", "automobile", "vehicle", "convertible", "roadster",
-    "concours", "wedding", "aerial", "map", "logo",
+    "concours", "wedding", "map", "logo",
 }
 
 # A denylist can't anticipate every off-topic subject (a car's specific
