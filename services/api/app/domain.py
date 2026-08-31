@@ -1,16 +1,36 @@
+import hashlib
 from urllib.parse import quote
 
 from fastapi import HTTPException
-from sqlalchemy import exists, select, tuple_
+from sqlalchemy import exists, select, text, tuple_
 from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
-from .models import Course, CourseReconciliation, User
+from .models import Course, CourseReconciliation, DeletedIdentity, User
+
+
+def lock_identity_transaction(session: Session, provider_subject: str) -> None:
+    """Serialize account creation/deletion for one identity in production.
+
+    Row locks cannot protect the no-user case. A transaction-scoped advisory
+    lock closes that race without retaining the subject outside the database
+    session or locking unrelated accounts.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    lock_id = int.from_bytes(
+        hashlib.sha256(provider_subject.encode()).digest()[:8], byteorder="big", signed=True
+    )
+    session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
 
 
 def stored_user(session: Session, current: CurrentUser, *, create: bool = False) -> User | None:
+    if create:
+        lock_identity_transaction(session, current.provider_subject)
     user = session.scalar(select(User).where(User.provider_subject == current.provider_subject))
     if user is None and create:
+        if session.get(DeletedIdentity, current.provider_subject) is not None:
+            raise HTTPException(410, "Account has been deleted")
         user = User(provider_subject=current.provider_subject)
         session.add(user)
         session.flush()
@@ -116,6 +136,8 @@ def course_image_data(course: Course) -> list[dict]:
             "alt_text": image.alt_text,
             "source_name": image.source_name,
             "source_url": image.source_url,
+            "license_name": image.license_name,
+            "license_url": image.license_url,
             "position": image.position,
             "is_hero": image.is_hero,
         })

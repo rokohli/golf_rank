@@ -1,4 +1,4 @@
-"""Sourcing real course photos: Wikimedia Commons first, Google Places Photos as fallback."""
+"""Source attributable, appropriately sized course photos from Wikimedia Commons."""
 
 import html
 import re
@@ -13,7 +13,7 @@ RETRY_BACKOFF_SECONDS = 3.0
 
 def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
-    connections, brief 429s) from Commons and Places -- retry those instead
+    connections and brief 429s from Commons -- retry those instead
     of letting one bad request kill an hours-long job."""
     for attempt in range(MAX_TRANSIENT_RETRIES + 1):
         try:
@@ -31,11 +31,8 @@ def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs)
 
 
 COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php"
-PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
-PLACES_MEDIA_URL = "https://places.googleapis.com/v1/{photo_name}/media"
-PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
-
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+THUMBNAIL_WIDTH_PX = 1200
 
 # A photo narrower than it is tall (a clubhouse facade, a person, a sign) is
 # rarely a good "course photo" -- hole/fairway/green shots are almost always
@@ -94,41 +91,10 @@ class ExternalPhoto:
     url: str
     source_name: str
     source_url: str
+    license_name: str | None = None
+    license_url: str | None = None
     width: int | None = None
     height: int | None = None
-
-
-@dataclass(frozen=True)
-class PlacesPhotoCandidate:
-    """Metadata for one Places photo, before it's downloaded."""
-
-    name: str
-    width: int
-    height: int
-    source_name: str
-    source_url: str | None
-    is_official: bool = False
-
-
-def _is_official_source(source_name: str, course_name: str) -> bool:
-    """True if a Places photo's attribution looks like the course's own
-    Business Profile rather than a random visitor -- i.e. most of the
-    course's distinctive name words appear in who it's credited to."""
-    course_words = _significant_words(course_name)
-    if not course_words:
-        return False
-    source_words = _significant_words(source_name)
-    overlap = len(course_words & source_words)
-    return overlap >= max(1, len(course_words) - 1)
-
-
-@dataclass(frozen=True)
-class DownloadedPhoto:
-    """Raw bytes for one Places photo. Attribution lives on the
-    PlacesPhotoCandidate it was downloaded from, not here."""
-
-    data: bytes
-    content_type: str
 
 
 def find_wikimedia_photos(
@@ -176,6 +142,7 @@ def find_wikimedia_photos(
             "titles": "|".join(titles),
             "prop": "imageinfo",
             "iiprop": "url|extmetadata|size",
+            "iiurlwidth": THUMBNAIL_WIDTH_PX,
             "format": "json",
         },
     )
@@ -201,8 +168,22 @@ def find_wikimedia_photos(
         extmetadata = info.get("extmetadata", {})
         artist_html = extmetadata.get("Artist", {}).get("value", "")
         artist = _strip_html(artist_html) or "Wikimedia Commons"
+        license_name = _metadata_value(extmetadata, "LicenseShortName") or _metadata_value(
+            extmetadata, "UsageTerms"
+        )
+        license_url = _metadata_value(extmetadata, "LicenseUrl")
+        thumbnail_url = info.get("thumburl")
+        description_url = info.get("descriptionurl")
+        if not thumbnail_url or not description_url:
+            continue
         photos.append(ExternalPhoto(
-            url=info["url"], source_name=artist, source_url=info["descriptionurl"], width=width, height=height,
+            url=thumbnail_url,
+            source_name=artist,
+            source_url=description_url,
+            license_name=license_name,
+            license_url=license_url,
+            width=width,
+            height=height,
         ))
         if len(photos) >= limit:
             break
@@ -213,79 +194,9 @@ def _strip_html(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
 
 
-def resolve_google_place_id(
-    client: httpx.Client, *, api_key: str, course_name: str, latitude: float, longitude: float
-) -> str | None:
-    """Look up a course's Places ID by name, biased toward its known coordinates."""
-    response = _request_with_retries(
-        client, "POST", PLACES_TEXT_SEARCH_URL,
-        headers={
-            "X-Goog-Api-Key": api_key,
-            "X-Goog-FieldMask": "places.id",
-            "Content-Type": "application/json",
-        },
-        json={
-            "textQuery": f"{course_name} golf course",
-            "locationBias": {
-                "circle": {"center": {"latitude": latitude, "longitude": longitude}, "radius": 5000.0},
-            },
-        },
-    )
-    response.raise_for_status()
-    places = response.json().get("places") or []
-    return places[0]["id"] if places else None
-
-
-def find_google_places_photo_candidates(
-    client: httpx.Client, *, api_key: str, google_place_id: str, course_name: str, limit: int = 5
-) -> list[PlacesPhotoCandidate]:
-    """List a course's Places photos (with dimensions) without downloading them.
-
-    Places returns dimensions inline, so landscape filtering can happen here
-    for free, before spending a billed media call on any candidate. Photos
-    whose attribution looks like the course's own Business Profile (an
-    owner-uploaded, genuinely official photo) are preferred over ones from
-    random visitors.
-    """
-    details = _request_with_retries(
-        client, "GET", PLACES_DETAILS_URL.format(place_id=google_place_id),
-        headers={
-            "X-Goog-Api-Key": api_key,
-            "X-Goog-FieldMask": "photos.name,photos.authorAttributions,photos.widthPx,photos.heightPx",
-        },
-    )
-    details.raise_for_status()
-    photos = details.json().get("photos") or []
-
-    candidates = []
-    for photo in photos:
-        width, height = photo.get("widthPx"), photo.get("heightPx")
-        if not is_landscape(width, height):
-            continue
-        author_attributions = photo.get("authorAttributions") or []
-        if author_attributions:
-            source_name = author_attributions[0].get("displayName", "Google")
-            source_url = author_attributions[0].get("uri")
-        else:
-            source_name, source_url = "Google", None
-        candidates.append(PlacesPhotoCandidate(
-            name=photo["name"], width=width, height=height, source_name=source_name, source_url=source_url,
-            is_official=_is_official_source(source_name, course_name),
-        ))
-
-    candidates.sort(key=lambda candidate: not candidate.is_official)
-    return candidates[:limit]
-
-
-def download_google_place_photo(
-    client: httpx.Client, *, api_key: str, photo_name: str, max_width_px: int = 1200
-) -> DownloadedPhoto:
-    """Download one Places photo already identified via find_google_places_photo_candidates."""
-    media = _request_with_retries(
-        client, "GET", PLACES_MEDIA_URL.format(photo_name=photo_name),
-        params={"maxWidthPx": max_width_px, "key": api_key, "skipHttpRedirect": "false"},
-        follow_redirects=True,
-    )
-    media.raise_for_status()
-    content_type = media.headers.get("content-type", "image/jpeg")
-    return DownloadedPhoto(data=media.content, content_type=content_type)
+def _metadata_value(extmetadata: dict, key: str) -> str | None:
+    value = extmetadata.get(key, {}).get("value")
+    if not isinstance(value, str):
+        return None
+    normalized = _strip_html(value)
+    return normalized or None

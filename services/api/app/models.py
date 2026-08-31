@@ -32,6 +32,15 @@ class User(Base):
     provider_subject: Mapped[str] = mapped_column(String(255), unique=True)
 
 
+class DeletedIdentity(Base):
+    """Suppression record that prevents a deleted identity's old JWT from recreating an account."""
+
+    __tablename__ = "deleted_identities"
+
+    provider_subject: Mapped[str] = mapped_column(String(255), primary_key=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Profile(Base):
     __tablename__ = "profiles"
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
@@ -104,6 +113,8 @@ class CourseImage(Base):
     alt_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    license_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    license_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_hero: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 

@@ -86,6 +86,8 @@ class CourseImageOut(BaseModel):
     alt_text: str | None = None
     source_name: str | None = None
     source_url: str | None = None
+    license_name: str | None = None
+    license_url: str | None = None
     position: int
     is_hero: bool
 

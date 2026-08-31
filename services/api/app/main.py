@@ -24,7 +24,14 @@ from .core.rate_limit import (
 from .catalog import miles_between, router as catalog_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
-from .domain import canonical_courses_only, course_data, course_identity_ids, require_course
+from .domain import (
+    canonical_courses_only,
+    course_data,
+    course_identity_ids,
+    lock_identity_transaction,
+    require_course,
+    require_user,
+)
 from .models import (
     Base,
     Course,
@@ -34,6 +41,7 @@ from .models import (
     AppNotification,
     Comparison,
     CourseCandidate,
+    DeletedIdentity,
     Follow,
     ItineraryItem,
     LinkedContact,
@@ -179,11 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> ProfileOut:
-        stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
-        if stored_user is None:
-            stored_user = User(provider_subject=user.provider_subject)
-            session.add(stored_user)
-            session.flush()
+        stored_user = require_user(session, user, create=True)
         profile = session.get(Profile, stored_user.id)
         if profile is None:
             profile = Profile(user_id=stored_user.id, home_region=payload.home_region)
@@ -341,22 +345,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
     ) -> JSONResponse:
+        lock_identity_transaction(session, user.provider_subject)
         stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
+        if session.get(DeletedIdentity, user.provider_subject) is None:
+            session.add(DeletedIdentity(provider_subject=user.provider_subject))
         if stored_user is not None:
             # Deleting the user row cascades to every table that references it
             # (profiles, rounds, rankings, follows, saved lists, plans, ...).
             session.delete(stored_user)
-            session.commit()
+        session.commit()
         try:
             delete_clerk_user(user.provider_subject, settings)
         except HTTPException as error:
-            # App data is already gone; the Clerk identity can be cleaned up
-            # separately (e.g. via the delete_account admin script) if this
-            # call fails, so don't block the user on it.
             logger.error(
                 "clerk_account_deletion_failed provider_subject=%s status=%s",
                 user.provider_subject, error.status_code,
             )
+            return JSONResponse(content={"status": "deletion_pending"}, status_code=202)
         return JSONResponse(content={"status": "deleted"})
 
     @app.get("/api/v1/courses", response_model=list[CourseOut])
