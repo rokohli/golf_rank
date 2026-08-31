@@ -13,8 +13,8 @@ RETRY_BACKOFF_SECONDS = 3.0
 
 def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
-    connections and brief 429s from Commons -- retry those instead
-    of letting one bad request kill an hours-long job."""
+    connections, brief 429s, or transient 5xx server errors from Commons) --
+    retry those instead of letting one bad request kill an hours-long job."""
     for attempt in range(MAX_TRANSIENT_RETRIES + 1):
         try:
             response = client.request(method, url, **kwargs)
@@ -23,7 +23,7 @@ def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs)
                 raise
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
-        if response.status_code == 429 and attempt < MAX_TRANSIENT_RETRIES:
+        if response.status_code in {429, 500, 502, 503, 504} and attempt < MAX_TRANSIENT_RETRIES:
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
         return response
@@ -168,14 +168,22 @@ def find_wikimedia_photos(
         extmetadata = info.get("extmetadata", {})
         artist_html = extmetadata.get("Artist", {}).get("value", "")
         artist = _strip_html(artist_html) or "Wikimedia Commons"
+        if len(artist) > 120:
+            artist = artist[:117] + "..."
         license_name = _metadata_value(extmetadata, "LicenseShortName") or _metadata_value(
             extmetadata, "UsageTerms"
         )
+        if license_name and len(license_name) > 120:
+            license_name = license_name[:117] + "..."
         license_url = _metadata_value(extmetadata, "LicenseUrl")
+        if license_url and len(license_url) > 2048:
+            license_url = license_url[:2048]
         thumbnail_url = info.get("thumburl")
         description_url = info.get("descriptionurl")
         if not thumbnail_url or not description_url:
             continue
+        if len(description_url) > 2048:
+            description_url = description_url[:2048]
         photos.append(ExternalPhoto(
             url=thumbnail_url,
             source_name=artist,
@@ -191,7 +199,8 @@ def find_wikimedia_photos(
 
 
 def _strip_html(value: str) -> str:
-    return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
+    cleaned = html.unescape(re.sub(r"<[^>]+>", "", value))
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _metadata_value(extmetadata: dict, key: str) -> str | None:

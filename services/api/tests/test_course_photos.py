@@ -193,3 +193,54 @@ def test_refresh_course_photos_preserves_existing_when_no_candidates(monkeypatch
         images = session.query(CourseImage).filter(CourseImage.course_id == 500).all()
         assert len(images) == 1
         assert images[0].external_url == "https://example.com/existing.jpg"
+
+
+def test_find_wikimedia_photos_retries_transient_5xx_server_errors(monkeypatch) -> None:
+    import app.course_photos as course_photos_mod
+    monkeypatch.setattr(course_photos_mod.time, "sleep", lambda _seconds: None)
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return httpx.Response(502, text="Bad Gateway")
+        return httpx.Response(200, json={"query": {"geosearch": []}})
+
+    photos = find_wikimedia_photos(
+        _client(handler), course_name="Pebble Beach Golf Links", latitude=36.5, longitude=-121.9
+    )
+    assert attempts["count"] == 2
+    assert photos == []
+
+
+def test_find_wikimedia_photos_bounds_long_artist_metadata() -> None:
+    long_artist = "A" * 200
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("list") == "geosearch":
+            return httpx.Response(200, json={
+                "query": {"geosearch": [{"title": "File:Pebble Beach 18th fairway.jpg"}]},
+            })
+        return httpx.Response(200, json={"query": {"pages": {"1": {
+            "title": "File:Pebble Beach 18th fairway.jpg",
+            "imageinfo": [{
+                "url": "https://upload.wikimedia.org/original-18.jpg",
+                "thumburl": "https://upload.wikimedia.org/thumb/18-1200px.jpg",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:18.jpg",
+                "extmetadata": {
+                    "Artist": {"value": long_artist},
+                    "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                },
+                "width": 1600,
+                "height": 900,
+            }],
+        }}}})
+
+    photos = find_wikimedia_photos(
+        _client(handler), course_name="Pebble Beach Golf Links", latitude=36.5, longitude=-121.9
+    )
+    assert len(photos) == 1
+    assert len(photos[0].source_name) == 120
+    assert photos[0].source_name.endswith("...")
+
