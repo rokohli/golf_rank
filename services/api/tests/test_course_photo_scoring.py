@@ -291,3 +291,94 @@ def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monke
         # Images should NOT be deleted because not all images were scored
         assert len(images) == 2
         assert images[0].storage_key == "unresolvable_key"
+
+
+def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch) -> None:
+    from app.core.config import Settings
+    from app.course_photo_scoring import PhotoScoringError
+    from app.db import make_engine, make_session_factory
+    from app.models import Base, Course, CourseImage
+    import scripts.score_course_photos as script
+
+    settings = Settings()
+    engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
+    Base.metadata.create_all(bind=engine)
+    session_factory = make_session_factory(engine)
+
+    with session_factory() as session:
+        ref_course = Course(
+            id=210,
+            name="Reference Course",
+            region="CA",
+            latitude=37.0,
+            longitude=-122.0,
+            is_public=True,
+            source="manual",
+            source_course_id="ref",
+            hole_count=18,
+            par=72,
+        )
+        ref_image = CourseImage(
+            course_id=210,
+            external_url="https://example.com/ref.jpg",
+            is_hero=True,
+            position=0,
+        )
+        target_course = Course(
+            id=777,
+            name="Target Course",
+            region="CA",
+            latitude=37.0,
+            longitude=-122.0,
+            is_public=True,
+            source="manual",
+            source_course_id="target-777",
+            hole_count=18,
+            par=72,
+        )
+        session.add_all([ref_course, ref_image, target_course])
+        session.flush()
+
+        img1 = CourseImage(
+            course_id=777,
+            external_url="https://example.com/rejected.jpg",
+            is_hero=True,
+            position=0,
+        )
+        img2 = CourseImage(
+            course_id=777,
+            external_url="https://example.com/winner.jpg",
+            is_hero=False,
+            position=1,
+        )
+        session.add_all([img1, img2])
+        session.commit()
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
+    monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+
+    def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
+        from app.course_photo_scoring import PhotoScore
+        # Fail the first candidate, succeed on the second
+        if not hasattr(mock_score, "called"):
+            mock_score.called = True
+            raise PhotoScoringError("provider_refusal")
+        return PhotoScore(score=9, reasons=["superb green"])
+
+    monkeypatch.setattr(script, "score_course_photo", mock_score)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["score_course_photos.py", "--course-ids", "777", "--apply"],
+    )
+
+    exit_code = script.main()
+    assert exit_code == 0
+
+    with session_factory() as session:
+        images = session.query(CourseImage).filter(CourseImage.course_id == 777).order_by(CourseImage.position).all()
+        assert images[0].is_hero is False
+        assert images[1].is_hero is True
+

@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy import delete, select
 
 from app.core.config import Settings
-from app.course_photo_scoring import score_course_photo
+from app.course_photo_scoring import PhotoScoringError, score_course_photo
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
 from app.models import Course, CourseImage
@@ -74,8 +74,12 @@ def main() -> int:
                 if hero is None:
                     print(f"Warning: reference course #{reference_id} has no hero photo, skipping it as a reference.")
                     continue
-                data, content_type = _fetch(client, hero["url"])
-                reference_images.append((data, content_type))
+                try:
+                    data, content_type = _fetch(client, hero["url"])
+                    reference_images.append((data, content_type))
+                except httpx.HTTPError as exc:
+                    print(f"Warning: failed to fetch reference image for course #{reference_id}: {exc}")
+                    continue
             if not reference_images:
                 print("No reference images available; cannot score without at least one.")
                 return 1
@@ -100,15 +104,20 @@ def main() -> int:
                     if url is None:
                         print(f"    skipping image #{image.id}: COURSE_IMAGE_BASE_URL is required for storage keys")
                         continue
-                    data, content_type = _fetch(client, url)
-                    score = score_course_photo(
-                        client,
-                        api_key=settings.gemini_api_key,
-                        model=MODEL,
-                        image_data=data,
-                        image_content_type=content_type,
-                        reference_images=reference_images,
-                    )
+                    try:
+                        data, content_type = _fetch(client, url)
+                        score = score_course_photo(
+                            client,
+                            api_key=settings.gemini_api_key,
+                            model=MODEL,
+                            image_data=data,
+                            image_content_type=content_type,
+                            reference_images=reference_images,
+                        )
+                    except (PhotoScoringError, httpx.HTTPError, ValueError, KeyError) as exc:
+                        print(f"    skipping image #{image.id}: scoring failed ({exc})")
+                        time.sleep(REQUEST_DELAY_SECONDS)
+                        continue
                     scored.append((image, score))
                     tag = "HERO" if image.is_hero else "    "
                     print(f"    {tag} {score.score:>2}/10  {'; '.join(score.reasons)}")
