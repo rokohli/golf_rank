@@ -2,6 +2,7 @@ import {
   createSavedList,
   createPlan,
   createRound,
+  deleteAccount,
   deleteLinkedContacts,
   deleteRound,
   deletePlan,
@@ -82,6 +83,20 @@ describe('api client', () => {
 
     await expect(getProfile(headers)).resolves.toMatchObject({ max_green_fee: 450 })
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/profile', { headers })
+  })
+
+  it('returns the provider-cleanup status from account deletion', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'deletion_pending' }),
+    } as Response)
+    const headers = { 'Content-Type': 'application/json' as const, Authorization: 'Bearer test.jwt' }
+
+    await expect(deleteAccount(headers)).resolves.toBe('deletion_pending')
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me', {
+      method: 'DELETE',
+      headers,
+    })
   })
 
   it('loads an API course by its numeric id', async () => {

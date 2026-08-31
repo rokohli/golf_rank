@@ -1,6 +1,9 @@
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.main import create_app
+from app.models import DeletedIdentity, User
 
 
 def _onboard(client: TestClient, subject: str, username: str) -> None:
@@ -113,9 +116,66 @@ def test_delete_account_removes_profile_and_dependent_rows() -> None:
     profile = client.get("/api/v1/me/profile", headers=headers)
     assert profile.status_code == 404
 
+    recreate = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 250,
+            "difficulty": "challenging",
+            "access": "public",
+        },
+    )
+    assert recreate.status_code == 410
+
+    assert recreate.json() == {"detail": "Account has been deleted"}
+
+    alternate_create = client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=headers,
+        json={"assignments": [{"course_id": 1, "tier": "green", "position": 1}]},
+    )
+    assert alternate_create.status_code == 410
+
 
 def test_delete_account_is_idempotent_when_no_local_account_exists() -> None:
     client = TestClient(create_app())
     response = client.delete("/api/v1/me", headers={"X-Development-Subject": "dev:ghost"})
     assert response.status_code == 200
     assert response.json() == {"status": "deleted"}
+
+
+def test_provider_failure_leaves_a_tombstone_and_reports_pending(monkeypatch) -> None:
+    app = create_app()
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:pending-deletion"}
+    _onboard(client, "dev:pending-deletion", "pending_deletion")
+
+    def fail_provider_deletion(provider_subject, settings) -> None:
+        raise HTTPException(503, "Identity provider is unavailable")
+
+    monkeypatch.setattr(main_module, "delete_clerk_user", fail_provider_deletion)
+    response = client.delete("/api/v1/me", headers=headers)
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "deletion_pending"}
+    with app.state.session_factory() as session:
+        assert session.get(DeletedIdentity, "dev:pending-deletion") is not None
+        assert session.query(User).filter(User.provider_subject == "dev:pending-deletion").one_or_none() is None
+
+    recreate = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 250,
+            "difficulty": "challenging",
+            "access": "public",
+        },
+    )
+    assert recreate.status_code == 410
+
+    monkeypatch.setattr(main_module, "delete_clerk_user", lambda provider_subject, settings: None)
+    retry = client.delete("/api/v1/me", headers=headers)
+    assert retry.status_code == 200
+    assert retry.json() == {"status": "deleted"}

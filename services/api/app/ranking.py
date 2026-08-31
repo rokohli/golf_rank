@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course
+from .domain import course_data, require_course, stored_user
 from .models import (
     Comparison,
     Course,
@@ -103,15 +103,6 @@ def _with_round_stats(session: Session, user_id: int, entries: list[dict]) -> li
         }
         for entry in entries
     ]
-
-
-def _stored_user(session: Session, user: CurrentUser, *, create: bool) -> User | None:
-    stored = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
-    if stored is None and create:
-        stored = User(provider_subject=user.provider_subject)
-        session.add(stored)
-        session.flush()
-    return stored
 
 
 def _blocked_ids(session: Session, user_id: int) -> set[int]:
@@ -541,7 +532,7 @@ def get_ranking(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> RankingSnapshotOut:
-    stored = _stored_user(session, user, create=False)
+    stored = stored_user(session, user, create=False)
     if stored is None:
         return RankingSnapshotOut(
             version=0,
@@ -596,7 +587,7 @@ def get_friend_rankings(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> list[FriendRankingOut]:
-    stored = _stored_user(session, user, create=False)
+    stored = stored_user(session, user, create=False)
     if stored is None:
         return []
 
@@ -662,7 +653,7 @@ def place_in_tiers(
     if len(course_ids) != len(set(course_ids)):
         raise HTTPException(422, "Each course can appear only once per request")
 
-    stored = _stored_user(session, user, create=True)
+    stored = stored_user(session, user, create=True)
     assert stored is not None
     _lock_user_for_ranking_update(session, stored.id)
     for placement, course_id in placements:
@@ -711,7 +702,7 @@ def compare_courses(
     course_b_id = require_course(session, payload.course_b_id).id
     if course_a_id == course_b_id:
         raise HTTPException(422, "A course cannot be compared with itself")
-    stored = _stored_user(session, user, create=False)
+    stored = stored_user(session, user, create=False)
     if stored is None:
         raise HTTPException(409, "Place both courses into tiers before comparing them")
     _lock_user_for_ranking_update(session, stored.id)

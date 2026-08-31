@@ -81,6 +81,8 @@ def test_ranking_snapshots_include_current_attributed_course_images() -> None:
         "alt_text": "Ranked course hero",
         "source_name": "GolfRank photographer",
         "source_url": "https://golfrank.example/photos/ranked-course",
+        "license_name": None,
+        "license_url": None,
         "position": 0,
         "is_hero": True,
     }
@@ -485,4 +487,3 @@ def test_friend_rankings_uses_canonical_profile_username() -> None:
     friends = res.json()
     assert len(friends) == 1
     assert friends[0]["user"]["username"] == "canonical_friend"
-

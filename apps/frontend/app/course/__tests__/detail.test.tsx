@@ -233,15 +233,30 @@ describe('course detail ratings', () => {
         alt_text: 'Test Links eighteenth green',
         source_name: 'Course photographer',
         source_url: 'https://images.example/license',
+        license_name: 'CC BY-SA 4.0',
+        license_url: 'https://creativecommons.org/licenses/by-sa/4.0/',
         position: 0,
         is_hero: true,
+      }, {
+        id: 9,
+        url: 'https://images.example/test-links-approach.jpg',
+        alt_text: 'Test Links approach shot',
+        source_name: 'Second photographer',
+        source_url: 'https://images.example/second-source',
+        license_name: 'CC BY 3.0',
+        license_url: 'https://creativecommons.org/licenses/by/3.0/',
+        position: 1,
+        is_hero: false,
       }],
     })
 
     render(<CourseDetail />)
 
     expect(await screen.findByLabelText('Test Links eighteenth green')).toBeOnTheScreen()
-    expect(screen.getByText('Photos: Course photographer')).toBeOnTheScreen()
+    expect(screen.getByRole('link', { name: 'Open source for photo 1' })).toHaveTextContent('Course photographer')
+    expect(screen.getByRole('link', { name: 'Open license for photo 1' })).toHaveTextContent('CC BY-SA 4.0')
+    expect(screen.getByRole('link', { name: 'Open source for photo 2' })).toHaveTextContent('Second photographer')
+    expect(screen.getByRole('link', { name: 'Open license for photo 2' })).toHaveTextContent('CC BY 3.0')
   })
 
   it('does not present an unattributed URL as a course photograph', async () => {

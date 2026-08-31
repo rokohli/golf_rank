@@ -27,7 +27,7 @@ from sqlalchemy import delete, select
 from app.core.config import Settings
 from app.course_photo_scoring import score_course_photo
 from app.db import make_engine, make_session_factory
-from app.domain import course_image_data
+from app.domain import course_image_data, storage_image_url
 from app.models import Course, CourseImage
 
 REFERENCE_COURSE_IDS = [210, 213]  # Crystal Springs, Cypress Point
@@ -67,6 +67,9 @@ def main() -> int:
             reference_images = []
             for reference_id in REFERENCE_COURSE_IDS:
                 course = session.get(Course, reference_id)
+                if course is None:
+                    print(f"Warning: reference course #{reference_id} does not exist, skipping it.")
+                    continue
                 hero = next((image for image in course_image_data(course) if image["is_hero"]), None)
                 if hero is None:
                     print(f"Warning: reference course #{reference_id} has no hero photo, skipping it as a reference.")
@@ -93,7 +96,10 @@ def main() -> int:
                 print(f"#{course_id} {course.name}")
                 scored = []
                 for image in images:
-                    url = image.external_url or f"{settings.course_image_base_url.rstrip('/')}/{image.storage_key}"
+                    url = image.external_url or storage_image_url(settings.course_image_base_url, image.storage_key)
+                    if url is None:
+                        print(f"    skipping image #{image.id}: COURSE_IMAGE_BASE_URL is required for storage keys")
+                        continue
                     data, content_type = _fetch(client, url)
                     score = score_course_photo(
                         client,
@@ -108,6 +114,9 @@ def main() -> int:
                     print(f"    {tag} {score.score:>2}/10  {'; '.join(score.reasons)}")
                     time.sleep(REQUEST_DELAY_SECONDS)
 
+                if not scored:
+                    print("    no resolvable photos")
+                    continue
                 best_image, best_score = max(scored, key=lambda pair: pair[1].score)
                 if args.apply:
                     if args.quality_floor is not None and best_score.score < args.quality_floor:

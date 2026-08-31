@@ -24,7 +24,8 @@ from sqlalchemy import select
 from app.core.auth import delete_clerk_user
 from app.core.config import Settings
 from app.db import make_engine, make_session_factory
-from app.models import User
+from app.domain import lock_identity_transaction
+from app.models import DeletedIdentity, User
 
 
 def normalize_subject(raw: str) -> str:
@@ -46,6 +47,7 @@ def main() -> int:
     session_factory = make_session_factory(engine)
 
     with session_factory() as session:
+        lock_identity_transaction(session, provider_subject)
         stored_user = session.scalar(select(User).where(User.provider_subject == provider_subject))
         if stored_user is None:
             print(f"No local account found for {provider_subject}; will still attempt Clerk deletion.")
@@ -62,10 +64,12 @@ def main() -> int:
                 print("Aborted.")
                 return 1
 
+        if session.get(DeletedIdentity, provider_subject) is None:
+            session.add(DeletedIdentity(provider_subject=provider_subject))
         if stored_user is not None:
             session.delete(stored_user)
-            session.commit()
             print("Deleted local account data.")
+        session.commit()
 
         delete_clerk_user(provider_subject, settings)
         print("Deleted Clerk identity.")
