@@ -95,6 +95,24 @@ class Course(Base):
     )
 
 
+class CourseImageSource:
+    """Priority-ordered provenance of a stored course image (highest first)."""
+
+    OFFICIAL = "official"
+    USER = "user"
+    WIKIMEDIA = "wikimedia"
+
+    ALL = (OFFICIAL, USER, WIKIMEDIA)
+
+
+class CourseImageModeration:
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+    ALL = (PENDING, APPROVED, REJECTED)
+
+
 class CourseImage(Base):
     __tablename__ = "course_images"
     __table_args__ = (
@@ -110,13 +128,52 @@ class CourseImage(Base):
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
     storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     alt_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     license_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     license_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Doubles as the "featured" flag from the spec: the explicitly selected hero
+    # within a source tier (OFFICIAL/USER/WIKIMEDIA), highest tier wins overall.
     is_hero: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    source_type: Mapped[str] = mapped_column(
+        String(20), default=CourseImageSource.WIKIMEDIA, server_default=CourseImageSource.WIKIMEDIA, index=True
+    )
+    moderation_status: Mapped[str] = mapped_column(
+        String(20), default=CourseImageModeration.APPROVED, server_default=CourseImageModeration.APPROVED, index=True
+    )
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CourseImageNegativeCache(Base):
+    """Remembers that an external provider had nothing usable for a course.
+
+    Short-lived by design (see Settings.wikimedia_cache_negative_ttl_seconds) so a
+    course without an image today gets rechecked once new photos are uploaded to
+    Commons, without hammering the provider on every page view in the meantime.
+    """
+
+    __tablename__ = "course_image_negative_cache"
+    __table_args__ = (
+        UniqueConstraint("course_id", "provider", name="uq_course_image_negative_cache"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(20), index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class CourseReconciliation(Base):

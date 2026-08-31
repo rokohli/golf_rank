@@ -37,6 +37,22 @@ export type CourseImage = {
   is_hero: boolean
 }
 
+// Normalized shape from CourseImageService.resolveCourseHeroImage -- the
+// frontend renders off `type` alone and never needs provider-specific logic.
+export type HeroImageType = 'OFFICIAL' | 'USER' | 'WIKIMEDIA' | 'SATELLITE' | 'NONE'
+
+export type HeroImage = {
+  type: HeroImageType
+  url: string | null
+  thumbnail_url: string | null
+  attribution: string | null
+  license: string | null
+  source_url: string | null
+  alt_text: string
+  width: number | null
+  height: number | null
+}
+
 export type Course = {
   id: number
   name: string
@@ -59,6 +75,7 @@ export type Course = {
   slope_rating?: number | null
   tee_time_url?: string | null
   images?: CourseImage[]
+  hero_image?: HeroImage | null
   access?: string | null
   community_rating?: number | null
   rating_count?: number

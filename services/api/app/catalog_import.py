@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.config import Settings
+from .course_images.repository import CourseImageRepository
 from .db import make_engine, make_session_factory
 from .models import Course, Profile
 
@@ -132,10 +133,18 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
         else:
             report.updated += 1
             if not dry_run:
+                coordinates_changed = (
+                    course.latitude != values["latitude"] or course.longitude != values["longitude"]
+                )
                 for key, value in values.items():
                     if key in PRESERVE_WHEN_MISSING and value is None:
                         continue
                     setattr(course, key, value)
+                if coordinates_changed:
+                    # A stale "no Wikimedia match" result was keyed to the old
+                    # location -- corrected coordinates deserve a fresh search
+                    # instead of sitting behind the negative-cache TTL.
+                    CourseImageRepository().invalidate_negative_cache(session, course.id, commit=False)
     for source_id, course in existing.items():
         if source_id not in seen_ids and course.status != "retired":
             report.retired += 1

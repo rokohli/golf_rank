@@ -9,7 +9,7 @@ import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
 import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
-import { Course, CourseRatingState, FriendsCourseThoughts, RoundPatch, SavedList } from '../../src/types'
+import { Course, CourseRatingState, FriendsCourseThoughts, HeroImage, RoundPatch, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
 export default function CourseDetail() {
@@ -264,6 +264,7 @@ export default function CourseDetail() {
         <CourseVisual course={course} height={245} squareTop />
         <View style={[styles.back, { top: insets.top + 12 }]}><HeroButton icon="arrow-left" label="Go back" onPress={() => router.back()} /></View>
         <View style={[styles.heroActions, { top: insets.top + 12 }]}><HeroButton disabled={!numericCourseId || saveLoading} icon="bookmark" label={isSaved ? 'Remove saved course' : 'Save course'} onPress={() => void toggleSaved()} /><HeroButton icon="share" label="Share course" onPress={() => void shareCourse()} /></View>
+        <HeroAttribution heroImage={course.heroImage} />
       </View>
       <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}</View>
 
@@ -307,6 +308,21 @@ export default function CourseDetail() {
 }
 
 function HeroButton({ disabled = false, icon, label, onPress }: { disabled?: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.heroButton, disabled && styles.actionDisabled]}><Feather name={icon} size={19} color="#FFF" /></Pressable> }
+
+// Wikimedia and Mapbox both require visible attribution when their imagery
+// is shown; OFFICIAL/USER/NONE need none.
+function HeroAttribution({ heroImage }: { heroImage?: HeroImage | null }) {
+  if (!heroImage || heroImage.type !== 'WIKIMEDIA' && heroImage.type !== 'SATELLITE') return null
+  const label = heroImage.type === 'SATELLITE'
+    ? 'Satellite imagery © Mapbox'
+    : `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}${heroImage.license ? ` · ${heroImage.license}` : ''}`
+  const onPress = heroImage.source_url ? () => void Linking.openURL(heroImage.source_url!) : undefined
+  return (
+    <Pressable accessibilityLabel={`Image attribution: ${label}`} accessibilityRole={onPress ? 'link' : 'text'} disabled={!onPress} onPress={onPress} style={styles.heroAttribution}>
+      <Text numberOfLines={1} style={styles.heroAttributionText}>{label}</Text>
+    </Pressable>
+  )
+}
 
 function CourseAction({ disabled = false, icon, label, onPress }: { disabled?: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress?: () => void }) {
   return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.action, disabled && styles.actionDisabled]}>{({ pressed }) => <><View style={[styles.actionIcon, pressed && styles.actionIconPressed]}><Feather name={icon} size={18} color={pressed ? '#FFF' : colors.pine} /></View><Text style={[styles.actionLabel, pressed && styles.actionLabelPressed]}>{label}</Text></>}</Pressable>
@@ -381,6 +397,7 @@ function SaveDetailButton({ label, loading, onPress }: { label: string; loading:
 
 const styles = StyleSheet.create({
   hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' }, back: { left: 14, position: 'absolute', top: 14 }, heroActions: { flexDirection: 'row', gap: 8, position: 'absolute', right: 14, top: 14 }, heroButton: { alignItems: 'center', backgroundColor: 'rgba(16,56,42,0.88)', borderColor: 'rgba(255,255,255,0.35)', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
+  heroAttribution: { bottom: 10, left: 12, position: 'absolute' }, heroAttributionText: { color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   coursePanel: { backgroundColor: colors.pine, borderRadius: 14, marginHorizontal: -18, marginTop: -38, paddingHorizontal: 22, paddingTop: 24, zIndex: 2 }, title: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 25, lineHeight: 31 }, location: { color: '#D0DAD4', fontSize: 12, marginTop: 7 }, access: { color: '#D0DAD4', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 15, textTransform: 'uppercase' },
   facts: { borderTopColor: 'rgba(255,255,255,0.23)', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', marginTop: 18 }, fact: { alignItems: 'center', flex: 1, minHeight: 94, paddingHorizontal: 4, paddingTop: 17 }, factBorder: { borderLeftColor: 'rgba(255,255,255,0.23)', borderLeftWidth: StyleSheet.hairlineWidth }, factValue: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 22 }, factLabel: { color: '#D0DAD4', fontSize: 7, fontWeight: '800', letterSpacing: 1, marginTop: 7, textAlign: 'center', textTransform: 'uppercase' }, factSecondary: { color: '#D0DAD4', fontSize: 8, marginTop: 4, textAlign: 'center' },
   ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 },
@@ -402,6 +419,7 @@ function toCoursePresentation(course: Course): CoursePresentation {
     distance: '',
     price: priceTier(course.green_fee),
     image: attributedCourseImage(course),
+    heroImage: course.hero_image,
   }
 }
 

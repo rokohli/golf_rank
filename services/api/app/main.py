@@ -22,6 +22,7 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
+from .course_images.service import CourseImageService
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
@@ -117,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = rate_limiter
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
+    app.state.course_image_service = CourseImageService(settings=settings)
     app.state.session_factory = make_session_factory(
         engine, course_image_base_url=settings.course_image_base_url
     )
@@ -510,8 +512,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 UserCourseRating.course_id.in_(identity_ids)
             )
         ).one()
+        hero_image = app.state.course_image_service.resolve_hero_image(session, stored_course)
         return {
             **course_data(stored_course),
+            "hero_image": hero_image.to_dict(),
             "community_rating": (
                 round(float(community_rating), 1)
                 if community_rating is not None

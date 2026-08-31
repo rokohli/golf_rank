@@ -54,15 +54,20 @@ export function BottomNav() {
 export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; children?: ReactNode }) {
   const visualStyle = [styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]
   if (!course.image) {
+    // No broken-image icon or "unavailable" messaging -- an intentional,
+    // on-brand header that still reads as "this course" while no photo
+    // exists yet, not as an error state.
     return (
-      <View accessibilityLabel="Course image unavailable" style={[visualStyle, styles.coursePlaceholder]}>
+      <View accessibilityLabel={`${course.name} course header`} style={[visualStyle, styles.coursePlaceholder]}>
+        <View style={styles.coursePlaceholderContour1} />
+        <View style={styles.coursePlaceholderContour2} />
         <Feather name="flag" size={24} color={colors.pine} />
         {children}
       </View>
     )
   }
   return (
-    <ImageBackground source={course.image} resizeMode="cover" style={visualStyle}>
+    <ImageBackground accessibilityLabel={`${course.name} course photo`} source={course.image} resizeMode="cover" style={visualStyle}>
       <View style={styles.photoWash} />
       {children}
     </ImageBackground>
@@ -146,6 +151,10 @@ const styles = StyleSheet.create({
   navLabelActive: { color: colors.pine, fontWeight: '800' },
   courseVisual: { borderRadius: 10, overflow: 'hidden', position: 'relative' },
   coursePlaceholder: { alignItems: 'center', backgroundColor: colors.pineSoft, justifyContent: 'center' },
+  // Faint concentric arcs bleeding off the bottom-right corner, evoking a
+  // topographic contour line -- subtle enough to stay in the background.
+  coursePlaceholderContour1: { borderColor: 'rgba(16,56,42,0.06)', borderRadius: 999, borderWidth: 34, bottom: -140, height: 280, position: 'absolute', right: -110, width: 280 },
+  coursePlaceholderContour2: { borderColor: 'rgba(16,56,42,0.05)', borderRadius: 999, borderWidth: 24, bottom: -90, height: 180, position: 'absolute', right: -60, width: 180 },
   courseVisualSquareTop: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
   photoWash: { backgroundColor: 'rgba(8, 25, 17, 0.05)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
   card: { backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden' },
