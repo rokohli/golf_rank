@@ -124,11 +124,16 @@ def main() -> int:
                         session.commit()
                         print(f"    -> removed: best photo only scored {best_score.score}/10, "
                               f"below the {args.quality_floor}/10 floor")
-                    elif not best_image.is_hero:
-                        for image, _ in scored:
-                            image.is_hero = image is best_image
-                        session.commit()
-                        print(f"    -> hero changed to the {best_score.score}/10 photo")
+                    else:
+                        changed = False
+                        for image in images:
+                            desired = image.id == best_image.id
+                            if image.is_hero != desired:
+                                image.is_hero = desired
+                                changed = True
+                        if changed:
+                            session.commit()
+                            print(f"    -> hero changed to the {best_score.score}/10 photo")
 
     return 0
 
