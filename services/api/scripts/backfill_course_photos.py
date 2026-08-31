@@ -18,11 +18,20 @@ from sqlalchemy import func, select
 from app.core.config import Settings
 from app.course_photos import find_wikimedia_photos
 from app.db import make_engine, make_session_factory
-from app.models import Course, CourseImage, UserCourseRating
+from app.models import Course, CourseImage, CourseImageModeration, UserCourseRating
+
+
+def _courses_with_a_usable_photo():
+    """A rejected image doesn't count -- otherwise a course whose only photo
+    was rejected is permanently skipped by the backfill, with no automated
+    path back to a usable image."""
+    return select(CourseImage.course_id).where(
+        CourseImage.moderation_status != CourseImageModeration.REJECTED
+    ).distinct()
 
 
 def top_rated_courses_missing_photos(session, limit: int) -> list[Course]:
-    already_has_photo = select(CourseImage.course_id).distinct()
+    already_has_photo = _courses_with_a_usable_photo()
     rows = session.execute(
         select(Course, func.avg(UserCourseRating.rating).label("avg_rating"))
         .join(UserCourseRating, UserCourseRating.course_id == Course.id)
@@ -37,7 +46,7 @@ def top_rated_courses_missing_photos(session, limit: int) -> list[Course]:
 
 def courses_missing_photos_by_id(session, limit: int) -> list[Course]:
     """Fallback ordering for catalogs without enough community ratings yet."""
-    already_has_photo = select(CourseImage.course_id).distinct()
+    already_has_photo = _courses_with_a_usable_photo()
     return list(session.execute(
         select(Course)
         .where(Course.status == "active", Course.id.not_in(already_has_photo))

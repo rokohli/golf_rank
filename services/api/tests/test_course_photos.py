@@ -1,6 +1,7 @@
 import httpx
+import pytest
 
-from app.course_photos import find_wikimedia_photos, is_landscape
+from app.course_photos import _request_with_retries, find_wikimedia_photos, is_landscape
 
 
 def _client(handler) -> httpx.Client:
@@ -117,3 +118,20 @@ def test_find_wikimedia_photos_returns_empty_when_no_results() -> None:
     assert find_wikimedia_photos(
         _client(handler), course_name="Some Golf Club", latitude=0.0, longitude=0.0
     ) == []
+
+
+def test_max_retries_zero_does_not_retry_a_429_and_raises_immediately() -> None:
+    """A synchronous per-request caller (the live course-image resolver)
+    passes max_retries=0 so a rate limit doesn't block the request behind
+    growing backoff -- see WikimediaImageProvider.lookup."""
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        response = _request_with_retries(_client(handler), "GET", "https://commons.wikimedia.org/w/api.php", max_retries=0)
+        response.raise_for_status()
+    assert attempts == 1

@@ -28,7 +28,7 @@ from app.core.config import Settings
 from app.course_photo_scoring import score_course_photo
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
-from app.models import Course, CourseImage
+from app.models import Course, CourseImage, CourseImageSource
 
 REFERENCE_COURSE_IDS = [210, 213]  # Crystal Springs, Cypress Point
 MODEL = "gemini-flash-lite-latest"
@@ -86,11 +86,18 @@ def main() -> int:
                     print(f"#{course_id}: no such course")
                     continue
 
+                # Scored against Wikimedia-sourced candidates only -- OFFICIAL/USER
+                # photos are curated by a human and already outrank this tier in
+                # CourseImageService, so they must never be re-scored, demoted, or
+                # deleted by this script.
                 images = session.execute(
-                    select(CourseImage).where(CourseImage.course_id == course_id).order_by(CourseImage.position)
+                    select(CourseImage).where(
+                        CourseImage.course_id == course_id,
+                        CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                    ).order_by(CourseImage.position)
                 ).scalars().all()
                 if not images:
-                    print(f"#{course_id} {course.name}: no photos")
+                    print(f"#{course_id} {course.name}: no Wikimedia photos")
                     continue
 
                 print(f"#{course_id} {course.name}")
@@ -120,7 +127,10 @@ def main() -> int:
                 best_image, best_score = max(scored, key=lambda pair: pair[1].score)
                 if args.apply:
                     if args.quality_floor is not None and best_score.score < args.quality_floor:
-                        session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
+                        session.execute(delete(CourseImage).where(
+                            CourseImage.course_id == course_id,
+                            CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                        ))
                         session.commit()
                         print(f"    -> removed: best photo only scored {best_score.score}/10, "
                               f"below the {args.quality_floor}/10 floor")

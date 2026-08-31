@@ -126,16 +126,15 @@ class CourseImageService:
         # independent Wikimedia search. A distributed lock (e.g. via Redis,
         # already used elsewhere for rate limiting) would coalesce across
         # worker processes too -- flagged as a follow-up in the final report.
-        self._wikimedia_locks_guard = threading.Lock()
-        self._wikimedia_locks: dict[int, threading.Lock] = {}
+        #
+        # Fixed-size lock striping (rather than one lock per course_id) keeps
+        # this bounded regardless of catalog size -- a per-course dict would
+        # grow by one entry for every distinct course ever looked up, for the
+        # life of the process.
+        self._wikimedia_locks = [threading.Lock() for _ in range(64)]
 
     def _wikimedia_lock(self, course_id: int) -> threading.Lock:
-        with self._wikimedia_locks_guard:
-            lock = self._wikimedia_locks.get(course_id)
-            if lock is None:
-                lock = threading.Lock()
-                self._wikimedia_locks[course_id] = lock
-            return lock
+        return self._wikimedia_locks[course_id % len(self._wikimedia_locks)]
 
     def resolve_hero_image(self, session: Session, course: HasCourse) -> CourseImageResult:
         started = time.monotonic()

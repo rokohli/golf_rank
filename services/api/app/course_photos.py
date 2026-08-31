@@ -11,19 +11,27 @@ MAX_TRANSIENT_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 3.0
 
 
-def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs) -> httpx.Response:
+def _request_with_retries(
+    client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES, **kwargs
+) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
     connections and brief 429s from Commons -- retry those instead
-    of letting one bad request kill an hours-long job."""
-    for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+    of letting one bad request kill an hours-long job.
+
+    A synchronous per-request caller (the live course-image resolver) should
+    pass max_retries=0: retries with growing backoff are fine to absorb in an
+    hours-long offline job, but not while blocking a course-detail request and
+    holding a DB session/lock.
+    """
+    for attempt in range(max_retries + 1):
         try:
             response = client.request(method, url, **kwargs)
         except httpx.TransportError:
-            if attempt == MAX_TRANSIENT_RETRIES:
+            if attempt == max_retries:
                 raise
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
-        if response.status_code == 429 and attempt < MAX_TRANSIENT_RETRIES:
+        if response.status_code == 429 and attempt < max_retries:
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
         return response
@@ -105,6 +113,7 @@ def find_wikimedia_photos(
     longitude: float,
     radius_meters: int = 1000,
     limit: int = 5,
+    max_retries: int = MAX_TRANSIENT_RETRIES,
 ) -> list[ExternalPhoto]:
     """Find geo-tagged, landscape photos on Wikimedia Commons near a course.
 
@@ -112,6 +121,10 @@ def find_wikimedia_photos(
     mushroom, a mansion, a beach), so results are also required to share a
     distinctive word with the course's name -- otherwise we'd mislabel an
     unrelated photo as this course.
+
+    `max_retries` defaults to the batch-job budget; pass 0 from a synchronous
+    per-request caller to bound worst-case latency to roughly the client
+    timeout instead of minutes of growing backoff.
     """
     course_words = _significant_words(course_name)
     if not course_words:
@@ -119,6 +132,7 @@ def find_wikimedia_photos(
 
     geosearch = _request_with_retries(
         client, "GET", COMMONS_API_URL,
+        max_retries=max_retries,
         params={
             "action": "query",
             "list": "geosearch",
@@ -137,6 +151,7 @@ def find_wikimedia_photos(
 
     imageinfo = _request_with_retries(
         client, "GET", COMMONS_API_URL,
+        max_retries=max_retries,
         params={
             "action": "query",
             "titles": "|".join(titles),

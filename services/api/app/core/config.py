@@ -25,14 +25,13 @@ class Settings(BaseSettings):
     mapbox_static_image_zoom: float = 15.5
     mapbox_static_image_pixel_ratio: int = 1
     mapbox_lookup_timeout_seconds: float = 4.0
-    # Off by default, matching this codebase's convention for opt-in external
-    # calls (see ai_planner_enabled, rate_limit_enabled). With it off, the
-    # resolver still serves any Wikimedia image already on file (populated by
-    # the offline backfill/refresh scripts or a prior live lookup) -- it just
-    # won't perform a new synchronous Commons search on a course-detail
-    # request. Turn it on once you're comfortable with the added request
-    # latency and outbound-call volume, or rely on scheduled enrichment.
-    wikimedia_live_lookup_enabled: bool = False
+    # On by default: a course-detail request performs a live Commons search
+    # when no OFFICIAL/USER/WIKIMEDIA image is on file yet. The resolver
+    # fails open (falls through to Mapbox/NONE) on any Wikimedia error or
+    # timeout, so this never breaks the course page -- it only adds request
+    # latency and outbound-call volume on a cache miss. Set to false to rely
+    # solely on the offline backfill/refresh scripts for enrichment instead.
+    wikimedia_live_lookup_enabled: bool = True
     wikimedia_lookup_timeout_seconds: float = 5.0
     wikimedia_confidence_threshold: float = 0.6
     wikimedia_cache_positive_ttl_seconds: int = 30 * 24 * 3600

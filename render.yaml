@@ -64,7 +64,7 @@ services:
       - key: MAPBOX_ACCESS_TOKEN
         sync: false
       - key: WIKIMEDIA_LIVE_LOOKUP_ENABLED
-        value: "false"
+        value: "true"
       - key: AI_PLANNER_ENABLED
         value: "false"
       - key: AI_PLANNER_PROVIDER

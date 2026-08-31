@@ -53,8 +53,13 @@ class WikimediaImageProvider:
     def lookup(self, course: HasCoursePlace) -> WikimediaLookup:
         headers = {"User-Agent": "GolfRank-CourseImageResolver/1.0 (https://github.com/golf-rank/golf_rank)"}
         with httpx.Client(timeout=self._timeout_seconds, headers=headers) as client:
+            # max_retries=0: this runs synchronously in a course-detail request
+            # (holding a DB session and the per-course coalescing lock), unlike
+            # the offline backfill/refresh scripts that can afford to absorb a
+            # transient blip with growing backoff.
             photos = find_wikimedia_photos(
                 client, course_name=course.name, latitude=course.latitude, longitude=course.longitude, limit=1,
+                max_retries=0,
             )
         if not photos:
             return WikimediaLookup(result=None, confidence=0.0, photo=None)

@@ -18,7 +18,7 @@ from sqlalchemy import delete, select
 from app.core.config import Settings
 from app.course_photos import find_wikimedia_photos
 from app.db import make_engine, make_session_factory
-from app.models import Course, CourseImage
+from app.models import Course, CourseImage, CourseImageSource
 
 
 def main() -> int:
@@ -61,6 +61,17 @@ def main() -> int:
                     longitude=course.longitude,
                     limit=args.photos_per_course,
                 )
+                # Only this course's Wikimedia-tier rows are ours to replace --
+                # OFFICIAL/USER photos are curated and must survive a refresh.
+                session.execute(delete(CourseImage).where(
+                    CourseImage.course_id == course_id,
+                    CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                ))
+                next_position = session.scalar(
+                    select(CourseImage.position).where(CourseImage.course_id == course_id)
+                    .order_by(CourseImage.position.desc())
+                )
+                start_position = (next_position + 1) if next_position is not None else 0
                 rows = [
                     CourseImage(
                         course_id=course_id,
@@ -70,12 +81,12 @@ def main() -> int:
                         source_url=photo.source_url,
                         license_name=photo.license_name,
                         license_url=photo.license_url,
-                        position=index,
+                        position=start_position + index,
                         is_hero=index == 0,
+                        source_type=CourseImageSource.WIKIMEDIA,
                     )
                     for index, photo in enumerate(photos)
                 ]
-                session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
                 session.add_all(rows)
                 session.commit()
                 print(f"#{course_id} {course.name}: {len(rows)} photo(s)")

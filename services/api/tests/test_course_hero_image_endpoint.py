@@ -10,7 +10,9 @@ from app.models import Course, CourseImage, CourseImageModeration, CourseImageSo
 # without knowing which provider produced it, and never fails the endpoint
 # when no external image is available.
 def test_course_detail_includes_hero_image_none_by_default() -> None:
-    client = TestClient(create_app())
+    # wikimedia_live_lookup_enabled is True in production; disabled here so
+    # this test stays hermetic and doesn't depend on network access.
+    client = TestClient(create_app(Settings(wikimedia_live_lookup_enabled=False)))
     pebble_id = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]["id"]
 
     response = client.get(f"/api/v1/courses/{pebble_id}")
@@ -23,7 +25,9 @@ def test_course_detail_includes_hero_image_none_by_default() -> None:
 
 
 def test_course_detail_hero_image_prefers_official_photo() -> None:
-    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    app = create_app(Settings(
+        course_image_base_url="https://cdn.example/assets", wikimedia_live_lookup_enabled=False,
+    ))
     with app.state.session_factory() as session:
         pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
         session.add(CourseImage(
@@ -47,7 +51,7 @@ def test_course_detail_hero_image_prefers_official_photo() -> None:
 
 
 def test_course_detail_hero_image_satellite_fallback_with_mapbox_token() -> None:
-    app = create_app(Settings(mapbox_access_token="pk.test"))
+    app = create_app(Settings(mapbox_access_token="pk.test", wikimedia_live_lookup_enabled=False))
     client = TestClient(app)
     pebble_id = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]["id"]
 

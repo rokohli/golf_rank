@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .core.config import Settings
 from .course_images.repository import CourseImageRepository
 from .db import make_engine, make_session_factory
-from .models import Course, Profile
+from .models import Course, CourseImage, CourseImageSource, Profile
 
 
 SOURCE = "opengolfapi"
@@ -141,9 +141,14 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
                         continue
                     setattr(course, key, value)
                 if coordinates_changed:
-                    # A stale "no Wikimedia match" result was keyed to the old
-                    # location -- corrected coordinates deserve a fresh search
-                    # instead of sitting behind the negative-cache TTL.
+                    # A stale Wikimedia match (or a "no match" result) was keyed
+                    # to the old location -- corrected coordinates deserve a
+                    # fresh search rather than continuing to show a possibly
+                    # wrong photo or sitting behind the negative-cache TTL.
+                    session.execute(delete(CourseImage).where(
+                        CourseImage.course_id == course.id,
+                        CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                    ))
                     CourseImageRepository().invalidate_negative_cache(session, course.id, commit=False)
     for source_id, course in existing.items():
         if source_id not in seen_ids and course.status != "retired":
