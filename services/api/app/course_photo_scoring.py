@@ -91,7 +91,7 @@ def score_course_photo(
                 headers={"x-goog-api-key": api_key},
                 json=payload,
             )
-            if response.status_code == 429 and attempt < MAX_TRANSIENT_RETRIES:
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < MAX_TRANSIENT_RETRIES:
                 time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
                 continue
             break

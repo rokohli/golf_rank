@@ -179,3 +179,115 @@ def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> N
         assert images[0].is_hero is False
         assert images[1].is_hero is True
         assert images[2].is_hero is False
+
+
+def test_score_course_photo_retries_transient_5xx_server_errors(monkeypatch) -> None:
+    monkeypatch.setattr(course_photo_scoring.time, "sleep", lambda _seconds: None)
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return httpx.Response(503, text="Service Unavailable")
+        if attempts["count"] == 2:
+            return httpx.Response(500, text="Internal Server Error")
+        return _gemini_response(7, ["good fairway"])
+
+    score = score_course_photo(
+        _client(handler),
+        api_key="test-key",
+        model="gemini-flash-lite-latest",
+        image_data=b"x",
+        image_content_type="image/jpeg",
+        reference_images=[],
+    )
+
+    assert attempts["count"] == 3
+    assert score.score == 7
+
+
+def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monkeypatch) -> None:
+    from app.core.config import Settings
+    from app.db import make_engine, make_session_factory
+    from app.models import Base, Course, CourseImage
+    import scripts.score_course_photos as script
+
+    settings = Settings()
+    engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
+    Base.metadata.create_all(bind=engine)
+    session_factory = make_session_factory(engine)
+
+    with session_factory() as session:
+        ref_course = Course(
+            id=210,
+            name="Reference Course",
+            region="CA",
+            latitude=37.0,
+            longitude=-122.0,
+            is_public=True,
+            source="manual",
+            source_course_id="ref",
+            hole_count=18,
+            par=72,
+        )
+        ref_image = CourseImage(
+            course_id=210,
+            external_url="https://example.com/ref.jpg",
+            is_hero=True,
+            position=0,
+        )
+        target_course = Course(
+            id=9999,
+            name="Target Course",
+            region="CA",
+            latitude=37.0,
+            longitude=-122.0,
+            is_public=True,
+            source="manual",
+            source_course_id="target-2",
+            hole_count=18,
+            par=72,
+        )
+        session.add_all([ref_course, ref_image, target_course])
+        session.flush()
+
+        img_storage_hero = CourseImage(
+            course_id=9999,
+            storage_key="unresolvable_key",
+            external_url=None,
+            is_hero=True,
+            position=0,
+        )
+        img_candidate_1 = CourseImage(
+            course_id=9999,
+            external_url="https://example.com/bad.jpg",
+            is_hero=False,
+            position=1,
+        )
+        session.add_all([img_storage_hero, img_candidate_1])
+        session.commit()
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
+    monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+
+    def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
+        from app.course_photo_scoring import PhotoScore
+        return PhotoScore(score=1, reasons=["blurry parking lot"])
+
+    monkeypatch.setattr(script, "score_course_photo", mock_score)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["score_course_photos.py", "--course-ids", "9999", "--apply", "--quality-floor", "3"],
+    )
+
+    exit_code = script.main()
+    assert exit_code == 0
+
+    with session_factory() as session:
+        images = session.query(CourseImage).filter(CourseImage.course_id == 9999).order_by(CourseImage.position).all()
+        # Images should NOT be deleted because not all images were scored
+        assert len(images) == 2
+        assert images[0].storage_key == "unresolvable_key"

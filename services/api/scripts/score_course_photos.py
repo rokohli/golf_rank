@@ -120,10 +120,15 @@ def main() -> int:
                 best_image, best_score = max(scored, key=lambda pair: pair[1].score)
                 if args.apply:
                     if args.quality_floor is not None and best_score.score < args.quality_floor:
-                        session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
-                        session.commit()
-                        print(f"    -> removed: best photo only scored {best_score.score}/10, "
-                              f"below the {args.quality_floor}/10 floor")
+                        if len(scored) < len(images):
+                            print(
+                                f"    -> skipped quality-floor removal: only {len(scored)}/{len(images)} photos were scored"
+                            )
+                        else:
+                            session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
+                            session.commit()
+                            print(f"    -> removed: best photo only scored {best_score.score}/10, "
+                                  f"below the {args.quality_floor}/10 floor")
                     else:
                         changed = False
                         for image in images:

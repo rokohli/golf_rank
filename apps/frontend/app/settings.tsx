@@ -43,9 +43,20 @@ export default function Settings() {
   const runDeleteAccount = async () => {
     setDeleting(true)
     setError(null)
+    let status: string | undefined
     try {
-      const status = await deleteAccount(await getAuthHeaders())
+      status = await deleteAccount(await getAuthHeaders())
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to delete your account. Please try again.')
+      setDeleting(false)
+      return
+    }
+
+    try {
       await signOut()
+    } catch (signOutReason) {
+      console.warn('Sign out after account deletion encountered an error', signOutReason)
+    } finally {
       router.replace('/')
       if (status === 'deletion_pending') {
         Alert.alert(
@@ -53,9 +64,6 @@ export default function Settings() {
           'Your GolfRank data is deleted and the account is blocked. Identity-provider cleanup is still pending.',
         )
       }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to delete your account. Please try again.')
-      setDeleting(false)
     }
   }
 
