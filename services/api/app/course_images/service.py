@@ -228,7 +228,13 @@ class CourseImageService:
                     session, course.id, WIKIMEDIA_PROVIDER_NAME,
                     ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
                 )
-                return cached_result
+                if cached is not None:
+                    # An authoritative miss (unlike a transient exception) means
+                    # the stale row is no longer backed by a trustworthy match --
+                    # evict it so the negative cache actually takes effect instead
+                    # of this stale row being served indefinitely.
+                    self._repository.delete_wikimedia_images(session, course.id)
+                return None
 
             self.metrics.wikimedia_successes += 1
             photo = lookup.photo

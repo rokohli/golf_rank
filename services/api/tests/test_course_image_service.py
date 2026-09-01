@@ -326,6 +326,25 @@ def test_stale_wikimedia_cache_triggers_refresh(session):
 
 # a stale cache entry is still served (rather than nothing) when the refresh
 # attempt itself fails -- fail open, same as any other Wikimedia error
+def test_stale_wikimedia_cache_evicted_on_authoritative_miss(session):
+    course = make_course(session)
+    add_image(
+        session, course, source_type=CourseImageSource.WIKIMEDIA,
+        external_url="https://example.com/stale.jpg",
+    )
+    wikimedia = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
+    satellite = FakeSatelliteProvider(satellite_result(course.name))
+    service = make_service(session, wikimedia=wikimedia, satellite=satellite, positive_ttl_seconds=-1)
+
+    result = service.resolve_hero_image(session, course)
+
+    assert result.type == "SATELLITE"
+    remaining = session.query(CourseImage).filter_by(
+        course_id=course.id, source_type=CourseImageSource.WIKIMEDIA,
+    ).all()
+    assert remaining == []
+
+
 def test_stale_wikimedia_cache_served_when_refresh_fails(session):
     course = make_course(session)
     add_image(
