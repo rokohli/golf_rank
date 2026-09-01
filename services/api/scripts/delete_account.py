@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.core.auth import delete_clerk_user
@@ -71,7 +72,11 @@ def main() -> int:
             print("Deleted local account data.")
         session.commit()
 
-        delete_clerk_user(provider_subject, settings)
+        try:
+            delete_clerk_user(provider_subject, settings)
+        except HTTPException as exc:
+            print(f"Local data deleted, but Clerk deletion failed ({exc.detail}); Clerk cleanup is pending.")
+            return 1
         print("Deleted Clerk identity.")
 
     return 0

@@ -22,13 +22,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-from sqlalchemy import delete, select
 
 from app.core.config import Settings
+from app.course_images.repository import CourseImageRepository
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
-from app.models import Course, CourseImage, CourseImageSource
+from app.models import Course
 
 REFERENCE_COURSE_IDS = [210, 213]  # Crystal Springs, Cypress Point
 MODEL = "gemini-flash-lite-latest"
@@ -61,6 +61,7 @@ def main() -> int:
     engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
+    repository = CourseImageRepository()
     headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
     with session_factory() as session:
         with httpx.Client(timeout=30, headers=headers) as client:
@@ -94,12 +95,7 @@ def main() -> int:
                 # photos are curated by a human and already outrank this tier in
                 # CourseImageService, so they must never be re-scored, demoted, or
                 # deleted by this script.
-                images = session.execute(
-                    select(CourseImage).where(
-                        CourseImage.course_id == course_id,
-                        CourseImage.source_type == CourseImageSource.WIKIMEDIA,
-                    ).order_by(CourseImage.position)
-                ).scalars().all()
+                images = repository.wikimedia_images(session, course_id)
                 if not images:
                     print(f"#{course_id} {course.name}: no Wikimedia photos")
                     continue
@@ -142,11 +138,7 @@ def main() -> int:
                                 "Wikimedia photos were scored"
                             )
                         else:
-                            session.execute(delete(CourseImage).where(
-                                CourseImage.course_id == course_id,
-                                CourseImage.source_type == CourseImageSource.WIKIMEDIA,
-                            ))
-                            session.commit()
+                            repository.delete_wikimedia_images(session, course_id)
                             print(f"    -> removed: best photo only scored {best_score.score}/10, "
                                   f"below the {args.quality_floor}/10 floor")
                     else:

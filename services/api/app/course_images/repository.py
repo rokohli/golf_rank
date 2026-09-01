@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..models import CourseImage, CourseImageModeration, CourseImageNegativeCache, CourseImageSource
@@ -51,14 +51,36 @@ class CourseImageRepository:
     def best_wikimedia_image(self, session: Session, course_id: int) -> CourseImage | None:
         return self._best_approved(session, course_id, CourseImageSource.WIKIMEDIA)
 
+    def next_position(self, session: Session, course_id: int) -> int:
+        """Next `CourseImage.position` for a course: one past the current max, or 0."""
+        current_max = session.scalar(
+            select(CourseImage.position).where(CourseImage.course_id == course_id).order_by(CourseImage.position.desc())
+        )
+        return (current_max + 1) if current_max is not None else 0
+
+    def wikimedia_images(self, session: Session, course_id: int) -> list[CourseImage]:
+        return list(session.scalars(
+            select(CourseImage).where(
+                CourseImage.course_id == course_id,
+                CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+            ).order_by(CourseImage.position)
+        ).all())
+
+    def delete_wikimedia_images(self, session: Session, course_id: int, *, commit: bool = True) -> None:
+        """Deletes only this course's Wikimedia-tier rows -- OFFICIAL/USER photos
+        are curated and must survive a refresh or a low-quality-score removal."""
+        session.execute(delete(CourseImage).where(
+            CourseImage.course_id == course_id,
+            CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+        ))
+        if commit:
+            session.commit()
+
     def add_wikimedia_image(self, session: Session, course_id: int, *, external_url, thumbnail_url, alt_text,
                              source_name, source_url, license_name, license_url, width, height) -> None:
         """Persists a freshly-resolved Wikimedia match as the cached result for
         next time -- this table row *is* the "cached Wikimedia result" from the
         spec; there's no separate positive-result cache to keep in sync."""
-        next_position = session.scalar(
-            select(CourseImage.position).where(CourseImage.course_id == course_id).order_by(CourseImage.position.desc())
-        )
         session.add(CourseImage(
             course_id=course_id,
             external_url=external_url,
@@ -68,7 +90,7 @@ class CourseImageRepository:
             source_url=source_url,
             license_name=license_name,
             license_url=license_url,
-            position=(next_position + 1) if next_position is not None else 0,
+            position=self.next_position(session, course_id),
             is_hero=True,
             source_type=CourseImageSource.WIKIMEDIA,
             moderation_status=CourseImageModeration.APPROVED,

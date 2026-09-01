@@ -13,9 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.core.config import Settings
+from app.course_images.repository import CourseImageRepository
 from app.course_photos import find_wikimedia_photos
 from app.db import make_engine, make_session_factory
 from app.models import Course, CourseImage, CourseImageSource
@@ -33,6 +34,7 @@ def main() -> int:
     engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
+    repository = CourseImageRepository()
     with session_factory() as session:
         courses = session.execute(select(Course).where(Course.id.in_(course_ids))).scalars().all()
         courses_by_id = {course.id: course for course in courses}
@@ -65,17 +67,8 @@ def main() -> int:
                     print(f"#{course_id} {course.name}: no landscape candidates found (keeping existing photos)")
                     continue
 
-                # Only this course's Wikimedia-tier rows are ours to replace --
-                # OFFICIAL/USER photos are curated and must survive a refresh.
-                session.execute(delete(CourseImage).where(
-                    CourseImage.course_id == course_id,
-                    CourseImage.source_type == CourseImageSource.WIKIMEDIA,
-                ))
-                next_position = session.scalar(
-                    select(CourseImage.position).where(CourseImage.course_id == course_id)
-                    .order_by(CourseImage.position.desc())
-                )
-                start_position = (next_position + 1) if next_position is not None else 0
+                repository.delete_wikimedia_images(session, course_id, commit=False)
+                start_position = repository.next_position(session, course_id)
                 rows = [
                     CourseImage(
                         course_id=course_id,
