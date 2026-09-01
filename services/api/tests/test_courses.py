@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, CourseReconciliation
+from app.models import Course, CourseImage, CourseImageModeration, CourseReconciliation
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -171,6 +171,40 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "is_hero": False,
         },
     ]
+
+
+def test_course_detail_hides_non_approved_images() -> None:
+    app = create_app(Settings())
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/approved.jpg",
+                position=0,
+                is_hero=True,
+                moderation_status=CourseImageModeration.APPROVED,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/pending.jpg",
+                position=1,
+                moderation_status=CourseImageModeration.PENDING,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/rejected.jpg",
+                position=2,
+                moderation_status=CourseImageModeration.REJECTED,
+            ),
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+
+    urls = [image["url"] for image in listed_pebble["images"]]
+    assert urls == ["https://images.example/approved.jpg"]
 
 
 def test_course_detail_returns_not_found_for_unknown_id() -> None:

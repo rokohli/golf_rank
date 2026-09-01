@@ -74,9 +74,12 @@ class FakeSatelliteProvider:
         return self._result
 
 
-def make_service(session: Session, *, wikimedia=None, satellite=None) -> CourseImageService:
+def make_service(session: Session, *, wikimedia=None, satellite=None, positive_ttl_seconds=None) -> CourseImageService:
     return CourseImageService(
-        settings=Settings(mapbox_access_token="pk.test", wikimedia_live_lookup_enabled=True),
+        settings=Settings(
+            mapbox_access_token="pk.test", wikimedia_live_lookup_enabled=True,
+            **({"wikimedia_cache_positive_ttl_seconds": positive_ttl_seconds} if positive_ttl_seconds is not None else {}),
+        ),
         repository=CourseImageRepository(),
         wikimedia_provider=wikimedia or FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None)),
         satellite_provider=satellite or FakeSatelliteProvider(),
@@ -296,6 +299,46 @@ def test_negative_cache_expires(session):
     repo.set_negative_cache(session, course.id, "wikimedia", ttl_seconds=-1)
 
     assert repo.get_negative_cache(session, course.id, "wikimedia") is None
+
+
+# a positive Wikimedia cache entry past its TTL is refreshed via a live lookup
+# rather than served forever
+def test_stale_wikimedia_cache_triggers_refresh(session):
+    course = make_course(session)
+    add_image(
+        session, course, source_type=CourseImageSource.WIKIMEDIA,
+        external_url="https://example.com/stale.jpg",
+    )
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+    service = make_service(session, wikimedia=wikimedia, positive_ttl_seconds=-1)
+
+    result = service.resolve_hero_image(session, course)
+
+    assert wikimedia.calls == 1
+    assert result.type == "WIKIMEDIA"
+    assert result.url != "https://example.com/stale.jpg"
+    # the refresh replaced the stale row rather than accumulating alongside it
+    remaining = session.query(CourseImage).filter_by(
+        course_id=course.id, source_type=CourseImageSource.WIKIMEDIA,
+    ).all()
+    assert len(remaining) == 1
+
+
+# a stale cache entry is still served (rather than nothing) when the refresh
+# attempt itself fails -- fail open, same as any other Wikimedia error
+def test_stale_wikimedia_cache_served_when_refresh_fails(session):
+    course = make_course(session)
+    add_image(
+        session, course, source_type=CourseImageSource.WIKIMEDIA,
+        external_url="https://example.com/stale.jpg",
+    )
+    wikimedia = FakeWikimediaProvider(error=RuntimeError("commons unavailable"))
+    service = make_service(session, wikimedia=wikimedia, positive_ttl_seconds=-1)
+
+    result = service.resolve_hero_image(session, course)
+
+    assert result.type == "WIKIMEDIA"
+    assert result.url == "https://example.com/stale.jpg"
 
 
 def test_coordinate_change_invalidates_negative_cache(session):

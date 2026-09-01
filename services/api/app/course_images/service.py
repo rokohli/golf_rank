@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy.orm import Session
@@ -165,34 +166,48 @@ class CourseImageService:
 
         return no_image_result(course.name)
 
+    def _wikimedia_cache_result(self, image: CourseImage | None, course_name: str) -> CourseImageResult | None:
+        if image is None:
+            return None
+        result = _to_result(self._settings, image, "WIKIMEDIA", course_name)
+        return result if result.url is not None else None
+
+    def _wikimedia_cache_is_stale(self, image: CourseImage) -> bool:
+        """True once a cached row is older than wikimedia_cache_positive_ttl_seconds
+        -- past that point it's due for a live-lookup refresh rather than being
+        served indefinitely."""
+        if image.created_at is None:
+            return False
+        created_at = image.created_at if image.created_at.tzinfo else image.created_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+        return age_seconds >= self._settings.wikimedia_cache_positive_ttl_seconds
+
     def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
         cached = self._repository.best_wikimedia_image(session, course.id)
-        if cached is not None:
-            result = _to_result(self._settings, cached, "WIKIMEDIA", course.name)
-            if result.url is not None:
-                return result
+        cached_result = self._wikimedia_cache_result(cached, course.name)
+        if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
+            return cached_result
 
         if not self._settings.wikimedia_live_lookup_enabled:
-            return None
+            return cached_result
 
         negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
         if negative is not None:
-            return None
+            return cached_result
 
         if course.latitude is None or course.longitude is None:
-            return None
+            return cached_result
 
         with self._wikimedia_lock(course.id):
             # Re-check after acquiring the lock: another thread may have just
             # resolved (and committed) this course while we were waiting.
             cached = self._repository.best_wikimedia_image(session, course.id)
-            if cached is not None:
-                result = _to_result(self._settings, cached, "WIKIMEDIA", course.name)
-                if result.url is not None:
-                    return result
+            cached_result = self._wikimedia_cache_result(cached, course.name)
+            if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
+                return cached_result
             negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
             if negative is not None:
-                return None
+                return cached_result
 
             self.metrics.wikimedia_lookups += 1
             try:
@@ -201,9 +216,10 @@ class CourseImageService:
                 # Fail open: a Wikimedia outage must never break the course
                 # page, and a transient failure isn't cached (so we retry on
                 # the next request rather than sitting behind a negative TTL).
+                # A still-usable stale cache beats no image at all.
                 logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
                 self.metrics.wikimedia_failures += 1
-                return None
+                return cached_result
 
             if lookup.result is None:
                 if lookup.photo is not None:
@@ -212,10 +228,14 @@ class CourseImageService:
                     session, course.id, WIKIMEDIA_PROVIDER_NAME,
                     ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
                 )
-                return None
+                return cached_result
 
             self.metrics.wikimedia_successes += 1
             photo = lookup.photo
+            if cached is not None:
+                # Refreshing a stale cache entry -- replace it rather than
+                # accumulating another approved row for the same course.
+                self._repository.delete_wikimedia_images(session, course.id, commit=False)
             self._repository.add_wikimedia_image(
                 session, course.id,
                 external_url=photo.url, thumbnail_url=photo.url,

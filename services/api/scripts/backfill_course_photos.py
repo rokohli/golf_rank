@@ -23,11 +23,12 @@ from app.models import Course, CourseImage, CourseImageModeration, UserCourseRat
 
 
 def _courses_with_a_usable_photo():
-    """A rejected image doesn't count -- otherwise a course whose only photo
-    was rejected is permanently skipped by the backfill, with no automated
-    path back to a usable image."""
+    """Only an approved image counts as usable -- a rejected or still-pending
+    image is invisible to the hero resolver (CourseImageRepository.
+    _best_approved), so a course with only one of those must still be
+    backfilled rather than being permanently skipped."""
     return select(CourseImage.course_id).where(
-        CourseImage.moderation_status != CourseImageModeration.REJECTED
+        CourseImage.moderation_status == CourseImageModeration.APPROVED
     ).distinct()
 
 

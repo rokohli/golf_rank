@@ -6,7 +6,7 @@ from sqlalchemy import exists, select, text, tuple_
 from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
-from .models import Course, CourseReconciliation, DeletedIdentity, User
+from .models import Course, CourseImageModeration, CourseReconciliation, DeletedIdentity, User
 
 
 def lock_identity_transaction(session: Session, provider_subject: str) -> None:
@@ -127,6 +127,8 @@ def course_image_data(course: Course) -> list[dict]:
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     output = []
     for image in course.images:
+        if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:
             continue
