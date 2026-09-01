@@ -31,6 +31,8 @@ export type CourseImage = {
   alt_text: string | null
   source_name: string | null
   source_url: string | null
+  license_name?: string | null
+  license_url?: string | null
   position: number
   is_hero: boolean
 }

@@ -3,7 +3,7 @@ import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 
-import { getProfile } from '../src/api/client'
+import { deleteAccount, getProfile } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { ProductScreen, ScreenHeader } from '../src/components/ProductUI'
@@ -17,6 +17,7 @@ export default function Settings() {
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -37,6 +38,44 @@ export default function Settings() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: () => { void signOut().then(() => router.replace('/')) } },
     ])
+  }
+
+  const runDeleteAccount = async () => {
+    setDeleting(true)
+    setError(null)
+    let status: string | undefined
+    try {
+      status = await deleteAccount(await getAuthHeaders())
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to delete your account. Please try again.')
+      setDeleting(false)
+      return
+    }
+
+    try {
+      await signOut()
+    } catch (signOutReason) {
+      console.warn('Sign out after account deletion encountered an error', signOutReason)
+    } finally {
+      router.replace('/')
+      if (status === 'deletion_pending') {
+        Alert.alert(
+          'Deletion in progress',
+          'Your GolfRank data is deleted and the account is blocked. Identity-provider cleanup is still pending.',
+        )
+      }
+    }
+  }
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This permanently deletes your profile, rounds, rankings, and saved lists. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete account', style: 'destructive', onPress: () => { void runDeleteAccount() } },
+      ],
+    )
   }
 
   return <>
@@ -65,6 +104,11 @@ export default function Settings() {
       </SettingsSection>
 
       <Pressable accessibilityRole="button" onPress={confirmSignOut} style={({ pressed }) => [styles.signOut, pressed && styles.pressed]}><Feather name="log-out" size={18} color={colors.error} /><Text style={styles.signOutText}>Sign out</Text></Pressable>
+
+      <Pressable accessibilityRole="button" disabled={deleting} onPress={confirmDeleteAccount} style={({ pressed }) => [styles.signOut, pressed && styles.pressed]}>
+        {deleting ? <ActivityIndicator color={colors.error} size="small" /> : <Feather name="trash-2" size={18} color={colors.error} />}
+        <Text style={styles.signOutText}>Delete account</Text>
+      </Pressable>
     </ProductScreen>
   </>
 }

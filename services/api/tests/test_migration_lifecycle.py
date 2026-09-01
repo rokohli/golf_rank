@@ -33,6 +33,7 @@ def test_full_migration_upgrade_and_downgrade_cycle(monkeypatch: pytest.MonkeyPa
         assert "profiles" in tables
         assert "tier_assignments" in tables
         assert "onboarding_preferences" in tables
+        assert "deleted_identities" in tables
 
         # Verify columns introduced in recent migrations
         profile_columns = {col["name"] for col in inspector.get_columns("profiles")}
@@ -40,9 +41,25 @@ def test_full_migration_upgrade_and_downgrade_cycle(monkeypatch: pytest.MonkeyPa
 
         tier_columns = {col["name"] for col in inspector.get_columns("tier_assignments")}
         assert "is_incomplete" in tier_columns
+
+        course_image_columns = {col["name"] for col in inspector.get_columns("course_images")}
+        assert "license_name" in course_image_columns
+        assert "license_url" in course_image_columns
         engine.dispose()
 
-        # 2. Downgrade 0019 and 0018 step by step
+        # 2. Downgrade 0021, 0020, 0019, and 0018 step by step
+        command.downgrade(config, "0020_cascade_delete_user_rows")
+        engine = make_engine(db_url)
+        inspector = inspect(engine)
+        assert "deleted_identities" not in set(inspector.get_table_names())
+        course_image_cols_after_0021 = {col["name"] for col in inspector.get_columns("course_images")}
+        assert "license_name" not in course_image_cols_after_0021
+        engine.dispose()
+
+        command.downgrade(config, "0019_incomplete_tier_assignments")
+        engine = make_engine(db_url)
+        engine.dispose()
+
         command.downgrade(config, "0018_unique_profile_usernames")
         engine = make_engine(db_url)
         inspector = inspect(engine)
@@ -66,6 +83,8 @@ def test_full_migration_upgrade_and_downgrade_cycle(monkeypatch: pytest.MonkeyPa
         inspector = inspect(engine)
         assert "is_incomplete" in {col["name"] for col in inspector.get_columns("tier_assignments")}
         assert "username" in {col["name"] for col in inspector.get_columns("profiles")}
+        assert "deleted_identities" in set(inspector.get_table_names())
+        assert "license_name" in {col["name"] for col in inspector.get_columns("course_images")}
         engine.dispose()
 
 

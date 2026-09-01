@@ -72,6 +72,16 @@ export async function checkUsernameAvailable(
   return response.json()
 }
 
+export async function deleteAccount(headers: ApiHeaders): Promise<'deleted' | 'deletion_pending'> {
+  const response = await fetch(`${baseUrl}/api/v1/me`, { method: 'DELETE', headers })
+  if (!response.ok) throw await responseError(response, 'Unable to delete your account. Please try again.')
+  const payload = await response.json() as { status?: unknown }
+  if (payload.status !== 'deleted' && payload.status !== 'deletion_pending') {
+    throw new Error('The server returned an invalid account deletion response.')
+  }
+  return payload.status
+}
+
 export async function getProfile(headers: ApiHeaders): Promise<OnboardingPreferences> {
   const response = await fetch(`${baseUrl}/api/v1/me/profile`, {
     headers,

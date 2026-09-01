@@ -111,7 +111,7 @@ function ProfileAction({ icon, label, onPress }: { icon: keyof typeof Feather.gl
   return <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.pressed]}><Feather name={icon} size={20} color={colors.pine} /><Text style={styles.actionText}>{label}</Text></Pressable>
 }
 
-const profileBackdrop: CoursePresentation = { id: 'profile', name: 'Profile', location: '', rating: 0, reviews: '', distance: '', price: '' }
+const profileBackdrop: CoursePresentation = { id: 'profile', name: 'Profile', location: '', rating: 0, reviews: '', distance: '', price: '', image: require('../assets/course-images/coastal-course.png') }
 function displayCourse(course: Course): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
 function formatAverage(value: number | null | undefined) { return value == null ? '—' : value.toFixed(1) }
