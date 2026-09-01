@@ -14,6 +14,7 @@ const mockSavePreferences = jest.fn()
 const mockSyncLinkedContacts = jest.fn()
 const mockGetLinkedContactStatus = jest.fn()
 const mockDeleteLinkedContacts = jest.fn()
+const mockDeleteAccount = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -46,6 +47,7 @@ jest.mock('expo-router', () => {
 })
 
 jest.mock('../../src/api/client', () => ({
+  deleteAccount: (...args: unknown[]) => mockDeleteAccount(...args),
   getProfile: (...args: unknown[]) => mockGetProfile(...args),
   getRoundSummary: (...args: unknown[]) => mockGetRoundSummary(...args),
   savePreferences: (...args: unknown[]) => mockSavePreferences(...args),
@@ -249,5 +251,51 @@ describe('profile experience', () => {
       expect(mockSavePreferences.mock.calls[0][0].onboarding_data).not.toHaveProperty('profile_visibility')
       expect(mockRouter.back).toHaveBeenCalled()
     })
+  })
+
+  it('navigates to home after account deletion even if sign out rejects', async () => {
+    mockGetProfile.mockResolvedValue({ home_region: 'Monterey, CA' })
+    mockDeleteAccount.mockResolvedValue('deleted')
+    mockSignOut.mockRejectedValue(new Error('Clerk network error'))
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
+      const deleteButton = buttons?.find((btn) => btn.text === 'Delete account')
+      if (deleteButton?.onPress) deleteButton.onPress()
+    })
+
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Delete account' }))
+
+    await waitFor(() => {
+      expect(mockDeleteAccount).toHaveBeenCalled()
+      expect(mockSignOut).toHaveBeenCalled()
+      expect(mockRouter.replace).toHaveBeenCalledWith('/')
+    })
+
+    expect(screen.queryByText(/unable to delete your account/i)).not.toBeOnTheScreen()
+    alertSpy.mockRestore()
+  })
+
+  it('displays an error when account deletion API request fails', async () => {
+    mockGetProfile.mockResolvedValue({ home_region: 'Monterey, CA' })
+    mockDeleteAccount.mockRejectedValue(new Error('Server error'))
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
+      const deleteButton = buttons?.find((btn) => btn.text === 'Delete account')
+      if (deleteButton?.onPress) deleteButton.onPress()
+    })
+
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Delete account' }))
+
+    await waitFor(() => {
+      expect(mockDeleteAccount).toHaveBeenCalled()
+      expect(screen.getByText('Server error')).toBeOnTheScreen()
+    })
+
+    expect(mockRouter.replace).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
   })
 })

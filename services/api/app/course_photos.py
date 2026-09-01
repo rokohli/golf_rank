@@ -15,8 +15,8 @@ def _request_with_retries(
     client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES, **kwargs
 ) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
-    connections and brief 429s from Commons -- retry those instead
-    of letting one bad request kill an hours-long job.
+    connections, brief 429s, or transient 5xx server errors from Commons) --
+    retry those instead of letting one bad request kill an hours-long job.
 
     A synchronous per-request caller (the live course-image resolver) should
     pass max_retries=0: retries with growing backoff are fine to absorb in an
@@ -31,7 +31,7 @@ def _request_with_retries(
                 raise
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
-        if response.status_code == 429 and attempt < max_retries:
+        if response.status_code in {429, 500, 502, 503, 504} and attempt < max_retries:
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
             continue
         return response
@@ -65,7 +65,7 @@ NEGATIVE_TITLE_SIGNALS = {
     # Famous course-adjacent events (e.g. the Pebble Beach Concours
     # d'Elegance car show) put unrelated subjects under the course's name.
     "car", "cars", "automobile", "vehicle", "convertible", "roadster",
-    "concours", "wedding", "aerial", "map", "logo",
+    "concours", "wedding", "map", "logo",
 }
 
 # A denylist can't anticipate every off-topic subject (a car's specific
@@ -183,14 +183,22 @@ def find_wikimedia_photos(
         extmetadata = info.get("extmetadata", {})
         artist_html = extmetadata.get("Artist", {}).get("value", "")
         artist = _strip_html(artist_html) or "Wikimedia Commons"
+        if len(artist) > 120:
+            artist = artist[:117] + "..."
         license_name = _metadata_value(extmetadata, "LicenseShortName") or _metadata_value(
             extmetadata, "UsageTerms"
         )
+        if license_name and len(license_name) > 120:
+            license_name = license_name[:117] + "..."
         license_url = _metadata_value(extmetadata, "LicenseUrl")
+        if license_url and len(license_url) > 2048:
+            license_url = license_url[:2048]
         thumbnail_url = info.get("thumburl")
         description_url = info.get("descriptionurl")
         if not thumbnail_url or not description_url:
             continue
+        if len(description_url) > 2048:
+            description_url = description_url[:2048]
         photos.append(ExternalPhoto(
             url=thumbnail_url,
             source_name=artist,
@@ -206,7 +214,8 @@ def find_wikimedia_photos(
 
 
 def _strip_html(value: str) -> str:
-    return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
+    cleaned = html.unescape(re.sub(r"<[^>]+>", "", value))
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _metadata_value(extmetadata: dict, key: str) -> str | None:

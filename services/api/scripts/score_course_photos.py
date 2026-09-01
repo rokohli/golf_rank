@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy import delete, select
 
 from app.core.config import Settings
-from app.course_photo_scoring import score_course_photo
+from app.course_photo_scoring import PhotoScoringError, score_course_photo
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
 from app.models import Course, CourseImage, CourseImageSource
@@ -74,8 +74,12 @@ def main() -> int:
                 if hero is None:
                     print(f"Warning: reference course #{reference_id} has no hero photo, skipping it as a reference.")
                     continue
-                data, content_type = _fetch(client, hero["url"])
-                reference_images.append((data, content_type))
+                try:
+                    data, content_type = _fetch(client, hero["url"])
+                    reference_images.append((data, content_type))
+                except httpx.HTTPError as exc:
+                    print(f"Warning: failed to fetch reference image for course #{reference_id}: {exc}")
+                    continue
             if not reference_images:
                 print("No reference images available; cannot score without at least one.")
                 return 1
@@ -107,15 +111,20 @@ def main() -> int:
                     if url is None:
                         print(f"    skipping image #{image.id}: COURSE_IMAGE_BASE_URL is required for storage keys")
                         continue
-                    data, content_type = _fetch(client, url)
-                    score = score_course_photo(
-                        client,
-                        api_key=settings.gemini_api_key,
-                        model=MODEL,
-                        image_data=data,
-                        image_content_type=content_type,
-                        reference_images=reference_images,
-                    )
+                    try:
+                        data, content_type = _fetch(client, url)
+                        score = score_course_photo(
+                            client,
+                            api_key=settings.gemini_api_key,
+                            model=MODEL,
+                            image_data=data,
+                            image_content_type=content_type,
+                            reference_images=reference_images,
+                        )
+                    except (PhotoScoringError, httpx.HTTPError, ValueError, KeyError) as exc:
+                        print(f"    skipping image #{image.id}: scoring failed ({exc})")
+                        time.sleep(REQUEST_DELAY_SECONDS)
+                        continue
                     scored.append((image, score))
                     tag = "HERO" if image.is_hero else "    "
                     print(f"    {tag} {score.score:>2}/10  {'; '.join(score.reasons)}")
@@ -127,18 +136,29 @@ def main() -> int:
                 best_image, best_score = max(scored, key=lambda pair: pair[1].score)
                 if args.apply:
                     if args.quality_floor is not None and best_score.score < args.quality_floor:
-                        session.execute(delete(CourseImage).where(
-                            CourseImage.course_id == course_id,
-                            CourseImage.source_type == CourseImageSource.WIKIMEDIA,
-                        ))
-                        session.commit()
-                        print(f"    -> removed: best photo only scored {best_score.score}/10, "
-                              f"below the {args.quality_floor}/10 floor")
-                    elif not best_image.is_hero:
-                        for image, _ in scored:
-                            image.is_hero = image is best_image
-                        session.commit()
-                        print(f"    -> hero changed to the {best_score.score}/10 photo")
+                        if len(scored) < len(images):
+                            print(
+                                f"    -> skipped quality-floor removal: only {len(scored)}/{len(images)} "
+                                "Wikimedia photos were scored"
+                            )
+                        else:
+                            session.execute(delete(CourseImage).where(
+                                CourseImage.course_id == course_id,
+                                CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                            ))
+                            session.commit()
+                            print(f"    -> removed: best photo only scored {best_score.score}/10, "
+                                  f"below the {args.quality_floor}/10 floor")
+                    else:
+                        changed = False
+                        for image in images:
+                            desired = image.id == best_image.id
+                            if image.is_hero != desired:
+                                image.is_hero = desired
+                                changed = True
+                        if changed:
+                            session.commit()
+                            print(f"    -> hero changed to the {best_score.score}/10 photo")
 
     return 0
 

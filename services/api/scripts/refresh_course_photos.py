@@ -61,6 +61,10 @@ def main() -> int:
                     longitude=course.longitude,
                     limit=args.photos_per_course,
                 )
+                if not photos:
+                    print(f"#{course_id} {course.name}: no landscape candidates found (keeping existing photos)")
+                    continue
+
                 # Only this course's Wikimedia-tier rows are ours to replace --
                 # OFFICIAL/USER photos are curated and must survive a refresh.
                 session.execute(delete(CourseImage).where(
@@ -92,8 +96,6 @@ def main() -> int:
                 print(f"#{course_id} {course.name}: {len(rows)} photo(s)")
                 for row in rows:
                     print(f"    {'HERO' if row.is_hero else '    '} {row.external_url} ({row.source_name})")
-                if not rows:
-                    print("    no landscape candidates found")
 
     return 0
 
