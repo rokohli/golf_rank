@@ -16,6 +16,7 @@ import httpx
 from sqlalchemy import func, select
 
 from app.core.config import Settings
+from app.course_images.repository import CourseImageRepository
 from app.course_photos import find_wikimedia_photos
 from app.db import make_engine, make_session_factory
 from app.models import Course, CourseImage, CourseImageModeration, UserCourseRating
@@ -89,6 +90,7 @@ def main() -> int:
 
         hits = 0
         misses = 0
+        repository = CourseImageRepository()
         headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
         with httpx.Client(timeout=30, headers=headers) as client:
             for course in courses:
@@ -113,7 +115,7 @@ def main() -> int:
                     source_url=photo.source_url,
                     license_name=photo.license_name,
                     license_url=photo.license_url,
-                    position=0,
+                    position=repository.next_position(session, course.id),
                     is_hero=True,
                 ))
                 session.commit()

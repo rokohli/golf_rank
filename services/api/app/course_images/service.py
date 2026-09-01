@@ -145,11 +145,15 @@ class CourseImageService:
     def _resolve(self, session: Session, course: HasCourse) -> CourseImageResult:
         official = self._repository.best_official_image(session, course.id)
         if official is not None:
-            return _to_result(self._settings, official, "OFFICIAL", course.name)
+            result = _to_result(self._settings, official, "OFFICIAL", course.name)
+            if result.url is not None:
+                return result
 
         user = self._repository.best_user_image(session, course.id)
         if user is not None:
-            return _to_result(self._settings, user, "USER", course.name)
+            result = _to_result(self._settings, user, "USER", course.name)
+            if result.url is not None:
+                return result
 
         wikimedia_result = self._resolve_wikimedia(session, course)
         if wikimedia_result is not None:
@@ -164,7 +168,9 @@ class CourseImageService:
     def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
         cached = self._repository.best_wikimedia_image(session, course.id)
         if cached is not None:
-            return _to_result(self._settings, cached, "WIKIMEDIA", course.name)
+            result = _to_result(self._settings, cached, "WIKIMEDIA", course.name)
+            if result.url is not None:
+                return result
 
         if not self._settings.wikimedia_live_lookup_enabled:
             return None
@@ -181,7 +187,9 @@ class CourseImageService:
             # resolved (and committed) this course while we were waiting.
             cached = self._repository.best_wikimedia_image(session, course.id)
             if cached is not None:
-                return _to_result(self._settings, cached, "WIKIMEDIA", course.name)
+                result = _to_result(self._settings, cached, "WIKIMEDIA", course.name)
+                if result.url is not None:
+                    return result
             negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
             if negative is not None:
                 return None
