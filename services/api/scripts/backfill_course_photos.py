@@ -81,7 +81,7 @@ def main() -> int:
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
     with session_factory() as session:
-        base_url_configured = settings.course_image_base_url is not None
+        base_url_configured = bool(settings.course_image_base_url)
         courses = (
             top_rated_courses_missing_photos(session, args.limit, base_url_configured=base_url_configured)
             if args.order_by == "rating"

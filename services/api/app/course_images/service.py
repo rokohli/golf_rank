@@ -207,6 +207,13 @@ class CourseImageService:
         with self._wikimedia_lock(course.id):
             # Re-check after acquiring the lock: another thread may have just
             # resolved (and committed) this course while we were waiting.
+            # `cached` above may already sit in this session's identity map --
+            # expire it so the re-query below actually reflects that other
+            # thread's commit instead of replaying the pre-lock snapshot
+            # (SQLAlchemy doesn't refresh already-loaded attributes on a
+            # plain re-select).
+            if cached is not None:
+                session.expire(cached)
             negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
             if negative is not None:
                 return None
