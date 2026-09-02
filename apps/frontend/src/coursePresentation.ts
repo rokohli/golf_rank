@@ -53,14 +53,20 @@ function isDisplayableCourseImage(image: CourseImage): boolean {
 
 // The course-detail API resolves and returns `hero_image` per the backend's
 // OFFICIAL -> USER -> WIKIMEDIA -> SATELLITE -> NONE priority; list/search
-// responses don't include it (would be too slow to resolve per row), so this
-// falls back to sorting `course.images` by source priority (OFFICIAL -> USER ->
-// WIKIMEDIA), then the same within-tier ranking as
-// CourseImageRepository._rank_key: featured status, quality score, aspect
-// ratio fit, recency, then id.
+// responses omit the field entirely (would be too slow to resolve per row),
+// so `course.hero_image` is `null` there and this falls back to sorting
+// `course.images` by source priority (OFFICIAL -> USER -> WIKIMEDIA), then
+// the same within-tier ranking as CourseImageRepository._rank_key: featured
+// status, quality score, aspect ratio fit, recency, then id. A *present*
+// hero_image -- including an explicit NONE result -- is authoritative and
+// must not be second-guessed by the array fallback, since NONE can reflect
+// a deliberate decision (e.g. an authoritative Wikimedia miss) that a
+// leftover gallery sibling would otherwise silently override.
 export function attributedCourseImage(course: Course): ImageSourcePropType | undefined {
-  if (course.hero_image && course.hero_image.type !== 'NONE' && course.hero_image.url) {
-    return { uri: course.hero_image.url }
+  if (course.hero_image) {
+    return course.hero_image.type !== 'NONE' && course.hero_image.url
+      ? { uri: course.hero_image.url }
+      : undefined
   }
   const images = attributedCourseImages(course)
   if (images.length === 0) {

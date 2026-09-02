@@ -26,7 +26,7 @@ def test_a_course_with_only_a_rejected_photo_is_still_targeted_by_backfill() -> 
         ))
         session.commit()
 
-        targeted = courses_missing_photos_by_id(session, 10)
+        targeted = courses_missing_photos_by_id(session, 10, base_url_configured=False)
 
         assert [row.id for row in targeted] == [course.id]
 
@@ -43,6 +43,22 @@ def test_a_course_with_an_approved_photo_is_not_targeted_by_backfill() -> None:
         ))
         session.commit()
 
-        targeted = courses_missing_photos_by_id(session, 10)
+        targeted = courses_missing_photos_by_id(session, 10, base_url_configured=False)
 
         assert targeted == []
+
+
+def test_a_course_with_only_an_unresolvable_storage_key_is_targeted_without_a_base_url() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    with session_factory() as session:
+        course = make_course(session)
+        session.add(CourseImage(
+            course_id=course.id, storage_key="courses/x/y.jpg",
+            moderation_status=CourseImageModeration.APPROVED, position=0,
+        ))
+        session.commit()
+
+        assert [row.id for row in courses_missing_photos_by_id(session, 10, base_url_configured=False)] == [course.id]
+        assert courses_missing_photos_by_id(session, 10, base_url_configured=True) == []

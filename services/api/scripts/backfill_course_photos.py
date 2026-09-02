@@ -23,18 +23,25 @@ from app.db import make_engine, make_session_factory
 from app.models import Course, CourseImage, CourseImageModeration, UserCourseRating
 
 
-def _courses_with_a_usable_photo():
-    """Only an approved image counts as usable -- a rejected or still-pending
-    image is invisible to the hero resolver (CourseImageRepository.
-    _best_approved), so a course with only one of those must still be
-    backfilled rather than being permanently skipped."""
-    return select(CourseImage.course_id).where(
-        CourseImage.moderation_status == CourseImageModeration.APPROVED
-    ).distinct()
+def _courses_with_a_usable_photo(*, base_url_configured: bool):
+    """Only an approved image with a resolvable URL counts as usable -- a
+    rejected or still-pending image is invisible to the hero resolver
+    (CourseImageRepository._best_approved), so a course with only one of
+    those must still be backfilled rather than being permanently skipped.
+    Likewise, a storage_key-only row is unresolvable (and therefore unusable,
+    per _course_image_url/course_image_data) unless COURSE_IMAGE_BASE_URL is
+    configured -- otherwise a course stuck with only such a row would never
+    be targeted by this offline backfill."""
+    query = select(CourseImage.course_id).where(CourseImage.moderation_status == CourseImageModeration.APPROVED)
+    if base_url_configured:
+        query = query.where(CourseImage.external_url.is_not(None) | CourseImage.storage_key.is_not(None))
+    else:
+        query = query.where(CourseImage.external_url.is_not(None))
+    return query.distinct()
 
 
-def top_rated_courses_missing_photos(session, limit: int) -> list[Course]:
-    already_has_photo = _courses_with_a_usable_photo()
+def top_rated_courses_missing_photos(session, limit: int, *, base_url_configured: bool) -> list[Course]:
+    already_has_photo = _courses_with_a_usable_photo(base_url_configured=base_url_configured)
     rows = session.execute(
         select(Course, func.avg(UserCourseRating.rating).label("avg_rating"))
         .join(UserCourseRating, UserCourseRating.course_id == Course.id)
@@ -47,9 +54,9 @@ def top_rated_courses_missing_photos(session, limit: int) -> list[Course]:
     return [row[0] for row in rows]
 
 
-def courses_missing_photos_by_id(session, limit: int) -> list[Course]:
+def courses_missing_photos_by_id(session, limit: int, *, base_url_configured: bool) -> list[Course]:
     """Fallback ordering for catalogs without enough community ratings yet."""
-    already_has_photo = _courses_with_a_usable_photo()
+    already_has_photo = _courses_with_a_usable_photo(base_url_configured=base_url_configured)
     return list(session.execute(
         select(Course)
         .where(Course.status == "active", Course.id.not_in(already_has_photo))
@@ -74,9 +81,11 @@ def main() -> int:
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
     with session_factory() as session:
+        base_url_configured = settings.course_image_base_url is not None
         courses = (
-            top_rated_courses_missing_photos(session, args.limit) if args.order_by == "rating"
-            else courses_missing_photos_by_id(session, args.limit)
+            top_rated_courses_missing_photos(session, args.limit, base_url_configured=base_url_configured)
+            if args.order_by == "rating"
+            else courses_missing_photos_by_id(session, args.limit, base_url_configured=base_url_configured)
         )
         if not courses:
             print("No courses need photos.")
