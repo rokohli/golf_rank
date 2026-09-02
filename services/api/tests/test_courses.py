@@ -129,6 +129,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
             "position": 0,
             "is_hero": True,
+            "source_type": "wikimedia",
         },
         {
             "id": 2,
@@ -140,6 +141,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": None,
             "position": 1,
             "is_hero": False,
+            "source_type": "wikimedia",
         },
     ]
     pebble_response = client.get(f"/api/v1/courses/{pebble_id}")
@@ -158,6 +160,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
             "position": 0,
             "is_hero": True,
+            "source_type": "wikimedia",
         },
         {
             "id": 2,
@@ -169,6 +172,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": None,
             "position": 1,
             "is_hero": False,
+            "source_type": "wikimedia",
         },
     ]
 

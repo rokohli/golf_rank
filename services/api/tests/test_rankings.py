@@ -85,6 +85,7 @@ def test_ranking_snapshots_include_current_attributed_course_images() -> None:
         "license_url": None,
         "position": 0,
         "is_hero": True,
+        "source_type": "wikimedia",
     }
     assert staged.status_code == 200
     assert staged.json()["entries"][0]["course"]["images"] == [expected_image]

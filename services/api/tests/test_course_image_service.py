@@ -302,12 +302,16 @@ def test_negative_cache_expires(session):
 
 
 # a positive Wikimedia cache entry past its TTL is refreshed via a live lookup
-# rather than served forever
+# without destroying existing gallery photos
 def test_stale_wikimedia_cache_triggers_refresh(session):
     course = make_course(session)
-    add_image(
+    stale_hero = add_image(
         session, course, source_type=CourseImageSource.WIKIMEDIA,
-        external_url="https://example.com/stale.jpg",
+        external_url="https://example.com/stale.jpg", is_hero=True, position=0,
+    )
+    gallery_photo = add_image(
+        session, course, source_type=CourseImageSource.WIKIMEDIA,
+        external_url="https://example.com/gallery.jpg", is_hero=False, position=1,
     )
     wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
     service = make_service(session, wikimedia=wikimedia, positive_ttl_seconds=-1)
@@ -317,20 +321,29 @@ def test_stale_wikimedia_cache_triggers_refresh(session):
     assert wikimedia.calls == 1
     assert result.type == "WIKIMEDIA"
     assert result.url != "https://example.com/stale.jpg"
-    # the refresh replaced the stale row rather than accumulating alongside it
-    remaining = session.query(CourseImage).filter_by(
+    # the refresh updated the stale hero in place rather than deleting the gallery
+    all_photos = session.query(CourseImage).filter_by(
         course_id=course.id, source_type=CourseImageSource.WIKIMEDIA,
-    ).all()
-    assert len(remaining) == 1
+    ).order_by(CourseImage.position).all()
+    assert len(all_photos) == 2
+    assert all_photos[0].id == stale_hero.id
+    assert all_photos[0].external_url == result.url
+    assert all_photos[0].is_hero is True
+    assert all_photos[1].id == gallery_photo.id
+    assert all_photos[1].external_url == "https://example.com/gallery.jpg"
 
 
 # a stale cache entry is still served (rather than nothing) when the refresh
 # attempt itself fails -- fail open, same as any other Wikimedia error
 def test_stale_wikimedia_cache_evicted_on_authoritative_miss(session):
     course = make_course(session)
-    add_image(
+    stale_hero = add_image(
         session, course, source_type=CourseImageSource.WIKIMEDIA,
-        external_url="https://example.com/stale.jpg",
+        external_url="https://example.com/stale.jpg", is_hero=True, position=0,
+    )
+    gallery_photo = add_image(
+        session, course, source_type=CourseImageSource.WIKIMEDIA,
+        external_url="https://example.com/gallery.jpg", is_hero=False, position=1,
     )
     wikimedia = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
     satellite = FakeSatelliteProvider(satellite_result(course.name))
@@ -339,10 +352,11 @@ def test_stale_wikimedia_cache_evicted_on_authoritative_miss(session):
     result = service.resolve_hero_image(session, course)
 
     assert result.type == "SATELLITE"
+    # only the stale hero was evicted on authoritative miss; other photos are preserved
     remaining = session.query(CourseImage).filter_by(
         course_id=course.id, source_type=CourseImageSource.WIKIMEDIA,
     ).all()
-    assert remaining == []
+    assert remaining == [gallery_photo]
 
 
 def test_stale_wikimedia_cache_served_when_refresh_fails(session):

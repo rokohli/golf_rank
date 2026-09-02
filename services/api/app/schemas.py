@@ -102,6 +102,7 @@ class CourseImageOut(BaseModel):
     license_url: str | None = None
     position: int
     is_hero: bool
+    source_type: str = "wikimedia"
 
 
 class CourseOut(BaseModel):

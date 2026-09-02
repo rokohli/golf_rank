@@ -35,6 +35,7 @@ export type CourseImage = {
   license_url?: string | null
   position: number
   is_hero: boolean
+  source_type?: 'official' | 'user' | 'wikimedia' | string | null
 }
 
 // Normalized shape from CourseImageService.resolveCourseHeroImage -- the

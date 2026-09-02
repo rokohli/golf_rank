@@ -76,6 +76,43 @@ class CourseImageRepository:
         if commit:
             session.commit()
 
+    def delete_image(self, session: Session, image: CourseImage, *, commit: bool = True) -> None:
+        """Deletes a single CourseImage row without affecting other images."""
+        session.delete(image)
+        if commit:
+            session.commit()
+
+    def update_wikimedia_image(
+        self,
+        session: Session,
+        image: CourseImage,
+        *,
+        external_url: str,
+        thumbnail_url: str,
+        alt_text: str,
+        source_name: str | None,
+        source_url: str | None,
+        license_name: str | None,
+        license_url: str | None,
+        width: int | None,
+        height: int | None,
+    ) -> None:
+        """Updates an existing Wikimedia row in place (e.g. refreshing a stale
+        cached hero), preserving its position, is_hero flag, and any other gallery
+        rows for the course."""
+        image.external_url = external_url
+        image.thumbnail_url = thumbnail_url
+        image.alt_text = alt_text
+        image.source_name = source_name
+        image.source_url = source_url
+        image.license_name = license_name
+        image.license_url = license_url
+        image.width = width
+        image.height = height
+        image.created_at = datetime.now(timezone.utc)
+        image.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
     def add_wikimedia_image(self, session: Session, course_id: int, *, external_url, thumbnail_url, alt_text,
                              source_name, source_url, license_name, license_url, width, height) -> None:
         """Persists a freshly-resolved Wikimedia match as the cached result for

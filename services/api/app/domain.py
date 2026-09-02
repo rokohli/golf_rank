@@ -142,6 +142,7 @@ def course_image_data(course: Course) -> list[dict]:
             "license_url": image.license_url,
             "position": image.position,
             "is_hero": image.is_hero,
+            "source_type": image.source_type,
         })
     return output
 

@@ -231,25 +231,33 @@ class CourseImageService:
                 if cached is not None:
                     # An authoritative miss (unlike a transient exception) means
                     # the stale row is no longer backed by a trustworthy match --
-                    # evict it so the negative cache actually takes effect instead
-                    # of this stale row being served indefinitely.
-                    self._repository.delete_wikimedia_images(session, course.id)
+                    # evict only the stale hero row so the negative cache actually
+                    # takes effect without destroying any other gallery photos.
+                    self._repository.delete_image(session, cached)
                 return None
 
             self.metrics.wikimedia_successes += 1
             photo = lookup.photo
             if cached is not None:
-                # Refreshing a stale cache entry -- replace it rather than
-                # accumulating another approved row for the same course.
-                self._repository.delete_wikimedia_images(session, course.id, commit=False)
-            self._repository.add_wikimedia_image(
-                session, course.id,
-                external_url=photo.url, thumbnail_url=photo.url,
-                alt_text=f"{course.name} course photo",
-                source_name=photo.source_name, source_url=photo.source_url,
-                license_name=photo.license_name, license_url=photo.license_url,
-                width=photo.width, height=photo.height,
-            )
+                # Refreshing a stale cache entry -- update it in place to
+                # preserve its position and keep the rest of the gallery intact.
+                self._repository.update_wikimedia_image(
+                    session, cached,
+                    external_url=photo.url, thumbnail_url=photo.url,
+                    alt_text=f"{course.name} course photo",
+                    source_name=photo.source_name, source_url=photo.source_url,
+                    license_name=photo.license_name, license_url=photo.license_url,
+                    width=photo.width, height=photo.height,
+                )
+            else:
+                self._repository.add_wikimedia_image(
+                    session, course.id,
+                    external_url=photo.url, thumbnail_url=photo.url,
+                    alt_text=f"{course.name} course photo",
+                    source_name=photo.source_name, source_url=photo.source_url,
+                    license_name=photo.license_name, license_url=photo.license_url,
+                    width=photo.width, height=photo.height,
+                )
             return lookup.result
 
     def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:
