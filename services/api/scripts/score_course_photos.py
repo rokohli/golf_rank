@@ -25,6 +25,7 @@ import httpx
 
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
+from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
@@ -138,7 +139,15 @@ def main() -> int:
                                 "Wikimedia photos were scored"
                             )
                         else:
-                            repository.delete_wikimedia_images(session, course_id)
+                            repository.delete_wikimedia_images(session, course_id, commit=False)
+                            # Without a negative-cache entry, the next course-detail
+                            # request's live lookup would just re-accept the same
+                            # candidate under its separate (lower) confidence
+                            # threshold and undo this quality-floor removal.
+                            repository.set_negative_cache(
+                                session, course_id, WIKIMEDIA_PROVIDER_NAME,
+                                ttl_seconds=settings.wikimedia_cache_negative_ttl_seconds,
+                            )
                             print(f"    -> removed: best photo only scored {best_score.score}/10, "
                                   f"below the {args.quality_floor}/10 floor")
                     else:

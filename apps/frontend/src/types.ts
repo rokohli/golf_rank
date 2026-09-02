@@ -36,6 +36,10 @@ export type CourseImage = {
   position: number
   is_hero: boolean
   source_type?: 'official' | 'user' | 'wikimedia' | string | null
+  quality_score?: number | null
+  width?: number | null
+  height?: number | null
+  created_at?: string | null
 }
 
 // Normalized shape from CourseImageService.resolveCourseHeroImage -- the

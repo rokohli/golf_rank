@@ -143,6 +143,10 @@ def course_image_data(course: Course) -> list[dict]:
             "position": image.position,
             "is_hero": image.is_hero,
             "source_type": image.source_type,
+            "quality_score": image.quality_score,
+            "width": image.width,
+            "height": image.height,
+            "created_at": image.created_at.isoformat() if image.created_at else None,
         })
     return output
 
