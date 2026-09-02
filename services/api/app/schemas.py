@@ -103,6 +103,10 @@ class CourseImageOut(BaseModel):
     position: int
     is_hero: bool
     source_type: str = "wikimedia"
+    quality_score: float | None = None
+    width: int | None = None
+    height: int | None = None
+    created_at: str | None = None
 
 
 class CourseOut(BaseModel):

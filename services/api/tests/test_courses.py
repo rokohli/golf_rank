@@ -116,9 +116,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert response.status_code == 200
     assert response.json()["name"] == "Spyglass Hill Golf Course"
 
-    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
-    pebble_id = listed_pebble["id"]
-    assert listed_pebble["images"] == [
+    expected_images = [
         {
             "id": 1,
             "url": "https://images.example/pebble-hero.jpg",
@@ -130,6 +128,9 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "position": 0,
             "is_hero": True,
             "source_type": "wikimedia",
+            "quality_score": None,
+            "width": None,
+            "height": None,
         },
         {
             "id": 2,
@@ -142,39 +143,26 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "position": 1,
             "is_hero": False,
             "source_type": "wikimedia",
+            "quality_score": None,
+            "width": None,
+            "height": None,
         },
     ]
+
+    def _without_created_at(images: list[dict]) -> list[dict]:
+        for image in images:
+            assert image.pop("created_at")
+        return images
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+    pebble_id = listed_pebble["id"]
+    assert _without_created_at(listed_pebble["images"]) == expected_images
     pebble_response = client.get(f"/api/v1/courses/{pebble_id}")
     assert pebble_response.status_code == 200
     assert pebble_response.json()["par"] == 72
     assert pebble_response.json()["slope_rating"] == 145
     assert pebble_response.json()["tee_time_url"].startswith("https://www.pebblebeach.com/")
-    assert pebble_response.json()["images"] == [
-        {
-            "id": 1,
-            "url": "https://images.example/pebble-hero.jpg",
-            "alt_text": "Pebble Beach coastline",
-            "source_name": "Example photographer",
-            "source_url": "https://images.example/license",
-            "license_name": "CC BY-SA 4.0",
-            "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-            "position": 0,
-            "is_hero": True,
-            "source_type": "wikimedia",
-        },
-        {
-            "id": 2,
-            "url": "https://cdn.example/assets/courses/pebble/second.jpg",
-            "alt_text": "Pebble Beach green",
-            "source_name": "GolfRank photographer",
-            "source_url": "https://golfrank.example/photos/pebble-green",
-            "license_name": None,
-            "license_url": None,
-            "position": 1,
-            "is_hero": False,
-            "source_type": "wikimedia",
-        },
-    ]
+    assert _without_created_at(pebble_response.json()["images"]) == expected_images
 
 
 def test_course_detail_hides_non_approved_images() -> None:
