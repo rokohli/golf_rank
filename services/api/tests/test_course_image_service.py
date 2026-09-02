@@ -89,7 +89,8 @@ def make_service(session: Session, *, wikimedia=None, satellite=None, positive_t
 def satellite_result(course_name: str) -> CourseImageResult:
     return CourseImageResult(
         type="SATELLITE", url="https://api.mapbox.com/x.png", thumbnail_url=None, attribution="Mapbox",
-        license=None, source_url=None, alt_text=f"Aerial view of {course_name}", width=1280, height=640,
+        license=None, license_url=None, source_url=None, alt_text=f"Aerial view of {course_name}",
+        width=1280, height=640,
     )
 
 
@@ -102,8 +103,8 @@ def wikimedia_lookup(course_name: str, *, confidence: float = 0.9) -> WikimediaL
     )
     result = CourseImageResult(
         type="WIKIMEDIA", url=photo.url, thumbnail_url=photo.url, attribution=photo.source_name,
-        license=photo.license_name, source_url=photo.source_url, alt_text=f"{course_name} course photo",
-        width=photo.width, height=photo.height,
+        license=photo.license_name, license_url=photo.license_url, source_url=photo.source_url,
+        alt_text=f"{course_name} course photo", width=photo.width, height=photo.height,
     )
     return WikimediaLookup(result=result, confidence=confidence, photo=photo)
 

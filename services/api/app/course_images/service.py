@@ -95,6 +95,7 @@ def _to_result(settings: Settings, image: CourseImage, image_type: str, course_n
         thumbnail_url=image.thumbnail_url or _course_image_url(settings, image),
         attribution=image.source_name,
         license=image.license_name,
+        license_url=image.license_url,
         source_url=image.source_url,
         alt_text=image.alt_text or f"{course_name} course photo",
         width=image.width,

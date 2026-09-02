@@ -12,7 +12,8 @@ RETRY_BACKOFF_SECONDS = 3.0
 
 
 def _request_with_retries(
-    client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES, **kwargs
+    client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES,
+    deadline: float | None = None, **kwargs
 ) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
     connections, brief 429s, or transient 5xx server errors from Commons) --
@@ -22,7 +23,17 @@ def _request_with_retries(
     pass max_retries=0: retries with growing backoff are fine to absorb in an
     hours-long offline job, but not while blocking a course-detail request and
     holding a DB session/lock.
+
+    `deadline` (a `time.monotonic()` value) bounds this call to whatever is
+    left of an end-to-end budget shared with sibling requests -- without it,
+    the client's per-request timeout applies separately to every request,
+    so two sequential calls could each take the full timeout.
     """
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise httpx.TimeoutException(f"deadline exceeded before {method} {url}")
+        kwargs["timeout"] = remaining
     for attempt in range(max_retries + 1):
         try:
             response = client.request(method, url, **kwargs)
@@ -114,6 +125,7 @@ def find_wikimedia_photos(
     radius_meters: int = 1000,
     limit: int = 5,
     max_retries: int = MAX_TRANSIENT_RETRIES,
+    deadline: float | None = None,
 ) -> list[ExternalPhoto]:
     """Find geo-tagged, landscape photos on Wikimedia Commons near a course.
 
@@ -125,6 +137,12 @@ def find_wikimedia_photos(
     `max_retries` defaults to the batch-job budget; pass 0 from a synchronous
     per-request caller to bound worst-case latency to roughly the client
     timeout instead of minutes of growing backoff.
+
+    `deadline` (a `time.monotonic()` value) is an end-to-end budget shared by
+    both the geosearch and imageinfo calls this function makes -- without it
+    each would separately get the client's full per-request timeout, letting
+    a slow Commons response block a synchronous caller for roughly double the
+    configured timeout.
     """
     course_words = _significant_words(course_name)
     if not course_words:
@@ -132,7 +150,7 @@ def find_wikimedia_photos(
 
     geosearch = _request_with_retries(
         client, "GET", COMMONS_API_URL,
-        max_retries=max_retries,
+        max_retries=max_retries, deadline=deadline,
         params={
             "action": "query",
             "list": "geosearch",
@@ -151,7 +169,7 @@ def find_wikimedia_photos(
 
     imageinfo = _request_with_retries(
         client, "GET", COMMONS_API_URL,
-        max_retries=max_retries,
+        max_retries=max_retries, deadline=deadline,
         params={
             "action": "query",
             "titles": "|".join(titles),

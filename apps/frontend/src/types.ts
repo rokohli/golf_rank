@@ -52,6 +52,7 @@ export type HeroImage = {
   thumbnail_url: string | null
   attribution: string | null
   license: string | null
+  license_url: string | null
   source_url: string | null
   alt_text: string
   width: number | null

@@ -86,6 +86,7 @@ class CourseHeroImageOut(BaseModel):
     thumbnail_url: str | None = None
     attribution: str | None = None
     license: str | None = None
+    license_url: str | None = None
     source_url: str | None = None
     alt_text: str
     width: int | None = None

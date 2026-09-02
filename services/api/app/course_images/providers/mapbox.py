@@ -78,6 +78,7 @@ class MapboxSatelliteImageProvider:
             thumbnail_url=None,
             attribution="Mapbox",
             license=None,
+            license_url=None,
             source_url=None,
             alt_text=f"Aerial view of {course.name}",
             width=pixel_width,

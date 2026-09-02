@@ -22,6 +22,7 @@ class CourseImageResult:
     thumbnail_url: str | None
     attribution: str | None
     license: str | None
+    license_url: str | None
     source_url: str | None
     alt_text: str
     width: int | None
@@ -38,6 +39,7 @@ def no_image_result(alt_text: str) -> CourseImageResult:
         thumbnail_url=None,
         attribution=None,
         license=None,
+        license_url=None,
         source_url=None,
         alt_text=alt_text,
         width=None,

@@ -6,6 +6,7 @@ a confidence score on top, since "passed the relevance filters" and "we're
 confident enough to show this to every visitor" aren't quite the same bar.
 """
 
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -57,9 +58,15 @@ class WikimediaImageProvider:
             # (holding a DB session and the per-course coalescing lock), unlike
             # the offline backfill/refresh scripts that can afford to absorb a
             # transient blip with growing backoff.
+            #
+            # deadline: find_wikimedia_photos makes two sequential Commons
+            # requests (geosearch, then imageinfo); without a shared deadline
+            # each would separately get the client's full timeout, letting a
+            # slow Commons response block this request for roughly double
+            # wikimedia_lookup_timeout_seconds.
             photos = find_wikimedia_photos(
                 client, course_name=course.name, latitude=course.latitude, longitude=course.longitude, limit=1,
-                max_retries=0,
+                max_retries=0, deadline=time.monotonic() + self._timeout_seconds,
             )
         if not photos:
             return WikimediaLookup(result=None, confidence=0.0, photo=None)
@@ -73,6 +80,7 @@ class WikimediaImageProvider:
             thumbnail_url=photo.url,
             attribution=photo.source_name,
             license=photo.license_name,
+            license_url=photo.license_url,
             source_url=photo.source_url,
             alt_text=f"{course.name} course photo",
             width=photo.width,
