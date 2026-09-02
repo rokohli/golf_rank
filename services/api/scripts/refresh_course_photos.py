@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
+from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
 from app.course_photos import find_wikimedia_photos
 from app.db import make_engine, make_session_factory
 from app.models import Course, CourseImage, CourseImageSource
@@ -85,6 +86,10 @@ def main() -> int:
                     for index, photo in enumerate(photos)
                 ]
                 session.add_all(rows)
+                # Clear any stale negative-cache entry so course-detail requests
+                # start using these newly stored photos immediately, instead of
+                # falling back to Mapbox/NONE for the rest of the negative TTL.
+                repository.invalidate_negative_cache(session, course_id, WIKIMEDIA_PROVIDER_NAME, commit=False)
                 session.commit()
                 print(f"#{course_id} {course.name}: {len(rows)} photo(s)")
                 for row in rows:
