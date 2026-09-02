@@ -513,6 +513,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         ).one()
         hero_image = app.state.course_image_service.resolve_hero_image(session, stored_course)
+        # The resolver may have inserted/updated/deleted CourseImage rows and
+        # committed; the already-loaded `images` relationship on this
+        # session-cached instance won't reflect that (expire_on_commit=False),
+        # so refresh it before serializing.
+        session.refresh(stored_course, attribute_names=["images"])
         return {
             **course_data(stored_course),
             "hero_image": hero_image.to_dict(),

@@ -183,16 +183,22 @@ class CourseImageService:
         return age_seconds >= self._settings.wikimedia_cache_positive_ttl_seconds
 
     def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
+        if not self._settings.wikimedia_live_lookup_enabled:
+            cached = self._repository.best_wikimedia_image(session, course.id)
+            return self._wikimedia_cache_result(cached, course.name)
+
+        # An active negative cache means a prior authoritative live lookup
+        # found nothing usable for this course. Any currently-stored
+        # Wikimedia row -- even one that looks individually fresh -- may be
+        # a gallery sibling left behind when the evicted hero was deleted,
+        # so it must not be promoted as the hero while the miss still holds.
+        negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
+        if negative is not None:
+            return None
+
         cached = self._repository.best_wikimedia_image(session, course.id)
         cached_result = self._wikimedia_cache_result(cached, course.name)
         if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
-            return cached_result
-
-        if not self._settings.wikimedia_live_lookup_enabled:
-            return cached_result
-
-        negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
-        if negative is not None:
             return cached_result
 
         if course.latitude is None or course.longitude is None:
@@ -201,12 +207,16 @@ class CourseImageService:
         with self._wikimedia_lock(course.id):
             # Re-check after acquiring the lock: another thread may have just
             # resolved (and committed) this course while we were waiting.
+            negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
+            if negative is not None:
+                return None
+
             cached = self._repository.best_wikimedia_image(session, course.id)
             cached_result = self._wikimedia_cache_result(cached, course.name)
             if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
                 return cached_result
-            negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
-            if negative is not None:
+
+            if course.latitude is None or course.longitude is None:
                 return cached_result
 
             self.metrics.wikimedia_lookups += 1
