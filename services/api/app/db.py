@@ -5,6 +5,8 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from .course_images.providers.mapbox import MapboxOptions, SatelliteImageProvider
+
 
 def make_engine(database_url: str, *, pool_size: int = 5, max_overflow: int = 10) -> Engine:
     if database_url.startswith("sqlite"):
@@ -37,8 +39,8 @@ def make_session_factory(
     engine: Engine,
     *,
     course_image_base_url: str | None = None,
-    satellite_provider=None,
-    satellite_options=None,
+    satellite_provider: SatelliteImageProvider | None = None,
+    satellite_options: MapboxOptions | None = None,
 ) -> sessionmaker[Session]:
     return sessionmaker(
         bind=engine,

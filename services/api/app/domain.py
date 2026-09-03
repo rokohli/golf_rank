@@ -130,6 +130,11 @@ def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -
 
 
 def course_card_hero_data(course: Course) -> dict:
+    """Cheap, read-only mirror of CourseImageService.resolve_hero_image()'s
+    OFFICIAL/USER/WIKIMEDIA/SATELLITE ordering for list/search payloads, which
+    are rendered from already-loaded rows and can't afford one Wikimedia
+    lookup + lock per card. Any change to that priority order or to satellite
+    eligibility must be mirrored here."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
 
