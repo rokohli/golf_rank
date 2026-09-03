@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import Settings
 from ..domain import storage_image_url
-from ..models import CourseImage
+from ..models import CourseImage, CourseImageSource
 from .providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider, SatelliteImageProvider
 from .providers.wikimedia import WikimediaImageProvider
 from .repository import CourseImageRepository
@@ -145,14 +145,15 @@ class CourseImageService:
         return result
 
     def _resolve(self, session: Session, course: HasCourse) -> CourseImageResult:
-        official = self._repository.best_official_image(session, course.id)
-        if official is not None:
+        # Don't stop at the top-ranked candidate in a tier: a curated row can
+        # have only a storage_key with no configured base URL, which must not
+        # hide a lower-ranked but perfectly displayable row in the same tier.
+        for official in self._repository.approved_images(session, course.id, CourseImageSource.OFFICIAL):
             result = _to_result(self._settings, official, "OFFICIAL", course.name)
             if result.url is not None:
                 return result
 
-        user = self._repository.best_user_image(session, course.id)
-        if user is not None:
+        for user in self._repository.approved_images(session, course.id, CourseImageSource.USER):
             result = _to_result(self._settings, user, "USER", course.name)
             if result.url is not None:
                 return result
@@ -183,11 +184,18 @@ class CourseImageService:
         age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
         return age_seconds >= self._settings.wikimedia_cache_positive_ttl_seconds
 
-    def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
-        if not self._settings.wikimedia_live_lookup_enabled:
-            cached = self._repository.best_wikimedia_image(session, course.id)
-            return self._wikimedia_cache_result(cached, course.name)
+    def _wikimedia_cache_snapshot(
+        self, session: Session, course: HasCourse
+    ) -> tuple[CourseImage | None, CourseImageResult | None, bool]:
+        """Reads the current cache/negative-cache state for one course.
 
+        Returns (cached_row, cached_result, stop). `stop` is True when the
+        caller should return `cached_result` immediately -- either an active
+        negative cache (an authoritative "no image", so cached_result is also
+        None), a still-fresh cached row, or a course with no coordinates to
+        refresh against. This is shared by the pre-lock check and the
+        post-lock re-check so the two can't drift out of sync.
+        """
         # An active negative cache means a prior authoritative live lookup
         # found nothing usable for this course. Any currently-stored
         # Wikimedia row -- even one that looks individually fresh -- may be
@@ -195,14 +203,25 @@ class CourseImageService:
         # so it must not be promoted as the hero while the miss still holds.
         negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
         if negative is not None:
-            return None
+            return None, None, True
 
         cached = self._repository.best_wikimedia_image(session, course.id)
         cached_result = self._wikimedia_cache_result(cached, course.name)
         if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
-            return cached_result
+            return cached, cached_result, True
 
         if course.latitude is None or course.longitude is None:
+            return cached, cached_result, True
+
+        return cached, cached_result, False
+
+    def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
+        if not self._settings.wikimedia_live_lookup_enabled:
+            cached = self._repository.best_wikimedia_image(session, course.id)
+            return self._wikimedia_cache_result(cached, course.name)
+
+        cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
+        if stop:
             return cached_result
 
         with self._wikimedia_lock(course.id):
@@ -215,16 +234,8 @@ class CourseImageService:
             # plain re-select).
             if cached is not None:
                 session.expire(cached)
-            negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
-            if negative is not None:
-                return None
-
-            cached = self._repository.best_wikimedia_image(session, course.id)
-            cached_result = self._wikimedia_cache_result(cached, course.name)
-            if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
-                return cached_result
-
-            if course.latitude is None or course.longitude is None:
+            cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
+            if stop:
                 return cached_result
 
             # Release the pooled DB connection before blocking on Commons --

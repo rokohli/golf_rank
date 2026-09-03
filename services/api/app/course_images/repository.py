@@ -30,7 +30,8 @@ def _rank_key(image: CourseImage):
 
 
 class CourseImageRepository:
-    def _best_approved(self, session: Session, course_id: int, source_type: str) -> CourseImage | None:
+    def approved_images(self, session: Session, course_id: int, source_type: str) -> list[CourseImage]:
+        """All APPROVED rows in one source tier, best candidate first."""
         candidates = session.scalars(
             select(CourseImage).where(
                 CourseImage.course_id == course_id,
@@ -38,9 +39,11 @@ class CourseImageRepository:
                 CourseImage.moderation_status == CourseImageModeration.APPROVED,
             )
         ).all()
-        if not candidates:
-            return None
-        return min(candidates, key=_rank_key)
+        return sorted(candidates, key=_rank_key)
+
+    def _best_approved(self, session: Session, course_id: int, source_type: str) -> CourseImage | None:
+        candidates = self.approved_images(session, course_id, source_type)
+        return candidates[0] if candidates else None
 
     def best_official_image(self, session: Session, course_id: int) -> CourseImage | None:
         return self._best_approved(session, course_id, CourseImageSource.OFFICIAL)
