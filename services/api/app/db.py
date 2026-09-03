@@ -34,12 +34,20 @@ def make_engine(database_url: str, *, pool_size: int = 5, max_overflow: int = 10
 
 
 def make_session_factory(
-    engine: Engine, *, course_image_base_url: str | None = None
+    engine: Engine,
+    *,
+    course_image_base_url: str | None = None,
+    satellite_provider=None,
+    satellite_options=None,
 ) -> sessionmaker[Session]:
     return sessionmaker(
         bind=engine,
         expire_on_commit=False,
-        info={"course_image_base_url": course_image_base_url},
+        info={
+            "course_image_base_url": course_image_base_url,
+            "satellite_provider": satellite_provider,
+            "satellite_options": satellite_options,
+        },
     )
 
 

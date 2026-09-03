@@ -22,6 +22,7 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
+from .course_images.providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider
 from .course_images.service import CourseImageService
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
@@ -120,7 +121,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
     app.state.course_image_service = CourseImageService(settings=settings)
     app.state.session_factory = make_session_factory(
-        engine, course_image_base_url=settings.course_image_base_url
+        engine,
+        course_image_base_url=settings.course_image_base_url,
+        satellite_provider=MapboxSatelliteImageProvider(access_token=settings.mapbox_access_token),
+        satellite_options=MapboxOptions(
+            width=settings.mapbox_static_image_width,
+            height=settings.mapbox_static_image_height,
+            zoom=settings.mapbox_static_image_zoom,
+            pixel_ratio=settings.mapbox_static_image_pixel_ratio,
+        ),
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
     app.include_router(ranking_router, dependencies=authenticated_dependencies)

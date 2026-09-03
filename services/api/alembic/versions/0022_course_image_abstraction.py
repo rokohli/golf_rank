@@ -28,14 +28,34 @@ def upgrade() -> None:
     op.add_column("course_images", sa.Column("quality_score", sa.Float(), nullable=True))
     op.add_column("course_images", sa.Column("width", sa.Integer(), nullable=True))
     op.add_column("course_images", sa.Column("height", sa.Integer(), nullable=True))
-    op.add_column(
+    # SQLite refuses ADD COLUMN with a non-constant (CURRENT_TIMESTAMP) default
+    # once the table already has rows -- batch mode rebuilds the table instead,
+    # which works on both SQLite and Postgres.
+    with op.batch_alter_table("course_images") as batch_op:
+        batch_op.add_column(
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        )
+        batch_op.add_column(
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        )
+    # Pre-existing rows predate the OFFICIAL/USER/WIKIMEDIA split. A storage_key
+    # row is a GolfRank-managed curated photo, not a Wikimedia cache entry --
+    # label it OFFICIAL so the resolver never refreshes/deletes it as stale
+    # Wikimedia data (which would also violate ck_course_image_one_locator by
+    # setting external_url without clearing storage_key). Pre-existing
+    # external_url rows keep the "wikimedia" default, which matches how they
+    # were actually sourced before this migration.
+    course_images = sa.table(
         "course_images",
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.column("storage_key", sa.String),
+        sa.column("source_type", sa.String),
     )
-    op.add_column(
-        "course_images",
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    op.execute(
+        course_images.update()
+        .where(course_images.c.storage_key.isnot(None))
+        .values(source_type="official")
     )
+
     op.create_index("ix_course_images_source_type", "course_images", ["source_type"])
     op.create_index("ix_course_images_moderation_status", "course_images", ["moderation_status"])
     op.create_index("ix_course_images_uploaded_by_user_id", "course_images", ["uploaded_by_user_id"])

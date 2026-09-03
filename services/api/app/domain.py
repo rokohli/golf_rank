@@ -158,6 +158,14 @@ def course_card_hero_data(course: Course) -> dict:
         best_img, best_url = min(wikimedias, key=lambda pair: _rank_key(pair[0]))
         return _hero_dict("WIKIMEDIA", best_img, best_url, course.name)
 
+    if session is not None:
+        satellite_provider = session.info.get("satellite_provider")
+        satellite_options = session.info.get("satellite_options")
+        if satellite_provider is not None and satellite_options is not None:
+            satellite = satellite_provider.get_course_image(course, satellite_options)
+            if satellite is not None:
+                return satellite.to_dict()
+
     return {
         "type": "NONE",
         "url": None,
