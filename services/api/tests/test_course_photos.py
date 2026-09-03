@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.course_photos import _request_with_retries, find_wikimedia_photos, is_landscape
+from app.course_photos import request_with_retries, find_wikimedia_photos, is_landscape
 
 
 def _client(handler) -> httpx.Client:
@@ -132,7 +132,7 @@ def test_max_retries_zero_does_not_retry_a_429_and_raises_immediately() -> None:
         return httpx.Response(429)
 
     with pytest.raises(httpx.HTTPStatusError):
-        response = _request_with_retries(_client(handler), "GET", "https://commons.wikimedia.org/w/api.php", max_retries=0)
+        response = request_with_retries(_client(handler), "GET", "https://commons.wikimedia.org/w/api.php", max_retries=0)
         response.raise_for_status()
     assert attempts == 1
 
@@ -280,7 +280,7 @@ def test_request_with_retries_enforces_deadline_during_streaming_body() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler))
     deadline = time.monotonic() + 0.04
     with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
-        _request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=0)
+        request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=0)
 
 
 def test_request_with_retries_enforces_deadline_before_retry_backoff() -> None:
@@ -295,5 +295,5 @@ def test_request_with_retries_enforces_deadline_before_retry_backoff() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler))
     deadline = time.monotonic() + 0.05
     with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
-        _request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=2)
+        request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=2)
     assert attempts == 1

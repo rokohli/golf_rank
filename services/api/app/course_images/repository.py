@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
@@ -44,12 +45,6 @@ class CourseImageRepository:
     def _best_approved(self, session: Session, course_id: int, source_type: str) -> CourseImage | None:
         candidates = self.approved_images(session, course_id, source_type)
         return candidates[0] if candidates else None
-
-    def best_official_image(self, session: Session, course_id: int) -> CourseImage | None:
-        return self._best_approved(session, course_id, CourseImageSource.OFFICIAL)
-
-    def best_user_image(self, session: Session, course_id: int) -> CourseImage | None:
-        return self._best_approved(session, course_id, CourseImageSource.USER)
 
     def best_wikimedia_image(self, session: Session, course_id: int) -> CourseImage | None:
         return self._best_approved(session, course_id, CourseImageSource.WIKIMEDIA)
@@ -184,5 +179,17 @@ class CourseImageRepository:
             query = query.where(CourseImageNegativeCache.provider == provider)
         for row in session.scalars(query).all():
             session.delete(row)
+        if commit:
+            session.commit()
+
+    def invalidate_negative_cache_bulk(
+        self, session: Session, course_ids: Collection[int], *, commit: bool = True
+    ) -> None:
+        """Same as invalidate_negative_cache, but for many courses in one
+        statement -- e.g. a catalog import that relocates hundreds of courses
+        in one run shouldn't pay a SELECT+delete round trip per course."""
+        if not course_ids:
+            return
+        session.execute(delete(CourseImageNegativeCache).where(CourseImageNegativeCache.course_id.in_(course_ids)))
         if commit:
             session.commit()

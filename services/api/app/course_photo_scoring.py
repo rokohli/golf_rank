@@ -2,13 +2,13 @@
 
 import base64
 import json
-import time
 from dataclasses import dataclass
 
 import httpx
 
+from .course_photos import request_with_retries
+
 MAX_TRANSIENT_RETRIES = 5
-RETRY_BACKOFF_SECONDS = 3.0
 
 
 GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -84,25 +84,24 @@ def score_course_photo(
             "maxOutputTokens": 300,
         },
     }
-    for attempt in range(MAX_TRANSIENT_RETRIES + 1):
-        try:
-            response = client.post(
-                GEMINI_GENERATE_URL.format(model=model),
-                headers={"x-goog-api-key": api_key},
-                json=payload,
-            )
-            if response.status_code in {429, 500, 502, 503, 504} and attempt < MAX_TRANSIENT_RETRIES:
-                time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
-                continue
-            break
-        except httpx.TransportError:
-            if attempt == MAX_TRANSIENT_RETRIES:
-                raise
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+    response = request_with_retries(
+        client, "POST", GEMINI_GENERATE_URL.format(model=model),
+        max_retries=MAX_TRANSIENT_RETRIES,
+        headers={"x-goog-api-key": api_key},
+        json=payload,
+    )
     response.raise_for_status()
     output_text = _gemini_output_text(response.json())
     parsed = json.loads(output_text)
-    return PhotoScore(score=int(parsed["score"]), reasons=[str(r) for r in parsed.get("reasons", [])])
+    try:
+        score = int(parsed["score"])
+    except (TypeError, ValueError) as exc:
+        # The requested JSON schema constrains "score" to an integer, but
+        # Gemini isn't guaranteed to honor it -- treat a malformed score the
+        # same as any other scoring failure (logged and skipped by the
+        # caller) instead of crashing the whole batch run.
+        raise PhotoScoringError(f"invalid_score: {parsed.get('score')!r}") from exc
+    return PhotoScore(score=score, reasons=[str(r) for r in parsed.get("reasons", [])])
 
 
 def _gemini_output_text(body: dict) -> str:

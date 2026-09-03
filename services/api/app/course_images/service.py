@@ -67,6 +67,10 @@ class CourseImageMetrics:
             self.resolutions_by_type[image_type] += 1
         logger.info("course_image_resolved type=%s latency_ms=%.1f", image_type, latency_seconds * 1000)
 
+    def increment(self, counter_name: str) -> None:
+        with self._lock:
+            setattr(self, counter_name, getattr(self, counter_name) + 1)
+
     def snapshot(self) -> dict:
         with self._lock:
             total = sum(self.resolutions_by_type.values()) or 1
@@ -249,7 +253,7 @@ class CourseImageService:
             # opens a fresh transaction/connection to write the outcome.
             session.commit()
 
-            self.metrics.wikimedia_lookups += 1
+            self.metrics.increment("wikimedia_lookups")
             try:
                 lookup = self._wikimedia_provider.lookup(course)
             except Exception:
@@ -258,12 +262,12 @@ class CourseImageService:
                 # the next request rather than sitting behind a negative TTL).
                 # A still-usable stale cache beats no image at all.
                 logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
-                self.metrics.wikimedia_failures += 1
+                self.metrics.increment("wikimedia_failures")
                 return cached_result
 
             if lookup.result is None:
                 if lookup.photo is not None:
-                    self.metrics.wikimedia_low_confidence_rejections += 1
+                    self.metrics.increment("wikimedia_low_confidence_rejections")
                 self._repository.set_negative_cache(
                     session, course.id, WIKIMEDIA_PROVIDER_NAME,
                     ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
@@ -276,7 +280,7 @@ class CourseImageService:
                     self._repository.delete_image(session, cached)
                 return None
 
-            self.metrics.wikimedia_successes += 1
+            self.metrics.increment("wikimedia_successes")
             photo = lookup.photo
             if cached is not None:
                 # Refreshing a stale cache entry -- update it in place to
@@ -302,9 +306,9 @@ class CourseImageService:
 
     def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:
         if course.latitude is None or course.longitude is None:
-            self.metrics.satellite_skipped_invalid_coordinates += 1
+            self.metrics.increment("satellite_skipped_invalid_coordinates")
             return None
-        self.metrics.satellite_requests += 1
+        self.metrics.increment("satellite_requests")
         options = MapboxOptions(
             width=self._settings.mapbox_static_image_width,
             height=self._settings.mapbox_static_image_height,

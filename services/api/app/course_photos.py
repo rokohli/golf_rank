@@ -10,6 +10,11 @@ import httpx
 MAX_TRANSIENT_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 3.0
 
+# Shared by every caller of the Commons API (the live resolver and the
+# offline backfill/refresh/score scripts) so Wikimedia's UA policy only ever
+# needs updating in one place.
+WIKIMEDIA_USER_AGENT = "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"
+
 
 def _read_response_with_deadline(
     response: httpx.Response, deadline: float | None, method: str, url: str
@@ -31,7 +36,7 @@ def _read_response_with_deadline(
     return response._content
 
 
-def _request_with_retries(
+def request_with_retries(
     client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES,
     deadline: float | None = None, **kwargs
 ) -> httpx.Response:
@@ -188,7 +193,7 @@ def find_wikimedia_photos(
     if not course_words:
         return []
 
-    geosearch = _request_with_retries(
+    geosearch = request_with_retries(
         client, "GET", COMMONS_API_URL,
         max_retries=max_retries, deadline=deadline,
         params={
@@ -207,7 +212,7 @@ def find_wikimedia_photos(
     if not titles:
         return []
 
-    imageinfo = _request_with_retries(
+    imageinfo = request_with_retries(
         client, "GET", COMMONS_API_URL,
         max_retries=max_retries, deadline=deadline,
         params={

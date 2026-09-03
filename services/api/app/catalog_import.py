@@ -75,6 +75,7 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
     report = ImportReport(fetched=len(records))
     now = datetime.now(UTC)
     seen_ids: set[str] = set()
+    relocated_course_ids: set[int] = set()
     existing = {
         course.source_course_id: course
         for course in session.scalars(
@@ -149,7 +150,11 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
                         CourseImage.course_id == course.id,
                         CourseImage.source_type == CourseImageSource.WIKIMEDIA,
                     ))
-                    CourseImageRepository().invalidate_negative_cache(session, course.id, commit=False)
+                    relocated_course_ids.add(course.id)
+    if relocated_course_ids and not dry_run:
+        # One batched statement instead of a SELECT+delete per relocated
+        # course -- an import run can relocate hundreds of courses at once.
+        CourseImageRepository().invalidate_negative_cache_bulk(session, relocated_course_ids, commit=False)
     for source_id, course in existing.items():
         if source_id not in seen_ids and course.status != "retired":
             report.retired += 1

@@ -12,7 +12,7 @@ from typing import Protocol
 
 import httpx
 
-from ...course_photos import ExternalPhoto, find_wikimedia_photos
+from ...course_photos import WIKIMEDIA_USER_AGENT, ExternalPhoto, find_wikimedia_photos
 from ..types import CourseImageResult
 
 
@@ -50,24 +50,35 @@ class WikimediaImageProvider:
     def __init__(self, *, timeout_seconds: float, confidence_threshold: float):
         self._timeout_seconds = timeout_seconds
         self._confidence_threshold = confidence_threshold
+        # One long-lived client for the life of this provider (itself
+        # process-lifetime, owned by CourseImageService on app.state) instead
+        # of a fresh client per lookup -- httpx.Client is safe to share across
+        # threads, and reusing it lets Commons requests reuse a keep-alive
+        # connection instead of paying a new TCP+TLS handshake on every
+        # cache-miss/stale-cache course-detail request.
+        self._client = httpx.Client(
+            timeout=timeout_seconds,
+            headers={"User-Agent": WIKIMEDIA_USER_AGENT},
+        )
+
+    def close(self) -> None:
+        self._client.close()
 
     def lookup(self, course: HasCoursePlace) -> WikimediaLookup:
-        headers = {"User-Agent": "GolfRank-CourseImageResolver/1.0 (https://github.com/golf-rank/golf_rank)"}
-        with httpx.Client(timeout=self._timeout_seconds, headers=headers) as client:
-            # max_retries=0: this runs synchronously in a course-detail request
-            # (holding a DB session and the per-course coalescing lock), unlike
-            # the offline backfill/refresh scripts that can afford to absorb a
-            # transient blip with growing backoff.
-            #
-            # deadline: find_wikimedia_photos makes two sequential Commons
-            # requests (geosearch, then imageinfo); without a shared deadline
-            # each would separately get the client's full timeout, letting a
-            # slow Commons response block this request for roughly double
-            # wikimedia_lookup_timeout_seconds.
-            photos = find_wikimedia_photos(
-                client, course_name=course.name, latitude=course.latitude, longitude=course.longitude, limit=1,
-                max_retries=0, deadline=time.monotonic() + self._timeout_seconds,
-            )
+        # max_retries=0: this runs synchronously in a course-detail request
+        # (holding a DB session and the per-course coalescing lock), unlike
+        # the offline backfill/refresh scripts that can afford to absorb a
+        # transient blip with growing backoff.
+        #
+        # deadline: find_wikimedia_photos makes two sequential Commons
+        # requests (geosearch, then imageinfo); without a shared deadline
+        # each would separately get the client's full timeout, letting a
+        # slow Commons response block this request for roughly double
+        # wikimedia_lookup_timeout_seconds.
+        photos = find_wikimedia_photos(
+            self._client, course_name=course.name, latitude=course.latitude, longitude=course.longitude, limit=1,
+            max_retries=0, deadline=time.monotonic() + self._timeout_seconds,
+        )
         if not photos:
             return WikimediaLookup(result=None, confidence=0.0, photo=None)
         photo = photos[0]

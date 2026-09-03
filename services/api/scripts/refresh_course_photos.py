@@ -18,7 +18,7 @@ from sqlalchemy import select
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
 from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
-from app.course_photos import find_wikimedia_photos
+from app.course_photos import WIKIMEDIA_USER_AGENT, find_wikimedia_photos
 from app.db import make_engine, make_session_factory
 from app.models import Course, CourseImage, CourseImageSource
 
@@ -50,7 +50,7 @@ def main() -> int:
                     print(f"  #{course_id} {courses_by_id[course_id].name}")
             return 0
 
-        headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
+        headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
         with httpx.Client(timeout=30, headers=headers) as client:
             for course_id in course_ids:
                 course = courses_by_id.get(course_id)

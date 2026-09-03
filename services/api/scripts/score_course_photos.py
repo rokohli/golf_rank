@@ -27,6 +27,7 @@ from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
 from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
+from app.course_photos import WIKIMEDIA_USER_AGENT
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
 from app.models import Course
@@ -63,7 +64,7 @@ def main() -> int:
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
     repository = CourseImageRepository()
-    headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
+    headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
     with session_factory() as session:
         with httpx.Client(timeout=30, headers=headers) as client:
             reference_images = []
