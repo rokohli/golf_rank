@@ -227,6 +227,17 @@ class CourseImageService:
             if course.latitude is None or course.longitude is None:
                 return cached_result
 
+            # Release the pooled DB connection before blocking on Commons --
+            # `cached`/`course` attributes are already loaded above, and
+            # expire_on_commit=False keeps them readable after this. Without
+            # it, every concurrent cold lookup would hold a connection for
+            # the full external timeout, and a handful of them can exhaust
+            # the pool and stall unrelated requests. The in-process lock is
+            # still held, so no other thread can race this course's cache
+            # entries in the meantime; the next repository call below simply
+            # opens a fresh transaction/connection to write the outcome.
+            session.commit()
+
             self.metrics.wikimedia_lookups += 1
             try:
                 lookup = self._wikimedia_provider.lookup(course)
