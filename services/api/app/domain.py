@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import hashlib
 from urllib.parse import quote
 
@@ -6,7 +7,8 @@ from sqlalchemy import exists, select, text, tuple_
 from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
-from .models import Course, CourseImageModeration, CourseReconciliation, DeletedIdentity, User
+from .course_images.repository import _rank_key
+from .models import Course, CourseImage, CourseImageModeration, CourseReconciliation, DeletedIdentity, User
 
 
 def lock_identity_transaction(session: Session, provider_subject: str) -> None:
@@ -95,6 +97,81 @@ def course_identity_ids(session: Session, course: Course) -> set[int]:
     return {course.id, *aliases}
 
 
+def is_wikimedia_negative_cached(course: Course) -> bool:
+    negative_caches = getattr(course, "negative_caches", None)
+    if negative_caches is not None:
+        now = datetime.now(timezone.utc)
+        for row in negative_caches:
+            if row.provider == "wikimedia":
+                expires_at = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+                if expires_at > now:
+                    return True
+        return False
+    session = object_session(course)
+    if session is not None:
+        from .course_images.repository import CourseImageRepository
+        return CourseImageRepository().get_negative_cache(session, course.id, "wikimedia") is not None
+    return False
+
+
+def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -> dict:
+    return {
+        "type": hero_type,
+        "url": url,
+        "thumbnail_url": image.thumbnail_url or url,
+        "attribution": image.source_name,
+        "license": image.license_name,
+        "license_url": image.license_url,
+        "source_url": image.source_url,
+        "alt_text": image.alt_text or f"{course_name} course photo",
+        "width": image.width,
+        "height": image.height,
+    }
+
+
+def course_card_hero_data(course: Course) -> dict:
+    session = object_session(course)
+    image_base_url = session.info.get("course_image_base_url") if session is not None else None
+
+    images = getattr(course, "images", None) or []
+    approved_with_url: list[tuple[CourseImage, str]] = []
+    for image in images:
+        if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
+        url = image.external_url or storage_image_url(image_base_url, image.storage_key)
+        if not url:
+            continue
+        approved_with_url.append((image, url))
+
+    officials = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "official"]
+    if officials:
+        best_img, best_url = min(officials, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("OFFICIAL", best_img, best_url, course.name)
+
+    users = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "user"]
+    if users:
+        best_img, best_url = min(users, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("USER", best_img, best_url, course.name)
+
+    wikimedias = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "wikimedia"]
+    if wikimedias and not is_wikimedia_negative_cached(course):
+        best_img, best_url = min(wikimedias, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("WIKIMEDIA", best_img, best_url, course.name)
+
+    return {
+        "type": "NONE",
+        "url": None,
+        "thumbnail_url": None,
+        "attribution": None,
+        "license": None,
+        "license_url": None,
+        "source_url": None,
+        "alt_text": f"{course.name} course photo",
+        "width": None,
+        "height": None,
+    }
+
+
 def course_data(course: Course) -> dict:
     return {
         "id": course.id,
@@ -119,6 +196,7 @@ def course_data(course: Course) -> dict:
         "tee_time_url": course.tee_time_url,
         "access": course.access,
         "images": course_image_data(course),
+        "hero_image": course_card_hero_data(course),
     }
 
 

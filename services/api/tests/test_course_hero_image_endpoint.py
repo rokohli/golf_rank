@@ -61,3 +61,62 @@ def test_course_detail_hero_image_satellite_fallback_with_mapbox_token() -> None
     assert hero["type"] == "SATELLITE"
     assert hero["url"].startswith("https://api.mapbox.com/")
     assert hero["attribution"] == "Mapbox"
+
+
+def test_course_list_card_hero_respects_negative_cache_and_suppresses_gallery_siblings() -> None:
+    app = create_app(Settings(wikimedia_live_lookup_enabled=False))
+    with app.state.session_factory() as session:
+        from app.course_images.repository import CourseImageRepository
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add(CourseImage(
+            course_id=pebble.id,
+            external_url="https://example.com/wiki-sibling.jpg",
+            alt_text="Pebble Beach wiki sibling",
+            source_type=CourseImageSource.WIKIMEDIA,
+            source_name="Commons User",
+            source_url="https://commons.wikimedia.org/wiki/File:Sibling.jpg",
+            moderation_status=CourseImageModeration.APPROVED,
+            is_hero=False,
+            position=1,
+        ))
+        CourseImageRepository().set_negative_cache(session, pebble.id, "wikimedia", ttl_seconds=3600)
+        session.commit()
+        pebble_id = pebble.id
+
+    client = TestClient(app)
+    response = client.get("/api/v1/courses", params={"q": "Pebble"})
+    assert response.status_code == 200
+    course = next(c for c in response.json() if c["id"] == pebble_id)
+    hero = course["hero_image"]
+    assert hero is not None
+    assert hero["type"] == "NONE"
+    assert hero["url"] is None
+    assert any(img["url"] == "https://example.com/wiki-sibling.jpg" for img in course["images"])
+
+
+def test_course_list_card_hero_prefers_curated_official_despite_negative_cache() -> None:
+    app = create_app(Settings(wikimedia_live_lookup_enabled=False))
+    with app.state.session_factory() as session:
+        from app.course_images.repository import CourseImageRepository
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add(CourseImage(
+            course_id=pebble.id,
+            external_url="https://example.com/curated-official.jpg",
+            alt_text="Pebble Beach official",
+            source_type=CourseImageSource.OFFICIAL,
+            moderation_status=CourseImageModeration.APPROVED,
+            is_hero=True,
+            position=0,
+        ))
+        CourseImageRepository().set_negative_cache(session, pebble.id, "wikimedia", ttl_seconds=3600)
+        session.commit()
+        pebble_id = pebble.id
+
+    client = TestClient(app)
+    response = client.get("/api/v1/courses", params={"q": "Pebble"})
+    assert response.status_code == 200
+    course = next(c for c in response.json() if c["id"] == pebble_id)
+    hero = course["hero_image"]
+    assert hero is not None
+    assert hero["type"] == "OFFICIAL"
+    assert hero["url"] == "https://example.com/curated-official.jpg"

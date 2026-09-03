@@ -11,6 +11,26 @@ MAX_TRANSIENT_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 3.0
 
 
+def _read_response_with_deadline(
+    response: httpx.Response, deadline: float | None, method: str, url: str
+) -> bytes:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise httpx.TimeoutException(f"deadline exceeded before reading {method} {url}")
+    if deadline is None:
+        return response.read()
+    if hasattr(response, "_content"):
+        return response._content
+    parts = []
+    for chunk in response.iter_bytes():
+        if time.monotonic() >= deadline:
+            raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
+        parts.append(chunk)
+    if time.monotonic() >= deadline:
+        raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
+    response._content = b"".join(parts)
+    return response._content
+
+
 def _request_with_retries(
     client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES,
     deadline: float | None = None, **kwargs
@@ -27,23 +47,43 @@ def _request_with_retries(
     `deadline` (a `time.monotonic()` value) bounds this call to whatever is
     left of an end-to-end budget shared with sibling requests -- without it,
     the client's per-request timeout applies separately to every request,
-    so two sequential calls could each take the full timeout.
+    so two sequential calls could each take the full timeout. The deadline
+    is enforced before connecting, during transmission/response streaming,
+    and across any retry attempts.
     """
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise httpx.TimeoutException(f"deadline exceeded before {method} {url}")
-        kwargs["timeout"] = remaining
     for attempt in range(max_retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise httpx.TimeoutException(f"deadline exceeded before {method} {url}")
+            kwargs["timeout"] = remaining
         try:
-            response = client.request(method, url, **kwargs)
+            with client.stream(method, url, **kwargs) as stream_resp:
+                _read_response_with_deadline(stream_resp, deadline, method, url)
+                response = stream_resp
+        except httpx.TimeoutException:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
+            if attempt == max_retries:
+                raise
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise
+            time.sleep(backoff)
+            continue
         except httpx.TransportError:
             if attempt == max_retries:
                 raise
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded before retry for {method} {url}")
+            time.sleep(backoff)
             continue
         if response.status_code in {429, 500, 502, 503, 504} and attempt < max_retries:
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded before retry for {method} {url}")
+            time.sleep(backoff)
             continue
         return response
     raise AssertionError("unreachable")

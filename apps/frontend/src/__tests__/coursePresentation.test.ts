@@ -43,6 +43,38 @@ describe('coursePresentation', () => {
       expect(attributedCourseImage(course)).toEqual({ uri: 'https://images.example/hero.jpg' })
     })
 
+    it('returns undefined when hero_image is explicit NONE even if images array contains photos', () => {
+      const course: Course = {
+        ...baseCourse,
+        hero_image: {
+          type: 'NONE',
+          url: null,
+          thumbnail_url: null,
+          attribution: null,
+          license: null,
+          license_url: null,
+          source_url: null,
+          alt_text: 'Test Course hero',
+          width: null,
+          height: null,
+        },
+        images: [
+          {
+            id: 1,
+            url: 'https://images.example/wiki-sibling.jpg',
+            alt_text: 'Wiki sibling',
+            source_name: 'Wikimedia',
+            source_url: 'https://commons.wikimedia.org/1',
+            position: 1,
+            is_hero: false,
+            source_type: 'wikimedia',
+          },
+        ],
+      }
+
+      expect(attributedCourseImage(course)).toBeUndefined()
+    })
+
     it('falls back to source priority order when hero_image is absent', () => {
       const course: Course = {
         ...baseCourse,

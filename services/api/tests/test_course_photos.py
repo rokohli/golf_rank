@@ -261,3 +261,39 @@ def test_find_wikimedia_photos_bounds_long_artist_metadata() -> None:
     assert len(photos) == 1
     assert len(photos[0].source_name) == 120
     assert photos[0].source_name.endswith("...")
+
+
+def test_request_with_retries_enforces_deadline_during_streaming_body() -> None:
+    import time
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"chunk 1 "
+            time.sleep(0.05)
+            yield b"chunk 2 "
+            time.sleep(0.05)
+            yield b"chunk 3"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=SlowStream())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    deadline = time.monotonic() + 0.04
+    with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
+        _request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=0)
+
+
+def test_request_with_retries_enforces_deadline_before_retry_backoff() -> None:
+    import time
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    deadline = time.monotonic() + 0.05
+    with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
+        _request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=2)
+    assert attempts == 1

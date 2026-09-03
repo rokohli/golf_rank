@@ -93,6 +93,11 @@ class Course(Base):
         order_by=lambda: (CourseImage.position, CourseImage.id),
         passive_deletes=True,
     )
+    negative_caches: Mapped[list["CourseImageNegativeCache"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        passive_deletes=True,
+    )
 
 
 class CourseImageSource:

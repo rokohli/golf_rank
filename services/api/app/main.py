@@ -517,7 +517,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # committed; the already-loaded `images` relationship on this
         # session-cached instance won't reflect that (expire_on_commit=False),
         # so refresh it before serializing.
-        session.refresh(stored_course, attribute_names=["images"])
+        session.refresh(stored_course, attribute_names=["images", "negative_caches"])
         return {
             **course_data(stored_course),
             "hero_image": hero_image.to_dict(),
