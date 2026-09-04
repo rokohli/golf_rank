@@ -34,6 +34,21 @@ function aspectPenalty(image: CourseImage): number {
   return Math.abs(image.width / image.height - IDEAL_HERO_ASPECT_RATIO)
 }
 
+// Mirrors Settings.wikimedia_cache_positive_ttl_seconds on the backend
+// (30 days) so fallback card resolution also suppresses stale Wikimedia imagery.
+const WIKIMEDIA_CACHE_POSITIVE_TTL_MS = 30 * 24 * 3600 * 1000
+
+function isWikimediaStale(image: CourseImage): boolean {
+  if (!image.created_at) {
+    return false
+  }
+  const createdTime = Date.parse(image.created_at)
+  if (Number.isNaN(createdTime)) {
+    return false
+  }
+  return Date.now() - createdTime >= WIKIMEDIA_CACHE_POSITIVE_TTL_MS
+}
+
 // Only the OFFICIAL/USER tiers are exempt from requiring attribution --
 // they have nullable source_name/source_url and are exempt on the detail
 // hero too (CourseImageService._to_result). Everything else (Wikimedia, or
@@ -47,6 +62,9 @@ function isDisplayableCourseImage(image: CourseImage): boolean {
   const sourceType = image.source_type?.toLowerCase()
   if (sourceType === 'official' || sourceType === 'user') {
     return true
+  }
+  if (sourceType === 'wikimedia' && isWikimediaStale(image)) {
+    return false
   }
   return Boolean(image.source_name && image.source_url)
 }

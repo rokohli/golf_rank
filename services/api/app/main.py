@@ -130,6 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             zoom=settings.mapbox_static_image_zoom,
             pixel_ratio=settings.mapbox_static_image_pixel_ratio,
         ),
+        wikimedia_cache_positive_ttl_seconds=settings.wikimedia_cache_positive_ttl_seconds,
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
     app.include_router(ranking_router, dependencies=authenticated_dependencies)

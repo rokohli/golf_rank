@@ -41,6 +41,7 @@ def make_session_factory(
     course_image_base_url: str | None = None,
     satellite_provider: SatelliteImageProvider | None = None,
     satellite_options: MapboxOptions | None = None,
+    wikimedia_cache_positive_ttl_seconds: int = 30 * 24 * 3600,
 ) -> sessionmaker[Session]:
     return sessionmaker(
         bind=engine,
@@ -49,6 +50,7 @@ def make_session_factory(
             "course_image_base_url": course_image_base_url,
             "satellite_provider": satellite_provider,
             "satellite_options": satellite_options,
+            "wikimedia_cache_positive_ttl_seconds": wikimedia_cache_positive_ttl_seconds,
         },
     )
 

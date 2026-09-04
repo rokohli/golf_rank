@@ -114,6 +114,20 @@ def is_wikimedia_negative_cached(course: Course) -> bool:
     return False
 
 
+DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS = 30 * 24 * 3600
+
+
+def is_wikimedia_stale(image: CourseImage, positive_ttl_seconds: int = DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS) -> bool:
+    """Shared staleness check for a cached Wikimedia row -- used by both the
+    card-hero fallback below and CourseImageService's detail-hero resolver
+    (course_images/service.py) so the two paths can't silently drift apart."""
+    if image.created_at is None:
+        return False
+    created_at = image.created_at if image.created_at.tzinfo else image.created_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+    return age_seconds >= positive_ttl_seconds
+
+
 def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -> dict:
     return {
         "type": hero_type,
@@ -137,6 +151,11 @@ def course_card_hero_data(course: Course) -> dict:
     eligibility must be mirrored here."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
+    positive_ttl = (
+        session.info.get("wikimedia_cache_positive_ttl_seconds", DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS)
+        if session is not None
+        else DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS
+    )
 
     images = getattr(course, "images", None) or []
     approved_with_url: list[tuple[CourseImage, str]] = []
@@ -158,7 +177,11 @@ def course_card_hero_data(course: Course) -> dict:
         best_img, best_url = min(users, key=lambda pair: _rank_key(pair[0]))
         return _hero_dict("USER", best_img, best_url, course.name)
 
-    wikimedias = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "wikimedia"]
+    wikimedias = [
+        pair for pair in approved_with_url
+        if (pair[0].source_type or "").lower() == "wikimedia"
+        and not is_wikimedia_stale(pair[0], positive_ttl)
+    ]
     if wikimedias and not is_wikimedia_negative_cached(course):
         best_img, best_url = min(wikimedias, key=lambda pair: _rank_key(pair[0]))
         return _hero_dict("WIKIMEDIA", best_img, best_url, course.name)

@@ -25,15 +25,47 @@ def _read_response_with_deadline(
         return response.read()
     if hasattr(response, "_content"):
         return response._content
-    parts = []
-    for chunk in response.iter_bytes():
+
+    # Bound the underlying network stream read operations to the remaining deadline
+    # so a stalled read cannot block up to the original full socket timeout. The
+    # stream belongs to the (possibly keep-alive, cross-request) httpcore
+    # connection, not this call, so the patch must be undone before returning --
+    # otherwise a later call reusing the same connection wraps this call's
+    # already-expired deadline instead of getting its own.
+    network_stream = response.extensions.get("network_stream")
+    orig_read = network_stream.read if network_stream is not None and hasattr(network_stream, "read") else None
+
+    if orig_read is not None:
+        def read_with_deadline(max_bytes: int, timeout: float | None = None) -> bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise httpx.ReadTimeout(f"deadline exceeded while reading {method} {url}")
+            eff_timeout = min(timeout, remaining) if timeout is not None else remaining
+            return orig_read(max_bytes, timeout=eff_timeout)
+
+        network_stream.read = read_with_deadline
+
+    try:
+        if hasattr(response, "_request") and response._request is not None:
+            timeouts = response._request.extensions.get("timeout")
+            if isinstance(timeouts, dict):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise httpx.TimeoutException(f"deadline exceeded before reading {method} {url}")
+                timeouts["read"] = remaining
+
+        parts = []
+        for chunk in response.iter_bytes():
+            if time.monotonic() >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
+            parts.append(chunk)
         if time.monotonic() >= deadline:
             raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
-        parts.append(chunk)
-    if time.monotonic() >= deadline:
-        raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
-    response._content = b"".join(parts)
-    return response._content
+        response._content = b"".join(parts)
+        return response._content
+    finally:
+        if orig_read is not None:
+            network_stream.read = orig_read
 
 
 def request_with_retries(

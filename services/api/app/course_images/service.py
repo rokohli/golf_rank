@@ -19,13 +19,12 @@ import logging
 import threading
 import time
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
-from ..domain import storage_image_url
+from ..domain import is_wikimedia_stale, storage_image_url
 from ..models import CourseImage, CourseImageSource
 from .providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider, SatelliteImageProvider
 from .providers.wikimedia import WikimediaImageProvider
@@ -182,11 +181,7 @@ class CourseImageService:
         """True once a cached row is older than wikimedia_cache_positive_ttl_seconds
         -- past that point it's due for a live-lookup refresh rather than being
         served indefinitely."""
-        if image.created_at is None:
-            return False
-        created_at = image.created_at if image.created_at.tzinfo else image.created_at.replace(tzinfo=timezone.utc)
-        age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
-        return age_seconds >= self._settings.wikimedia_cache_positive_ttl_seconds
+        return is_wikimedia_stale(image, self._settings.wikimedia_cache_positive_ttl_seconds)
 
     def _wikimedia_cache_snapshot(
         self, session: Session, course: HasCourse

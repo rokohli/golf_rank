@@ -120,3 +120,74 @@ def test_course_list_card_hero_prefers_curated_official_despite_negative_cache()
     assert hero is not None
     assert hero["type"] == "OFFICIAL"
     assert hero["url"] == "https://example.com/curated-official.jpg"
+
+
+def test_course_list_card_hero_expires_stale_wikimedia_and_falls_through() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    # 1. Stale Wikimedia photo (>30 days old) with mapbox token configured -> falls through to SATELLITE
+    app = create_app(Settings(
+        mapbox_access_token="pk.test",
+        wikimedia_live_lookup_enabled=False,
+        wikimedia_cache_positive_ttl_seconds=30 * 24 * 3600,
+    ))
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        stale_date = datetime.now(timezone.utc) - timedelta(days=40)
+        session.add(CourseImage(
+            course_id=pebble.id,
+            external_url="https://example.com/stale-wiki.jpg",
+            alt_text="Pebble Beach stale photo",
+            source_type=CourseImageSource.WIKIMEDIA,
+            source_name="Commons User",
+            source_url="https://commons.wikimedia.org/wiki/File:Stale.jpg",
+            moderation_status=CourseImageModeration.APPROVED,
+            is_hero=True,
+            position=0,
+            created_at=stale_date,
+        ))
+        session.commit()
+        pebble_id = pebble.id
+
+    client = TestClient(app)
+    response = client.get("/api/v1/courses", params={"q": "Pebble"})
+    assert response.status_code == 200
+    course = next(c for c in response.json() if c["id"] == pebble_id)
+    hero = course["hero_image"]
+    assert hero is not None
+    assert hero["type"] == "SATELLITE"
+    assert hero["url"].startswith("https://api.mapbox.com/")
+
+    # 2. Fresh Wikimedia photo (<30 days old) -> returns WIKIMEDIA
+    app_fresh = create_app(Settings(
+        mapbox_access_token="pk.test",
+        wikimedia_live_lookup_enabled=False,
+        wikimedia_cache_positive_ttl_seconds=30 * 24 * 3600,
+    ))
+    with app_fresh.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        fresh_date = datetime.now(timezone.utc) - timedelta(days=5)
+        session.add(CourseImage(
+            course_id=pebble.id,
+            external_url="https://example.com/fresh-wiki.jpg",
+            alt_text="Pebble Beach fresh photo",
+            source_type=CourseImageSource.WIKIMEDIA,
+            source_name="Commons User",
+            source_url="https://commons.wikimedia.org/wiki/File:Fresh.jpg",
+            moderation_status=CourseImageModeration.APPROVED,
+            is_hero=True,
+            position=0,
+            created_at=fresh_date,
+        ))
+        session.commit()
+        fresh_pebble_id = pebble.id
+
+    client_fresh = TestClient(app_fresh)
+    response_fresh = client_fresh.get("/api/v1/courses", params={"q": "Pebble"})
+    assert response_fresh.status_code == 200
+    course_fresh = next(c for c in response_fresh.json() if c["id"] == fresh_pebble_id)
+    hero_fresh = course_fresh["hero_image"]
+    assert hero_fresh is not None
+    assert hero_fresh["type"] == "WIKIMEDIA"
+    assert hero_fresh["url"] == "https://example.com/fresh-wiki.jpg"
+

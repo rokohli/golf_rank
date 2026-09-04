@@ -176,5 +176,39 @@ describe('coursePresentation', () => {
       expect(results).toHaveLength(1)
       expect(results[0].id).toBe(1)
     })
+
+    it('filters out stale Wikimedia images older than 30 days', () => {
+      const now = Date.now()
+      const fortyDaysAgo = new Date(now - 40 * 24 * 3600 * 1000).toISOString()
+      const fiveDaysAgo = new Date(now - 5 * 24 * 3600 * 1000).toISOString()
+
+      const course: Course = {
+        ...baseCourse,
+        images: [
+          {
+            id: 1,
+            url: 'https://images.example/stale-wikimedia.jpg',
+            alt_text: 'Stale',
+            source_name: 'Author A',
+            source_url: 'https://commons.wikimedia.org/1',
+            source_type: 'wikimedia',
+            created_at: fortyDaysAgo,
+          },
+          {
+            id: 2,
+            url: 'https://images.example/fresh-wikimedia.jpg',
+            alt_text: 'Fresh',
+            source_name: 'Author B',
+            source_url: 'https://commons.wikimedia.org/2',
+            source_type: 'wikimedia',
+            created_at: fiveDaysAgo,
+          },
+        ],
+      }
+
+      const results = attributedCourseImages(course)
+      expect(results).toHaveLength(1)
+      expect(results[0].id).toBe(2)
+    })
   })
 })

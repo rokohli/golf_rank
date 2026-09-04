@@ -297,3 +297,36 @@ def test_request_with_retries_enforces_deadline_before_retry_backoff() -> None:
     with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
         request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=2)
     assert attempts == 1
+
+
+def test_read_response_with_deadline_enforces_socket_timeout_on_stalled_read() -> None:
+    import socket
+    import time
+
+    class FakeSyncStream:
+        def __init__(self):
+            self.timeout = None
+
+        def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+            self.timeout = timeout
+            if timeout is not None and timeout <= 0.05:
+                raise httpx.ReadTimeout("deadline exceeded while reading")
+            return b"data"
+
+    fake_stream = FakeSyncStream()
+
+    class StreamWithNetworkStream(httpx.SyncByteStream):
+        def __iter__(self):
+            # httpcore delegates to network_stream.read during body receive
+            yield fake_stream.read(1024)
+
+    response = httpx.Response(200, stream=StreamWithNetworkStream())
+    response.extensions["network_stream"] = fake_stream
+
+    # Deadline is 0.03 seconds from now
+    deadline = time.monotonic() + 0.03
+    with pytest.raises(httpx.ReadTimeout):
+        from app.course_photos import _read_response_with_deadline
+        _read_response_with_deadline(response, deadline, "GET", "https://example.com")
+
+
