@@ -263,40 +263,54 @@ class CourseImageService:
             if lookup.result is None:
                 if lookup.photo is not None:
                     self.metrics.increment("wikimedia_low_confidence_rejections")
-                self._repository.set_negative_cache(
-                    session, course.id, WIKIMEDIA_PROVIDER_NAME,
-                    ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
-                )
-                if cached is not None:
-                    # An authoritative miss (unlike a transient exception) means
-                    # the stale row is no longer backed by a trustworthy match --
-                    # evict only the stale hero row so the negative cache actually
-                    # takes effect without destroying any other gallery photos.
-                    self._repository.delete_image(session, cached)
+                try:
+                    self._repository.set_negative_cache(
+                        session, course.id, WIKIMEDIA_PROVIDER_NAME,
+                        ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
+                    )
+                    if cached is not None:
+                        # An authoritative miss (unlike a transient exception) means
+                        # the stale row is no longer backed by a trustworthy match --
+                        # evict only the stale hero row so the negative cache actually
+                        # takes effect without destroying any other gallery photos.
+                        self._repository.delete_image(session, cached)
+                except Exception:
+                    # Caching the miss is best-effort: a write conflict here must
+                    # not turn an authoritative "no image" answer into a 500.
+                    logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+                    session.rollback()
                 return None
 
             self.metrics.increment("wikimedia_successes")
             photo = lookup.photo
-            if cached is not None:
-                # Refreshing a stale cache entry -- update it in place to
-                # preserve its position and keep the rest of the gallery intact.
-                self._repository.update_wikimedia_image(
-                    session, cached,
-                    external_url=photo.url, thumbnail_url=photo.url,
-                    alt_text=f"{course.name} course photo",
-                    source_name=photo.source_name, source_url=photo.source_url,
-                    license_name=photo.license_name, license_url=photo.license_url,
-                    width=photo.width, height=photo.height,
-                )
-            else:
-                self._repository.add_wikimedia_image(
-                    session, course.id,
-                    external_url=photo.url, thumbnail_url=photo.url,
-                    alt_text=f"{course.name} course photo",
-                    source_name=photo.source_name, source_url=photo.source_url,
-                    license_name=photo.license_name, license_url=photo.license_url,
-                    width=photo.width, height=photo.height,
-                )
+            try:
+                if cached is not None:
+                    # Refreshing a stale cache entry -- update it in place to
+                    # preserve its position and keep the rest of the gallery intact.
+                    self._repository.update_wikimedia_image(
+                        session, cached,
+                        external_url=photo.url, thumbnail_url=photo.url,
+                        alt_text=f"{course.name} course photo",
+                        source_name=photo.source_name, source_url=photo.source_url,
+                        license_name=photo.license_name, license_url=photo.license_url,
+                        width=photo.width, height=photo.height,
+                    )
+                else:
+                    self._repository.add_wikimedia_image(
+                        session, course.id,
+                        external_url=photo.url, thumbnail_url=photo.url,
+                        alt_text=f"{course.name} course photo",
+                        source_name=photo.source_name, source_url=photo.source_url,
+                        license_name=photo.license_name, license_url=photo.license_url,
+                        width=photo.width, height=photo.height,
+                    )
+            except Exception:
+                # Persisting the cache row is best-effort -- a concurrent worker
+                # can hit uq_course_image_position or a stale-row update here.
+                # The lookup itself already succeeded, so still hand back a
+                # usable image URL instead of 500ing the course page.
+                logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+                session.rollback()
             return lookup.result
 
     def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:

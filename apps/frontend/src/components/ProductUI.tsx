@@ -4,7 +4,21 @@ import { ReactElement, ReactNode } from 'react'
 import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { CoursePresentation } from '../coursePresentation'
+import { HeroImage } from '../types'
 import { colors, radii } from '../ui/theme'
+
+// Mapbox and Wikimedia both require visible credit wherever their imagery
+// is shown, not just on the course-detail hero -- mirrors HeroAttribution in
+// app/course/[id].tsx but sized for the smaller card/row visuals.
+function CardAttribution({ heroImage }: { heroImage?: HeroImage | null }) {
+  if (!heroImage || heroImage.type !== 'WIKIMEDIA' && heroImage.type !== 'SATELLITE') return null
+  const label = heroImage.type === 'SATELLITE' ? 'Satellite imagery © Mapbox' : `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
+  return (
+    <View accessibilityLabel={`Image attribution: ${label}`} style={styles.cardAttribution}>
+      <Text numberOfLines={1} style={styles.cardAttributionText}>{label}</Text>
+    </View>
+  )
+}
 
 export function ProductScreen({ children, edgeToEdge = false, scroll = true, refreshControl }: { children: ReactNode; edgeToEdge?: boolean; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
   const content = scroll ? (
@@ -51,7 +65,7 @@ export function BottomNav() {
   )
 }
 
-export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; children?: ReactNode }) {
+export function CourseVisual({ course, height = 116, squareTop = false, hideAttribution = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; hideAttribution?: boolean; children?: ReactNode }) {
   const visualStyle = [styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]
   if (!course.image) {
     // No broken-image icon or "unavailable" messaging -- an intentional,
@@ -69,6 +83,7 @@ export function CourseVisual({ course, height = 116, squareTop = false, children
   return (
     <ImageBackground accessibilityLabel={`${course.name} course photo`} source={course.image} resizeMode="cover" style={visualStyle}>
       <View style={styles.photoWash} />
+      {hideAttribution ? null : <CardAttribution heroImage={course.heroImage} />}
       {children}
     </ImageBackground>
   )
@@ -157,6 +172,7 @@ const styles = StyleSheet.create({
   coursePlaceholderContour2: { borderColor: 'rgba(16,56,42,0.05)', borderRadius: 999, borderWidth: 24, bottom: -90, height: 180, position: 'absolute', right: -60, width: 180 },
   courseVisualSquareTop: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
   photoWash: { backgroundColor: 'rgba(8, 25, 17, 0.05)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  cardAttribution: { bottom: 4, left: 6, position: 'absolute', right: 6 }, cardAttributionText: { color: 'rgba(255,255,255,0.85)', fontSize: 8, fontWeight: '600', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   card: { backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden' },
   compactCard: { flex: 1, minWidth: 148 },
   cardBody: { gap: 5, padding: 12 },

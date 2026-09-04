@@ -207,7 +207,7 @@ function PlanResult({ plan, aiGeneration, onAI, onSave, onDelete, working }: { p
 }
 
 function Field({ label, help, ...props }: { label: string; help?: string } & React.ComponentProps<typeof TextInput>) { return <View style={styles.fieldWrap}><Text style={styles.label}>{label}</Text><TextInput accessibilityLabel={label} placeholderTextColor={colors.muted} style={styles.field} {...props} />{help ? <Text style={styles.help}>{help}</Text> : null}</View> }
-function displayCourse(course: GolfPlan['candidates'][number]['course']): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
+function displayCourse(course: GolfPlan['candidates'][number]['course']): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course), heroImage: course.hero_image } }
 function validate(input: PlanInput) { if (!input.title) return 'Enter a trip name.'; if (!input.start_date || !input.end_date) return 'Use MM/DD/YYYY for both dates.'; if (input.end_date < input.start_date) return 'End date must be on or after the start date.'; return null }
 function nullableNumber(value: string) { const trimmed = value.trim(); if (!trimmed) return null; const number = Number(trimmed); return Number.isFinite(number) ? number : null }
 function numeric(value: string, fallback: number) { const number = Number(value.replace(/\D/g, '')); return number || fallback }

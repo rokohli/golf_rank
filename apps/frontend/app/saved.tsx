@@ -66,6 +66,7 @@ function toCoursePresentation(course: Course): CoursePresentation {
     distance: '',
     price: course.green_fee == null ? '—' : course.green_fee > 500 ? '$$$$' : '$$$',
     image: attributedCourseImage(course),
+    heroImage: course.hero_image,
   }
 }
 
