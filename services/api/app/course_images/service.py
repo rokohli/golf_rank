@@ -59,6 +59,7 @@ class CourseImageMetrics:
         self.wikimedia_low_confidence_rejections = 0
         self.wikimedia_failures = 0
         self.wikimedia_concurrency_limited = 0
+        self.wikimedia_lock_contended = 0
         self.satellite_requests = 0
         self.satellite_skipped_invalid_coordinates = 0
 
@@ -84,6 +85,7 @@ class CourseImageMetrics:
                 "wikimedia_low_confidence_rejections": self.wikimedia_low_confidence_rejections,
                 "wikimedia_failures": self.wikimedia_failures,
                 "wikimedia_concurrency_limited": self.wikimedia_concurrency_limited,
+                "wikimedia_lock_contended": self.wikimedia_lock_contended,
                 "satellite_requests": self.satellite_requests,
                 "satellite_skipped_invalid_coordinates": self.satellite_skipped_invalid_coordinates,
             }
@@ -230,7 +232,19 @@ class CourseImageService:
         if stop:
             return cached_result
 
-        with self._wikimedia_lock(course.id):
+        lock = self._wikimedia_lock(course.id)
+        if not lock.acquire(blocking=False):
+            # A blocking acquire here would let a thread sit idle for the
+            # full outbound-call duration just because its course_id hashed
+            # to a stripe another thread already holds -- that stall counts
+            # against the worker pool exactly like the lookup itself, and
+            # isn't bounded by the concurrency semaphore below (which is only
+            # ever reached by the thread that already holds the stripe).
+            # Coalescing is a best-effort optimization, not a correctness
+            # requirement, so fail open to the best cached result instead.
+            self.metrics.increment("wikimedia_lock_contended")
+            return cached_result
+        try:
             # Re-check after acquiring the lock: another thread may have just
             # resolved (and committed) this course while we were waiting.
             # `cached` above may already sit in this session's identity map --
@@ -329,6 +343,8 @@ class CourseImageService:
                 logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
                 session.rollback()
             return lookup.result
+        finally:
+            lock.release()
 
     def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:
         if course.latitude is None or course.longitude is None:
