@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # solely on the offline backfill/refresh scripts for enrichment instead.
     wikimedia_live_lookup_enabled: bool = True
     wikimedia_lookup_timeout_seconds: float = 5.0
+    # Bounds how many live Commons lookups can be in flight across the whole
+    # process at once. Each `def` course-detail request runs on Starlette's
+    # threadpool, so unbounded concurrent lookups (one per distinct
+    # never-before-seen course_id, each on its own lock stripe) can pin every
+    # worker thread on outbound HTTPS and stall unrelated requests. Once this
+    # cap is hit, a request fails open to the cached/no-image result rather
+    # than queuing for a thread.
+    wikimedia_max_concurrent_lookups: int = 8
     wikimedia_confidence_threshold: float = 0.6
     wikimedia_cache_positive_ttl_seconds: int = 30 * 24 * 3600
     wikimedia_cache_negative_ttl_seconds: int = 3 * 24 * 3600

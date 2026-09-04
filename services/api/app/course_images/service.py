@@ -58,6 +58,7 @@ class CourseImageMetrics:
         self.wikimedia_successes = 0
         self.wikimedia_low_confidence_rejections = 0
         self.wikimedia_failures = 0
+        self.wikimedia_concurrency_limited = 0
         self.satellite_requests = 0
         self.satellite_skipped_invalid_coordinates = 0
 
@@ -82,6 +83,7 @@ class CourseImageMetrics:
                 "wikimedia_successes": self.wikimedia_successes,
                 "wikimedia_low_confidence_rejections": self.wikimedia_low_confidence_rejections,
                 "wikimedia_failures": self.wikimedia_failures,
+                "wikimedia_concurrency_limited": self.wikimedia_concurrency_limited,
                 "satellite_requests": self.satellite_requests,
                 "satellite_skipped_invalid_coordinates": self.satellite_skipped_invalid_coordinates,
             }
@@ -137,6 +139,11 @@ class CourseImageService:
         # grow by one entry for every distinct course ever looked up, for the
         # life of the process.
         self._wikimedia_locks = [threading.Lock() for _ in range(64)]
+        # Caps total in-flight live Commons calls across the process --
+        # separate from the per-course lock stripe above, which only
+        # coalesces repeat lookups of the *same* course and does nothing to
+        # bound concurrency across many distinct cold courses.
+        self._wikimedia_concurrency = threading.Semaphore(settings.wikimedia_max_concurrent_lookups)
 
     def _wikimedia_lock(self, course_id: int) -> threading.Lock:
         return self._wikimedia_locks[course_id % len(self._wikimedia_locks)]
@@ -248,17 +255,27 @@ class CourseImageService:
             # opens a fresh transaction/connection to write the outcome.
             session.commit()
 
-            self.metrics.increment("wikimedia_lookups")
-            try:
-                lookup = self._wikimedia_provider.lookup(course)
-            except Exception:
-                # Fail open: a Wikimedia outage must never break the course
-                # page, and a transient failure isn't cached (so we retry on
-                # the next request rather than sitting behind a negative TTL).
-                # A still-usable stale cache beats no image at all.
-                logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
-                self.metrics.increment("wikimedia_failures")
+            if not self._wikimedia_concurrency.acquire(blocking=False):
+                # Every lookup slot is already busy on outbound Commons
+                # HTTPS -- fail open immediately rather than queuing this
+                # thread behind them too, which is what actually pins the
+                # worker pool under concurrent cold-cache load.
+                self.metrics.increment("wikimedia_concurrency_limited")
                 return cached_result
+            try:
+                self.metrics.increment("wikimedia_lookups")
+                try:
+                    lookup = self._wikimedia_provider.lookup(course)
+                except Exception:
+                    # Fail open: a Wikimedia outage must never break the course
+                    # page, and a transient failure isn't cached (so we retry on
+                    # the next request rather than sitting behind a negative TTL).
+                    # A still-usable stale cache beats no image at all.
+                    logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
+                    self.metrics.increment("wikimedia_failures")
+                    return cached_result
+            finally:
+                self._wikimedia_concurrency.release()
 
             if lookup.result is None:
                 if lookup.photo is not None:
