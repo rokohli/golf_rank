@@ -85,12 +85,23 @@ def test_ranking_snapshots_include_current_attributed_course_images() -> None:
         "license_url": None,
         "position": 0,
         "is_hero": True,
+        "source_type": "wikimedia",
+        "quality_score": None,
+        "width": None,
+        "height": None,
     }
+
+    def _images_without_created_at(payload: dict) -> list[dict]:
+        images = payload["entries"][0]["course"]["images"]
+        for image in images:
+            assert image.pop("created_at")
+        return images
+
     assert staged.status_code == 200
-    assert staged.json()["entries"][0]["course"]["images"] == [expected_image]
-    assert client.get(
-        "/api/v1/me/rankings", headers=HEADERS
-    ).json()["entries"][0]["course"]["images"] == [expected_image]
+    assert _images_without_created_at(staged.json()) == [expected_image]
+    assert _images_without_created_at(
+        client.get("/api/v1/me/rankings", headers=HEADERS).json()
+    ) == [expected_image]
 
 
 def test_friends_rankings_return_mutual_friends_with_their_round_stats() -> None:

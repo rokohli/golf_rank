@@ -3,6 +3,7 @@ import httpx
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
 
 import app.course_photo_scoring as course_photo_scoring
+import app.course_photos as course_photos
 
 
 def _client(handler) -> httpx.Client:
@@ -48,7 +49,7 @@ def test_score_course_photo_sends_references_then_candidate_and_parses_score() -
 
 
 def test_score_course_photo_retries_transient_transport_errors(monkeypatch) -> None:
-    monkeypatch.setattr(course_photo_scoring.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(course_photos.time, "sleep", lambda _seconds: None)
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -182,7 +183,7 @@ def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> N
 
 
 def test_score_course_photo_retries_transient_5xx_server_errors(monkeypatch) -> None:
-    monkeypatch.setattr(course_photo_scoring.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(course_photos.time, "sleep", lambda _seconds: None)
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:

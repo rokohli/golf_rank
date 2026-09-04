@@ -276,7 +276,7 @@ describe('course detail ratings', () => {
     render(<CourseDetail />)
 
     expect(await screen.findByText('No course photos yet.')).toBeOnTheScreen()
-    expect(screen.getByLabelText('Course image unavailable')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Test Links course header')).toBeOnTheScreen()
     expect(screen.queryByLabelText('Test Links course photo')).toBeNull()
   })
 

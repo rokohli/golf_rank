@@ -1,0 +1,364 @@
+"""Central course-image resolver.
+
+Priority order (do not reorder without updating the module docstring in
+providers/mapbox.py and the tests in tests/test_course_image_service.py):
+
+    1. Approved OFFICIAL image
+    2. Approved USER image
+    3. Approved WIKIMEDIA image already on file (this *is* the Wikimedia cache)
+    4. Live Wikimedia Commons search
+    5. Mapbox Satellite (URL only, no network call)
+    6. NONE
+
+This is the only place that encodes that ordering. Controllers/endpoints call
+`resolve_hero_image` and render whatever normalized CourseImageResult comes
+back -- they never branch on source type themselves.
+"""
+
+import logging
+import threading
+import time
+from collections import Counter
+from typing import Protocol
+
+from sqlalchemy.orm import Session
+
+from ..core.config import Settings
+from ..domain import is_wikimedia_stale, storage_image_url
+from ..models import CourseImage, CourseImageSource
+from .providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider, SatelliteImageProvider
+from .providers.wikimedia import WikimediaImageProvider
+from .repository import CourseImageRepository
+from .types import CourseImageResult, no_image_result
+
+logger = logging.getLogger("golfrank.course_images")
+
+WIKIMEDIA_PROVIDER_NAME = "wikimedia"
+
+
+class HasCourse(Protocol):
+    id: int
+    name: str
+    latitude: float | None
+    longitude: float | None
+
+
+class CourseImageMetrics:
+    """In-process counters for the resolution-mix / provider-health observability
+    the spec asks for (section 23). No external metrics backend is wired up in
+    this codebase yet (see final report) -- this gives `/api/v1/ops/...`-style
+    introspection or a log-scrape a place to read from, and is cheap to swap for
+    statsd/Prometheus later without touching the resolver.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.resolutions_by_type: Counter[str] = Counter()
+        self.wikimedia_lookups = 0
+        self.wikimedia_successes = 0
+        self.wikimedia_low_confidence_rejections = 0
+        self.wikimedia_failures = 0
+        self.wikimedia_concurrency_limited = 0
+        self.wikimedia_lock_contended = 0
+        self.satellite_requests = 0
+        self.satellite_skipped_invalid_coordinates = 0
+
+    def record_resolution(self, image_type: str, latency_seconds: float) -> None:
+        with self._lock:
+            self.resolutions_by_type[image_type] += 1
+        logger.info("course_image_resolved type=%s latency_ms=%.1f", image_type, latency_seconds * 1000)
+
+    def increment(self, counter_name: str) -> None:
+        with self._lock:
+            setattr(self, counter_name, getattr(self, counter_name) + 1)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            total = sum(self.resolutions_by_type.values()) or 1
+            return {
+                "resolutions_by_type": dict(self.resolutions_by_type),
+                "resolutions_by_type_pct": {
+                    key: round(100 * value / total, 1) for key, value in self.resolutions_by_type.items()
+                },
+                "wikimedia_lookups": self.wikimedia_lookups,
+                "wikimedia_successes": self.wikimedia_successes,
+                "wikimedia_low_confidence_rejections": self.wikimedia_low_confidence_rejections,
+                "wikimedia_failures": self.wikimedia_failures,
+                "wikimedia_concurrency_limited": self.wikimedia_concurrency_limited,
+                "wikimedia_lock_contended": self.wikimedia_lock_contended,
+                "satellite_requests": self.satellite_requests,
+                "satellite_skipped_invalid_coordinates": self.satellite_skipped_invalid_coordinates,
+            }
+
+
+def _course_image_url(settings: Settings, image: CourseImage) -> str | None:
+    return image.external_url or storage_image_url(settings.course_image_base_url, image.storage_key)
+
+
+def _to_result(settings: Settings, image: CourseImage, image_type: str, course_name: str) -> CourseImageResult:
+    return CourseImageResult(
+        type=image_type,
+        url=_course_image_url(settings, image),
+        thumbnail_url=image.thumbnail_url or _course_image_url(settings, image),
+        attribution=image.source_name,
+        license=image.license_name,
+        license_url=image.license_url,
+        source_url=image.source_url,
+        alt_text=image.alt_text or f"{course_name} course photo",
+        width=image.width,
+        height=image.height,
+    )
+
+
+class CourseImageService:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        repository: CourseImageRepository | None = None,
+        wikimedia_provider: WikimediaImageProvider | None = None,
+        satellite_provider: SatelliteImageProvider | None = None,
+        metrics: CourseImageMetrics | None = None,
+    ):
+        self._settings = settings
+        self._repository = repository or CourseImageRepository()
+        self._wikimedia_provider = wikimedia_provider or WikimediaImageProvider(
+            timeout_seconds=settings.wikimedia_lookup_timeout_seconds,
+            confidence_threshold=settings.wikimedia_confidence_threshold,
+        )
+        self._satellite_provider = satellite_provider or MapboxSatelliteImageProvider(
+            access_token=settings.mapbox_access_token,
+        )
+        self.metrics = metrics or CourseImageMetrics()
+        # Per-process request coalescing: many concurrent viewers of a course
+        # that has never been looked up before shouldn't each fire an
+        # independent Wikimedia search. A distributed lock (e.g. via Redis,
+        # already used elsewhere for rate limiting) would coalesce across
+        # worker processes too -- flagged as a follow-up in the final report.
+        #
+        # Fixed-size lock striping (rather than one lock per course_id) keeps
+        # this bounded regardless of catalog size -- a per-course dict would
+        # grow by one entry for every distinct course ever looked up, for the
+        # life of the process.
+        self._wikimedia_locks = [threading.Lock() for _ in range(64)]
+        # Caps total in-flight live Commons calls across the process --
+        # separate from the per-course lock stripe above, which only
+        # coalesces repeat lookups of the *same* course and does nothing to
+        # bound concurrency across many distinct cold courses.
+        self._wikimedia_concurrency = threading.Semaphore(settings.wikimedia_max_concurrent_lookups)
+
+    def _wikimedia_lock(self, course_id: int) -> threading.Lock:
+        return self._wikimedia_locks[course_id % len(self._wikimedia_locks)]
+
+    def resolve_hero_image(self, session: Session, course: HasCourse) -> CourseImageResult:
+        started = time.monotonic()
+        result = self._resolve(session, course)
+        self.metrics.record_resolution(result.type, time.monotonic() - started)
+        return result
+
+    def _resolve(self, session: Session, course: HasCourse) -> CourseImageResult:
+        # Don't stop at the top-ranked candidate in a tier: a curated row can
+        # have only a storage_key with no configured base URL, which must not
+        # hide a lower-ranked but perfectly displayable row in the same tier.
+        for official in self._repository.approved_images(session, course.id, CourseImageSource.OFFICIAL):
+            result = _to_result(self._settings, official, "OFFICIAL", course.name)
+            if result.url is not None:
+                return result
+
+        for user in self._repository.approved_images(session, course.id, CourseImageSource.USER):
+            result = _to_result(self._settings, user, "USER", course.name)
+            if result.url is not None:
+                return result
+
+        wikimedia_result = self._resolve_wikimedia(session, course)
+        if wikimedia_result is not None:
+            return wikimedia_result
+
+        satellite = self._resolve_satellite(course)
+        if satellite is not None:
+            return satellite
+
+        return no_image_result(course.name)
+
+    def _wikimedia_cache_result(self, image: CourseImage | None, course_name: str) -> CourseImageResult | None:
+        if image is None:
+            return None
+        result = _to_result(self._settings, image, "WIKIMEDIA", course_name)
+        return result if result.url is not None else None
+
+    def _wikimedia_cache_is_stale(self, image: CourseImage) -> bool:
+        """True once a cached row is older than wikimedia_cache_positive_ttl_seconds
+        -- past that point it's due for a live-lookup refresh rather than being
+        served indefinitely."""
+        return is_wikimedia_stale(image, self._settings.wikimedia_cache_positive_ttl_seconds)
+
+    def _wikimedia_cache_snapshot(
+        self, session: Session, course: HasCourse
+    ) -> tuple[CourseImage | None, CourseImageResult | None, bool]:
+        """Reads the current cache/negative-cache state for one course.
+
+        Returns (cached_row, cached_result, stop). `stop` is True when the
+        caller should return `cached_result` immediately -- either an active
+        negative cache (an authoritative "no image", so cached_result is also
+        None), a still-fresh cached row, or a course with no coordinates to
+        refresh against. This is shared by the pre-lock check and the
+        post-lock re-check so the two can't drift out of sync.
+        """
+        # An active negative cache means a prior authoritative live lookup
+        # found nothing usable for this course. Any currently-stored
+        # Wikimedia row -- even one that looks individually fresh -- may be
+        # a gallery sibling left behind when the evicted hero was deleted,
+        # so it must not be promoted as the hero while the miss still holds.
+        negative = self._repository.get_negative_cache(session, course.id, WIKIMEDIA_PROVIDER_NAME)
+        if negative is not None:
+            return None, None, True
+
+        cached = self._repository.best_wikimedia_image(session, course.id)
+        cached_result = self._wikimedia_cache_result(cached, course.name)
+        if cached_result is not None and not self._wikimedia_cache_is_stale(cached):
+            return cached, cached_result, True
+
+        if course.latitude is None or course.longitude is None:
+            return cached, cached_result, True
+
+        return cached, cached_result, False
+
+    def _resolve_wikimedia(self, session: Session, course: HasCourse) -> CourseImageResult | None:
+        if not self._settings.wikimedia_live_lookup_enabled:
+            cached = self._repository.best_wikimedia_image(session, course.id)
+            return self._wikimedia_cache_result(cached, course.name)
+
+        cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
+        if stop:
+            return cached_result
+
+        lock = self._wikimedia_lock(course.id)
+        if not lock.acquire(blocking=False):
+            # A blocking acquire here would let a thread sit idle for the
+            # full outbound-call duration just because its course_id hashed
+            # to a stripe another thread already holds -- that stall counts
+            # against the worker pool exactly like the lookup itself, and
+            # isn't bounded by the concurrency semaphore below (which is only
+            # ever reached by the thread that already holds the stripe).
+            # Coalescing is a best-effort optimization, not a correctness
+            # requirement, so fail open to the best cached result instead.
+            self.metrics.increment("wikimedia_lock_contended")
+            return cached_result
+        try:
+            # Re-check after acquiring the lock: another thread may have just
+            # resolved (and committed) this course while we were waiting.
+            # `cached` above may already sit in this session's identity map --
+            # expire it so the re-query below actually reflects that other
+            # thread's commit instead of replaying the pre-lock snapshot
+            # (SQLAlchemy doesn't refresh already-loaded attributes on a
+            # plain re-select).
+            if cached is not None:
+                session.expire(cached)
+            cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
+            if stop:
+                return cached_result
+
+            # Release the pooled DB connection before blocking on Commons --
+            # `cached`/`course` attributes are already loaded above, and
+            # expire_on_commit=False keeps them readable after this. Without
+            # it, every concurrent cold lookup would hold a connection for
+            # the full external timeout, and a handful of them can exhaust
+            # the pool and stall unrelated requests. The in-process lock is
+            # still held, so no other thread can race this course's cache
+            # entries in the meantime; the next repository call below simply
+            # opens a fresh transaction/connection to write the outcome.
+            session.commit()
+
+            if not self._wikimedia_concurrency.acquire(blocking=False):
+                # Every lookup slot is already busy on outbound Commons
+                # HTTPS -- fail open immediately rather than queuing this
+                # thread behind them too, which is what actually pins the
+                # worker pool under concurrent cold-cache load.
+                self.metrics.increment("wikimedia_concurrency_limited")
+                return cached_result
+            try:
+                self.metrics.increment("wikimedia_lookups")
+                try:
+                    lookup = self._wikimedia_provider.lookup(course)
+                except Exception:
+                    # Fail open: a Wikimedia outage must never break the course
+                    # page, and a transient failure isn't cached (so we retry on
+                    # the next request rather than sitting behind a negative TTL).
+                    # A still-usable stale cache beats no image at all.
+                    logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
+                    self.metrics.increment("wikimedia_failures")
+                    return cached_result
+            finally:
+                self._wikimedia_concurrency.release()
+
+            if lookup.result is None:
+                if lookup.photo is not None:
+                    self.metrics.increment("wikimedia_low_confidence_rejections")
+                try:
+                    self._repository.set_negative_cache(
+                        session, course.id, WIKIMEDIA_PROVIDER_NAME,
+                        ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
+                    )
+                    if cached is not None:
+                        # An authoritative miss (unlike a transient exception) means
+                        # the stale row is no longer backed by a trustworthy match --
+                        # evict only the stale hero row so the negative cache actually
+                        # takes effect without destroying any other gallery photos.
+                        self._repository.delete_image(session, cached)
+                except Exception:
+                    # Caching the miss is best-effort: a write conflict here must
+                    # not turn an authoritative "no image" answer into a 500.
+                    logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+                    session.rollback()
+                return None
+
+            self.metrics.increment("wikimedia_successes")
+            photo = lookup.photo
+            try:
+                if cached is not None:
+                    # Refreshing a stale cache entry -- update it in place to
+                    # preserve its position and keep the rest of the gallery intact.
+                    self._repository.update_wikimedia_image(
+                        session, cached,
+                        external_url=photo.url, thumbnail_url=photo.url,
+                        alt_text=f"{course.name} course photo",
+                        source_name=photo.source_name, source_url=photo.source_url,
+                        license_name=photo.license_name, license_url=photo.license_url,
+                        width=photo.width, height=photo.height,
+                    )
+                else:
+                    self._repository.add_wikimedia_image(
+                        session, course.id,
+                        external_url=photo.url, thumbnail_url=photo.url,
+                        alt_text=f"{course.name} course photo",
+                        source_name=photo.source_name, source_url=photo.source_url,
+                        license_name=photo.license_name, license_url=photo.license_url,
+                        width=photo.width, height=photo.height,
+                    )
+            except Exception:
+                # Persisting the cache row is best-effort -- a concurrent worker
+                # can hit uq_course_image_position or a stale-row update here.
+                # The lookup itself already succeeded, so still hand back a
+                # usable image URL instead of 500ing the course page.
+                logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+                session.rollback()
+            return lookup.result
+        finally:
+            lock.release()
+
+    def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:
+        if course.latitude is None or course.longitude is None:
+            self.metrics.increment("satellite_skipped_invalid_coordinates")
+            return None
+        self.metrics.increment("satellite_requests")
+        options = MapboxOptions(
+            width=self._settings.mapbox_static_image_width,
+            height=self._settings.mapbox_static_image_height,
+            zoom=self._settings.mapbox_static_image_zoom,
+            pixel_ratio=self._settings.mapbox_static_image_pixel_ratio,
+        )
+        try:
+            return self._satellite_provider.get_course_image(course, options)
+        except Exception:
+            logger.warning("course_image_satellite_failed course_id=%s", course.id, exc_info=True)
+            return None

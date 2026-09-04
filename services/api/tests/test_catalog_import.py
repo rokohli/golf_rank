@@ -2,8 +2,62 @@ import httpx
 from sqlalchemy import select
 
 from app.catalog_import import fetch_state_courses, import_courses, normalize_access, normalize_course_name, onboarding_states, state_code_from_region
+from app.course_images.repository import CourseImageRepository
 from app.db import make_engine, make_session_factory
-from app.models import Base, Course, Profile, User
+from app.models import Base, Course, CourseImage, CourseImageSource, Profile, User
+
+
+def test_coordinate_correction_clears_the_stale_wikimedia_photo_and_negative_cache() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    record = {
+        "id": "provider-2", "name": "Misplaced Links", "course_name": "Misplaced Links",
+        "latitude": 34.1, "longitude": -118.2, "state": "CA", "city": "Los Angeles",
+        "type": None, "holes": 18, "par": 71,
+    }
+    with session_factory() as session:
+        import_courses(session, [record], state="CA")
+        course = session.scalar(select(Course).where(Course.source_course_id == "provider-2"))
+        # A Wikimedia match resolved against the wrong coordinates, plus a
+        # negative-cache row from a course that separately had no match.
+        session.add(CourseImage(
+            course_id=course.id, external_url="https://example.com/wrong-course.jpg",
+            source_type=CourseImageSource.WIKIMEDIA, position=0, is_hero=True,
+        ))
+        session.commit()
+        CourseImageRepository().set_negative_cache(session, course.id, "wikimedia", ttl_seconds=3600)
+
+        corrected = dict(record, latitude=34.2, longitude=-118.3)
+        import_courses(session, [corrected], state="CA")
+
+        remaining = session.scalars(select(CourseImage).where(CourseImage.course_id == course.id)).all()
+        assert remaining == []
+        assert CourseImageRepository().get_negative_cache(session, course.id, "wikimedia") is None
+
+
+def test_unchanged_coordinates_leave_the_wikimedia_photo_in_place() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    record = {
+        "id": "provider-3", "name": "Steady Links", "course_name": "Steady Links",
+        "latitude": 34.1, "longitude": -118.2, "state": "CA", "city": "Los Angeles",
+        "type": None, "holes": 18, "par": 71,
+    }
+    with session_factory() as session:
+        import_courses(session, [record], state="CA")
+        course = session.scalar(select(Course).where(Course.source_course_id == "provider-3"))
+        session.add(CourseImage(
+            course_id=course.id, external_url="https://example.com/correct-course.jpg",
+            source_type=CourseImageSource.WIKIMEDIA, position=0, is_hero=True,
+        ))
+        session.commit()
+
+        import_courses(session, [dict(record, par=72)], state="CA")
+
+        remaining = session.scalars(select(CourseImage).where(CourseImage.course_id == course.id)).all()
+        assert len(remaining) == 1
 
 
 def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records() -> None:

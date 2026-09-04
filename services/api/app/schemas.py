@@ -80,6 +80,19 @@ class ContactLinkStatusOut(BaseModel):
     contact_count: int
 
 
+class CourseHeroImageOut(BaseModel):
+    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "SATELLITE", "NONE"]
+    url: str | None = None
+    thumbnail_url: str | None = None
+    attribution: str | None = None
+    license: str | None = None
+    license_url: str | None = None
+    source_url: str | None = None
+    alt_text: str
+    width: int | None = None
+    height: int | None = None
+
+
 class CourseImageOut(BaseModel):
     id: int
     url: str | None = None
@@ -90,6 +103,11 @@ class CourseImageOut(BaseModel):
     license_url: str | None = None
     position: int
     is_hero: bool
+    source_type: str = "wikimedia"
+    quality_score: float | None = None
+    width: int | None = None
+    height: int | None = None
+    created_at: str | None = None
 
 
 class CourseOut(BaseModel):
@@ -115,6 +133,7 @@ class CourseOut(BaseModel):
     slope_rating: int | None = None
     tee_time_url: str | None = None
     images: list[CourseImageOut] = Field(default_factory=list)
+    hero_image: CourseHeroImageOut | None = None
     access: str | None = None
     community_rating: float | None = None
     rating_count: int = 0

@@ -22,6 +22,8 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
+from .course_images.providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider
+from .course_images.service import CourseImageService
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
@@ -117,8 +119,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = rate_limiter
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
+    app.state.course_image_service = CourseImageService(settings=settings)
     app.state.session_factory = make_session_factory(
-        engine, course_image_base_url=settings.course_image_base_url
+        engine,
+        course_image_base_url=settings.course_image_base_url,
+        satellite_provider=MapboxSatelliteImageProvider(access_token=settings.mapbox_access_token),
+        satellite_options=MapboxOptions(
+            width=settings.mapbox_static_image_width,
+            height=settings.mapbox_static_image_height,
+            zoom=settings.mapbox_static_image_zoom,
+            pixel_ratio=settings.mapbox_static_image_pixel_ratio,
+        ),
+        wikimedia_cache_positive_ttl_seconds=settings.wikimedia_cache_positive_ttl_seconds,
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
     app.include_router(ranking_router, dependencies=authenticated_dependencies)
@@ -510,8 +522,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 UserCourseRating.course_id.in_(identity_ids)
             )
         ).one()
+        hero_image = app.state.course_image_service.resolve_hero_image(session, stored_course)
+        # The resolver may have inserted/updated/deleted CourseImage rows and
+        # committed; the already-loaded `images` relationship on this
+        # session-cached instance won't reflect that (expire_on_commit=False),
+        # so refresh it before serializing.
+        session.refresh(stored_course, attribute_names=["images", "negative_caches"])
         return {
             **course_data(stored_course),
+            "hero_image": hero_image.to_dict(),
             "community_rating": (
                 round(float(community_rating), 1)
                 if community_rating is not None

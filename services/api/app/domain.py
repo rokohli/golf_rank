@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import hashlib
 from urllib.parse import quote
 
@@ -6,7 +7,8 @@ from sqlalchemy import exists, select, text, tuple_
 from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
-from .models import Course, CourseReconciliation, DeletedIdentity, User
+from .course_images.repository import _rank_key
+from .models import Course, CourseImage, CourseImageModeration, CourseReconciliation, DeletedIdentity, User
 
 
 def lock_identity_transaction(session: Session, provider_subject: str) -> None:
@@ -95,6 +97,117 @@ def course_identity_ids(session: Session, course: Course) -> set[int]:
     return {course.id, *aliases}
 
 
+def is_wikimedia_negative_cached(course: Course) -> bool:
+    negative_caches = getattr(course, "negative_caches", None)
+    if negative_caches is not None:
+        now = datetime.now(timezone.utc)
+        for row in negative_caches:
+            if row.provider == "wikimedia":
+                expires_at = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+                if expires_at > now:
+                    return True
+        return False
+    session = object_session(course)
+    if session is not None:
+        from .course_images.repository import CourseImageRepository
+        return CourseImageRepository().get_negative_cache(session, course.id, "wikimedia") is not None
+    return False
+
+
+DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS = 30 * 24 * 3600
+
+
+def is_wikimedia_stale(image: CourseImage, positive_ttl_seconds: int = DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS) -> bool:
+    """Shared staleness check for a cached Wikimedia row -- used by both the
+    card-hero fallback below and CourseImageService's detail-hero resolver
+    (course_images/service.py) so the two paths can't silently drift apart."""
+    if image.created_at is None:
+        return False
+    created_at = image.created_at if image.created_at.tzinfo else image.created_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+    return age_seconds >= positive_ttl_seconds
+
+
+def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -> dict:
+    return {
+        "type": hero_type,
+        "url": url,
+        "thumbnail_url": image.thumbnail_url or url,
+        "attribution": image.source_name,
+        "license": image.license_name,
+        "license_url": image.license_url,
+        "source_url": image.source_url,
+        "alt_text": image.alt_text or f"{course_name} course photo",
+        "width": image.width,
+        "height": image.height,
+    }
+
+
+def course_card_hero_data(course: Course) -> dict:
+    """Cheap, read-only mirror of CourseImageService.resolve_hero_image()'s
+    OFFICIAL/USER/WIKIMEDIA/SATELLITE ordering for list/search payloads, which
+    are rendered from already-loaded rows and can't afford one Wikimedia
+    lookup + lock per card. Any change to that priority order or to satellite
+    eligibility must be mirrored here."""
+    session = object_session(course)
+    image_base_url = session.info.get("course_image_base_url") if session is not None else None
+    positive_ttl = (
+        session.info.get("wikimedia_cache_positive_ttl_seconds", DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS)
+        if session is not None
+        else DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS
+    )
+
+    images = getattr(course, "images", None) or []
+    approved_with_url: list[tuple[CourseImage, str]] = []
+    for image in images:
+        if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
+        url = image.external_url or storage_image_url(image_base_url, image.storage_key)
+        if not url:
+            continue
+        approved_with_url.append((image, url))
+
+    officials = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "official"]
+    if officials:
+        best_img, best_url = min(officials, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("OFFICIAL", best_img, best_url, course.name)
+
+    users = [pair for pair in approved_with_url if (pair[0].source_type or "").lower() == "user"]
+    if users:
+        best_img, best_url = min(users, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("USER", best_img, best_url, course.name)
+
+    wikimedias = [
+        pair for pair in approved_with_url
+        if (pair[0].source_type or "").lower() == "wikimedia"
+        and not is_wikimedia_stale(pair[0], positive_ttl)
+    ]
+    if wikimedias and not is_wikimedia_negative_cached(course):
+        best_img, best_url = min(wikimedias, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("WIKIMEDIA", best_img, best_url, course.name)
+
+    if session is not None:
+        satellite_provider = session.info.get("satellite_provider")
+        satellite_options = session.info.get("satellite_options")
+        if satellite_provider is not None and satellite_options is not None:
+            satellite = satellite_provider.get_course_image(course, satellite_options)
+            if satellite is not None:
+                return satellite.to_dict()
+
+    return {
+        "type": "NONE",
+        "url": None,
+        "thumbnail_url": None,
+        "attribution": None,
+        "license": None,
+        "license_url": None,
+        "source_url": None,
+        "alt_text": f"{course.name} course photo",
+        "width": None,
+        "height": None,
+    }
+
+
 def course_data(course: Course) -> dict:
     return {
         "id": course.id,
@@ -119,6 +232,7 @@ def course_data(course: Course) -> dict:
         "tee_time_url": course.tee_time_url,
         "access": course.access,
         "images": course_image_data(course),
+        "hero_image": course_card_hero_data(course),
     }
 
 
@@ -127,6 +241,8 @@ def course_image_data(course: Course) -> list[dict]:
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     output = []
     for image in course.images:
+        if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:
             continue
@@ -140,6 +256,11 @@ def course_image_data(course: Course) -> list[dict]:
             "license_url": image.license_url,
             "position": image.position,
             "is_hero": image.is_hero,
+            "source_type": image.source_type,
+            "quality_score": image.quality_score,
+            "width": image.width,
+            "height": image.height,
+            "created_at": image.created_at.isoformat() if image.created_at else None,
         })
     return output
 

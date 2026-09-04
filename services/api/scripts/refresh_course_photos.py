@@ -13,12 +13,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.core.config import Settings
-from app.course_photos import find_wikimedia_photos
+from app.course_images.repository import CourseImageRepository
+from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
+from app.course_photos import WIKIMEDIA_USER_AGENT, find_wikimedia_photos
 from app.db import make_engine, make_session_factory
-from app.models import Course, CourseImage
+from app.models import Course, CourseImage, CourseImageSource
 
 
 def main() -> int:
@@ -33,6 +35,7 @@ def main() -> int:
     engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
+    repository = CourseImageRepository()
     with session_factory() as session:
         courses = session.execute(select(Course).where(Course.id.in_(course_ids))).scalars().all()
         courses_by_id = {course.id: course for course in courses}
@@ -47,7 +50,7 @@ def main() -> int:
                     print(f"  #{course_id} {courses_by_id[course_id].name}")
             return 0
 
-        headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
+        headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
         with httpx.Client(timeout=30, headers=headers) as client:
             for course_id in course_ids:
                 course = courses_by_id.get(course_id)
@@ -65,6 +68,8 @@ def main() -> int:
                     print(f"#{course_id} {course.name}: no landscape candidates found (keeping existing photos)")
                     continue
 
+                repository.delete_wikimedia_images(session, course_id, commit=False)
+                start_position = repository.next_position(session, course_id)
                 rows = [
                     CourseImage(
                         course_id=course_id,
@@ -74,13 +79,17 @@ def main() -> int:
                         source_url=photo.source_url,
                         license_name=photo.license_name,
                         license_url=photo.license_url,
-                        position=index,
+                        position=start_position + index,
                         is_hero=index == 0,
+                        source_type=CourseImageSource.WIKIMEDIA,
                     )
                     for index, photo in enumerate(photos)
                 ]
-                session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
                 session.add_all(rows)
+                # Clear any stale negative-cache entry so course-detail requests
+                # start using these newly stored photos immediately, instead of
+                # falling back to Mapbox/NONE for the rest of the negative TTL.
+                repository.invalidate_negative_cache(session, course_id, WIKIMEDIA_PROVIDER_NAME, commit=False)
                 session.commit()
                 print(f"#{course_id} {course.name}: {len(rows)} photo(s)")
                 for row in rows:

@@ -10,21 +10,117 @@ import httpx
 MAX_TRANSIENT_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 3.0
 
+# Shared by every caller of the Commons API (the live resolver and the
+# offline backfill/refresh/score scripts) so Wikimedia's UA policy only ever
+# needs updating in one place.
+WIKIMEDIA_USER_AGENT = "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"
 
-def _request_with_retries(client: httpx.Client, method: str, url: str, **kwargs) -> httpx.Response:
+
+def _read_response_with_deadline(
+    response: httpx.Response, deadline: float | None, method: str, url: str
+) -> bytes:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise httpx.TimeoutException(f"deadline exceeded before reading {method} {url}")
+    if deadline is None:
+        return response.read()
+    if hasattr(response, "_content"):
+        return response._content
+
+    # Bound the underlying network stream read operations to the remaining deadline
+    # so a stalled read cannot block up to the original full socket timeout. The
+    # stream belongs to the (possibly keep-alive, cross-request) httpcore
+    # connection, not this call, so the patch must be undone before returning --
+    # otherwise a later call reusing the same connection wraps this call's
+    # already-expired deadline instead of getting its own.
+    network_stream = response.extensions.get("network_stream")
+    orig_read = network_stream.read if network_stream is not None and hasattr(network_stream, "read") else None
+
+    if orig_read is not None:
+        def read_with_deadline(max_bytes: int, timeout: float | None = None) -> bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise httpx.ReadTimeout(f"deadline exceeded while reading {method} {url}")
+            eff_timeout = min(timeout, remaining) if timeout is not None else remaining
+            return orig_read(max_bytes, timeout=eff_timeout)
+
+        network_stream.read = read_with_deadline
+
+    try:
+        if hasattr(response, "_request") and response._request is not None:
+            timeouts = response._request.extensions.get("timeout")
+            if isinstance(timeouts, dict):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise httpx.TimeoutException(f"deadline exceeded before reading {method} {url}")
+                timeouts["read"] = remaining
+
+        parts = []
+        for chunk in response.iter_bytes():
+            if time.monotonic() >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
+            parts.append(chunk)
+        if time.monotonic() >= deadline:
+            raise httpx.TimeoutException(f"deadline exceeded while reading {method} {url}")
+        response._content = b"".join(parts)
+        return response._content
+    finally:
+        if orig_read is not None:
+            network_stream.read = orig_read
+
+
+def request_with_retries(
+    client: httpx.Client, method: str, url: str, *, max_retries: int = MAX_TRANSIENT_RETRIES,
+    deadline: float | None = None, **kwargs
+) -> httpx.Response:
     """A long batch run hits occasional transient network blips (dropped
     connections, brief 429s, or transient 5xx server errors from Commons) --
-    retry those instead of letting one bad request kill an hours-long job."""
-    for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+    retry those instead of letting one bad request kill an hours-long job.
+
+    A synchronous per-request caller (the live course-image resolver) should
+    pass max_retries=0: retries with growing backoff are fine to absorb in an
+    hours-long offline job, but not while blocking a course-detail request and
+    holding a DB session/lock.
+
+    `deadline` (a `time.monotonic()` value) bounds this call to whatever is
+    left of an end-to-end budget shared with sibling requests -- without it,
+    the client's per-request timeout applies separately to every request,
+    so two sequential calls could each take the full timeout. The deadline
+    is enforced before connecting, during transmission/response streaming,
+    and across any retry attempts.
+    """
+    for attempt in range(max_retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise httpx.TimeoutException(f"deadline exceeded before {method} {url}")
+            kwargs["timeout"] = remaining
         try:
-            response = client.request(method, url, **kwargs)
-        except httpx.TransportError:
-            if attempt == MAX_TRANSIENT_RETRIES:
+            with client.stream(method, url, **kwargs) as stream_resp:
+                _read_response_with_deadline(stream_resp, deadline, method, url)
+                response = stream_resp
+        except httpx.TimeoutException:
+            if deadline is not None and time.monotonic() >= deadline:
                 raise
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            if attempt == max_retries:
+                raise
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise
+            time.sleep(backoff)
             continue
-        if response.status_code in {429, 500, 502, 503, 504} and attempt < MAX_TRANSIENT_RETRIES:
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+        except httpx.TransportError:
+            if attempt == max_retries:
+                raise
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded before retry for {method} {url}")
+            time.sleep(backoff)
+            continue
+        if response.status_code in {429, 500, 502, 503, 504} and attempt < max_retries:
+            backoff = RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if deadline is not None and time.monotonic() + backoff >= deadline:
+                raise httpx.TimeoutException(f"deadline exceeded before retry for {method} {url}")
+            time.sleep(backoff)
             continue
         return response
     raise AssertionError("unreachable")
@@ -105,6 +201,8 @@ def find_wikimedia_photos(
     longitude: float,
     radius_meters: int = 1000,
     limit: int = 5,
+    max_retries: int = MAX_TRANSIENT_RETRIES,
+    deadline: float | None = None,
 ) -> list[ExternalPhoto]:
     """Find geo-tagged, landscape photos on Wikimedia Commons near a course.
 
@@ -112,13 +210,24 @@ def find_wikimedia_photos(
     mushroom, a mansion, a beach), so results are also required to share a
     distinctive word with the course's name -- otherwise we'd mislabel an
     unrelated photo as this course.
+
+    `max_retries` defaults to the batch-job budget; pass 0 from a synchronous
+    per-request caller to bound worst-case latency to roughly the client
+    timeout instead of minutes of growing backoff.
+
+    `deadline` (a `time.monotonic()` value) is an end-to-end budget shared by
+    both the geosearch and imageinfo calls this function makes -- without it
+    each would separately get the client's full per-request timeout, letting
+    a slow Commons response block a synchronous caller for roughly double the
+    configured timeout.
     """
     course_words = _significant_words(course_name)
     if not course_words:
         return []
 
-    geosearch = _request_with_retries(
+    geosearch = request_with_retries(
         client, "GET", COMMONS_API_URL,
+        max_retries=max_retries, deadline=deadline,
         params={
             "action": "query",
             "list": "geosearch",
@@ -135,8 +244,9 @@ def find_wikimedia_photos(
     if not titles:
         return []
 
-    imageinfo = _request_with_retries(
+    imageinfo = request_with_retries(
         client, "GET", COMMONS_API_URL,
+        max_retries=max_retries, deadline=deadline,
         params={
             "action": "query",
             "titles": "|".join(titles),

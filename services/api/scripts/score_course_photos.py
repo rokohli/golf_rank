@@ -22,13 +22,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-from sqlalchemy import delete, select
 
 from app.core.config import Settings
+from app.course_images.repository import CourseImageRepository
+from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
+from app.course_photos import WIKIMEDIA_USER_AGENT
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
-from app.models import Course, CourseImage
+from app.models import Course
 
 REFERENCE_COURSE_IDS = [210, 213]  # Crystal Springs, Cypress Point
 MODEL = "gemini-flash-lite-latest"
@@ -61,7 +63,8 @@ def main() -> int:
     engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
     session_factory = make_session_factory(engine, course_image_base_url=settings.course_image_base_url)
 
-    headers = {"User-Agent": "GolfRank-CoursePhotoBackfill/1.0 (https://github.com/golf-rank/golf_rank)"}
+    repository = CourseImageRepository()
+    headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
     with session_factory() as session:
         with httpx.Client(timeout=30, headers=headers) as client:
             reference_images = []
@@ -90,11 +93,13 @@ def main() -> int:
                     print(f"#{course_id}: no such course")
                     continue
 
-                images = session.execute(
-                    select(CourseImage).where(CourseImage.course_id == course_id).order_by(CourseImage.position)
-                ).scalars().all()
+                # Scored against Wikimedia-sourced candidates only -- OFFICIAL/USER
+                # photos are curated by a human and already outrank this tier in
+                # CourseImageService, so they must never be re-scored, demoted, or
+                # deleted by this script.
+                images = repository.wikimedia_images(session, course_id)
                 if not images:
-                    print(f"#{course_id} {course.name}: no photos")
+                    print(f"#{course_id} {course.name}: no Wikimedia photos")
                     continue
 
                 print(f"#{course_id} {course.name}")
@@ -131,11 +136,19 @@ def main() -> int:
                     if args.quality_floor is not None and best_score.score < args.quality_floor:
                         if len(scored) < len(images):
                             print(
-                                f"    -> skipped quality-floor removal: only {len(scored)}/{len(images)} photos were scored"
+                                f"    -> skipped quality-floor removal: only {len(scored)}/{len(images)} "
+                                "Wikimedia photos were scored"
                             )
                         else:
-                            session.execute(delete(CourseImage).where(CourseImage.course_id == course_id))
-                            session.commit()
+                            repository.delete_wikimedia_images(session, course_id, commit=False)
+                            # Without a negative-cache entry, the next course-detail
+                            # request's live lookup would just re-accept the same
+                            # candidate under its separate (lower) confidence
+                            # threshold and undo this quality-floor removal.
+                            repository.set_negative_cache(
+                                session, course_id, WIKIMEDIA_PROVIDER_NAME,
+                                ttl_seconds=settings.wikimedia_cache_negative_ttl_seconds,
+                            )
                             print(f"    -> removed: best photo only scored {best_score.score}/10, "
                                   f"below the {args.quality_floor}/10 floor")
                     else:

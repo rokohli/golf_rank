@@ -150,7 +150,7 @@ function eventPresentation(activity: Activity) {
   return { action: 'shared', title: 'Golf update', detail: null, accessibilityLabel: 'Open activity' }
 }
 
-function toDisplayCourse(course: Course, _index: number): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course) } }
+function toDisplayCourse(course: Course, _index: number): CoursePresentation { return { id: String(course.id), name: course.name, location: course.region, rating: course.community_rating ?? 0, reviews: '', distance: '', price: '', image: attributedCourseImage(course), heroImage: course.hero_image } }
 function openActivity(activity: Activity, router: ReturnType<typeof useRouter>) { if (activity.course) router.push(`/course/${activity.course.id}` as never) }
 function numberDetail(value: unknown, suffix = '') { return typeof value === 'number' ? `${value}${suffix}` : null }
 function roundScoreDetail(score: unknown, par: number | null | undefined) { return typeof score === 'number' ? [String(score), scoreToPar(score, par)].filter(Boolean).join(' ') : null }

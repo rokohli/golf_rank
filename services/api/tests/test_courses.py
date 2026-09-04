@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, CourseReconciliation
+from app.models import Course, CourseImage, CourseImageModeration, CourseReconciliation
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -116,9 +116,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert response.status_code == 200
     assert response.json()["name"] == "Spyglass Hill Golf Course"
 
-    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
-    pebble_id = listed_pebble["id"]
-    assert listed_pebble["images"] == [
+    expected_images = [
         {
             "id": 1,
             "url": "https://images.example/pebble-hero.jpg",
@@ -129,6 +127,10 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
             "position": 0,
             "is_hero": True,
+            "source_type": "wikimedia",
+            "quality_score": None,
+            "width": None,
+            "height": None,
         },
         {
             "id": 2,
@@ -140,37 +142,61 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": None,
             "position": 1,
             "is_hero": False,
+            "source_type": "wikimedia",
+            "quality_score": None,
+            "width": None,
+            "height": None,
         },
     ]
+
+    def _without_created_at(images: list[dict]) -> list[dict]:
+        for image in images:
+            assert image.pop("created_at")
+        return images
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+    pebble_id = listed_pebble["id"]
+    assert _without_created_at(listed_pebble["images"]) == expected_images
     pebble_response = client.get(f"/api/v1/courses/{pebble_id}")
     assert pebble_response.status_code == 200
     assert pebble_response.json()["par"] == 72
     assert pebble_response.json()["slope_rating"] == 145
     assert pebble_response.json()["tee_time_url"].startswith("https://www.pebblebeach.com/")
-    assert pebble_response.json()["images"] == [
-        {
-            "id": 1,
-            "url": "https://images.example/pebble-hero.jpg",
-            "alt_text": "Pebble Beach coastline",
-            "source_name": "Example photographer",
-            "source_url": "https://images.example/license",
-            "license_name": "CC BY-SA 4.0",
-            "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-            "position": 0,
-            "is_hero": True,
-        },
-        {
-            "id": 2,
-            "url": "https://cdn.example/assets/courses/pebble/second.jpg",
-            "alt_text": "Pebble Beach green",
-            "source_name": "GolfRank photographer",
-            "source_url": "https://golfrank.example/photos/pebble-green",
-            "license_name": None,
-            "license_url": None,
-            "position": 1,
-            "is_hero": False,
-        },
-    ]
+    assert _without_created_at(pebble_response.json()["images"]) == expected_images
+
+
+def test_course_detail_hides_non_approved_images() -> None:
+    app = create_app(Settings())
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/approved.jpg",
+                position=0,
+                is_hero=True,
+                moderation_status=CourseImageModeration.APPROVED,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/pending.jpg",
+                position=1,
+                moderation_status=CourseImageModeration.PENDING,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/rejected.jpg",
+                position=2,
+                moderation_status=CourseImageModeration.REJECTED,
+            ),
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+
+    urls = [image["url"] for image in listed_pebble["images"]]
+    assert urls == ["https://images.example/approved.jpg"]
 
 
 def test_course_detail_returns_not_found_for_unknown_id() -> None:

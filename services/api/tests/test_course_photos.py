@@ -1,6 +1,7 @@
 import httpx
+import pytest
 
-from app.course_photos import find_wikimedia_photos, is_landscape
+from app.course_photos import request_with_retries, find_wikimedia_photos, is_landscape
 
 
 def _client(handler) -> httpx.Client:
@@ -117,6 +118,23 @@ def test_find_wikimedia_photos_returns_empty_when_no_results() -> None:
     assert find_wikimedia_photos(
         _client(handler), course_name="Some Golf Club", latitude=0.0, longitude=0.0
     ) == []
+
+
+def test_max_retries_zero_does_not_retry_a_429_and_raises_immediately() -> None:
+    """A synchronous per-request caller (the live course-image resolver)
+    passes max_retries=0 so a rate limit doesn't block the request behind
+    growing backoff -- see WikimediaImageProvider.lookup."""
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        response = request_with_retries(_client(handler), "GET", "https://commons.wikimedia.org/w/api.php", max_retries=0)
+        response.raise_for_status()
+    assert attempts == 1
 
 
 def test_find_wikimedia_photos_allows_aerial_course_photos() -> None:
@@ -243,4 +261,72 @@ def test_find_wikimedia_photos_bounds_long_artist_metadata() -> None:
     assert len(photos) == 1
     assert len(photos[0].source_name) == 120
     assert photos[0].source_name.endswith("...")
+
+
+def test_request_with_retries_enforces_deadline_during_streaming_body() -> None:
+    import time
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"chunk 1 "
+            time.sleep(0.05)
+            yield b"chunk 2 "
+            time.sleep(0.05)
+            yield b"chunk 3"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=SlowStream())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    deadline = time.monotonic() + 0.04
+    with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
+        request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=0)
+
+
+def test_request_with_retries_enforces_deadline_before_retry_backoff() -> None:
+    import time
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    deadline = time.monotonic() + 0.05
+    with pytest.raises(httpx.TimeoutException, match="deadline exceeded"):
+        request_with_retries(client, "GET", "https://example.com/test", deadline=deadline, max_retries=2)
+    assert attempts == 1
+
+
+def test_read_response_with_deadline_enforces_socket_timeout_on_stalled_read() -> None:
+    import socket
+    import time
+
+    class FakeSyncStream:
+        def __init__(self):
+            self.timeout = None
+
+        def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+            self.timeout = timeout
+            if timeout is not None and timeout <= 0.05:
+                raise httpx.ReadTimeout("deadline exceeded while reading")
+            return b"data"
+
+    fake_stream = FakeSyncStream()
+
+    class StreamWithNetworkStream(httpx.SyncByteStream):
+        def __iter__(self):
+            # httpcore delegates to network_stream.read during body receive
+            yield fake_stream.read(1024)
+
+    response = httpx.Response(200, stream=StreamWithNetworkStream())
+    response.extensions["network_stream"] = fake_stream
+
+    # Deadline is 0.03 seconds from now
+    deadline = time.monotonic() + 0.03
+    with pytest.raises(httpx.ReadTimeout):
+        from app.course_photos import _read_response_with_deadline
+        _read_response_with_deadline(response, deadline, "GET", "https://example.com")
+
 

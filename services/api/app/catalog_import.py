@@ -4,12 +4,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .core.config import Settings
+from .course_images.repository import CourseImageRepository
 from .db import make_engine, make_session_factory
-from .models import Course, Profile
+from .models import Course, CourseImage, CourseImageSource, Profile
 
 
 SOURCE = "opengolfapi"
@@ -74,6 +75,7 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
     report = ImportReport(fetched=len(records))
     now = datetime.now(UTC)
     seen_ids: set[str] = set()
+    relocated_course_ids: set[int] = set()
     existing = {
         course.source_course_id: course
         for course in session.scalars(
@@ -132,10 +134,27 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
         else:
             report.updated += 1
             if not dry_run:
+                coordinates_changed = (
+                    course.latitude != values["latitude"] or course.longitude != values["longitude"]
+                )
                 for key, value in values.items():
                     if key in PRESERVE_WHEN_MISSING and value is None:
                         continue
                     setattr(course, key, value)
+                if coordinates_changed:
+                    # A stale Wikimedia match (or a "no match" result) was keyed
+                    # to the old location -- corrected coordinates deserve a
+                    # fresh search rather than continuing to show a possibly
+                    # wrong photo or sitting behind the negative-cache TTL.
+                    session.execute(delete(CourseImage).where(
+                        CourseImage.course_id == course.id,
+                        CourseImage.source_type == CourseImageSource.WIKIMEDIA,
+                    ))
+                    relocated_course_ids.add(course.id)
+    if relocated_course_ids and not dry_run:
+        # One batched statement instead of a SELECT+delete per relocated
+        # course -- an import run can relocate hundreds of courses at once.
+        CourseImageRepository().invalidate_negative_cache_bulk(session, relocated_course_ids, commit=False)
     for source_id, course in existing.items():
         if source_id not in seen_ids and course.status != "retired":
             report.retired += 1

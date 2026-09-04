@@ -74,6 +74,7 @@ export default function Rankings() {
       distance: '',
       price: entry.course.green_fee > 500 ? '$$$$' : '$$$',
       image: attributedCourseImage(entry.course),
+      heroImage: entry.course.hero_image,
       personalRank: entry.rank,
       personalRating: entry.personal_rating,
       tier: entry.tier,

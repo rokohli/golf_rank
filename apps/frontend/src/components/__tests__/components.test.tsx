@@ -177,7 +177,7 @@ describe('course rating presentation', () => {
 
     expect(screen.getByLabelText('Community rating 9.7 out of 10')).toBeOnTheScreen()
     expect(screen.getByText('9.7/10')).toBeOnTheScreen()
-    expect(screen.getByLabelText('Course image unavailable')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Pebble Beach Golf Links course header')).toBeOnTheScreen()
     expect(screen.queryByText(/★/)).toBeNull()
   })
 })

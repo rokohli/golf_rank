@@ -4,7 +4,26 @@ import { ReactElement, ReactNode } from 'react'
 import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { CoursePresentation } from '../coursePresentation'
+import { HeroImage } from '../types'
 import { colors, radii } from '../ui/theme'
+
+// Mapbox and Wikimedia both require visible credit wherever their imagery
+// is shown, not just on the course-detail hero -- mirrors HeroAttribution in
+// app/course/[id].tsx but sized for the smaller card/row visuals. Anchored to
+// the top (rather than the bottom, like the detail hero) since every card's
+// own overlays -- story/leader scrims, rating text, the "Saved" pill -- claim
+// the bottom edge; `compact` shortens the label for narrow row thumbnails
+// that can't fit the full attribution text on one line.
+function CardAttribution({ heroImage, compact = false }: { heroImage?: HeroImage | null; compact?: boolean }) {
+  if (!heroImage || heroImage.type !== 'WIKIMEDIA' && heroImage.type !== 'SATELLITE') return null
+  const fullLabel = heroImage.type === 'SATELLITE' ? 'Satellite imagery © Mapbox' : `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
+  const label = compact ? (heroImage.type === 'SATELLITE' ? '© Mapbox' : heroImage.attribution ?? 'Wikimedia') : fullLabel
+  return (
+    <View accessibilityLabel={`Image attribution: ${fullLabel}`} style={[styles.cardAttribution, compact && styles.cardAttributionCompact]}>
+      <Text numberOfLines={1} style={[styles.cardAttributionText, compact && styles.cardAttributionTextCompact]}>{label}</Text>
+    </View>
+  )
+}
 
 export function ProductScreen({ children, edgeToEdge = false, scroll = true, refreshControl }: { children: ReactNode; edgeToEdge?: boolean; scroll?: boolean; refreshControl?: ReactElement<RefreshControlProps> }) {
   const content = scroll ? (
@@ -51,20 +70,26 @@ export function BottomNav() {
   )
 }
 
-export function CourseVisual({ course, height = 116, squareTop = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; children?: ReactNode }) {
+export function CourseVisual({ course, height = 116, squareTop = false, hideAttribution = false, compactAttribution = false, children }: { course: CoursePresentation; height?: number; squareTop?: boolean; hideAttribution?: boolean; compactAttribution?: boolean; children?: ReactNode }) {
   const visualStyle = [styles.courseVisual, squareTop && styles.courseVisualSquareTop, { height }]
   if (!course.image) {
+    // No broken-image icon or "unavailable" messaging -- an intentional,
+    // on-brand header that still reads as "this course" while no photo
+    // exists yet, not as an error state.
     return (
-      <View accessibilityLabel="Course image unavailable" style={[visualStyle, styles.coursePlaceholder]}>
+      <View accessibilityLabel={`${course.name} course header`} style={[visualStyle, styles.coursePlaceholder]}>
+        <View style={styles.coursePlaceholderContour1} />
+        <View style={styles.coursePlaceholderContour2} />
         <Feather name="flag" size={24} color={colors.pine} />
         {children}
       </View>
     )
   }
   return (
-    <ImageBackground source={course.image} resizeMode="cover" style={visualStyle}>
+    <ImageBackground accessibilityLabel={`${course.name} course photo`} source={course.image} resizeMode="cover" style={visualStyle}>
       <View style={styles.photoWash} />
       {children}
+      {hideAttribution ? null : <CardAttribution heroImage={course.heroImage} compact={compactAttribution} />}
     </ImageBackground>
   )
 }
@@ -91,7 +116,7 @@ export function CourseCard({ course, compact = false, onPress, badge }: { course
 export function CourseRow({ course, index, onPress, trailing, showRating = true, showReviewCount = true }: { course: CoursePresentation; index?: number; onPress?: () => void; trailing?: ReactNode; showRating?: boolean; showReviewCount?: boolean }) {
   return <Pressable onPress={onPress} style={({ pressed }) => [styles.courseRow, pressed && styles.pressed]}>
     {index ? <Text style={styles.courseRowIndex}>{index}</Text> : null}
-    <View style={styles.courseRowImage}><CourseVisual course={course} height={52} /></View>
+    <View style={styles.courseRowImage}><CourseVisual course={course} height={52} compactAttribution /></View>
     <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.courseRowTitle}>{course.name}</Text><Text numberOfLines={1} style={styles.meta}>{course.location}</Text>{showRating ? <Text accessibilityLabel={course.rating ? `Community rating ${course.rating} out of 10` : 'No community rating yet'} style={styles.rating}>{course.rating ? course.rating : '—'}/10{showReviewCount && course.reviews ? <Text style={styles.meta}>  {course.reviews}</Text> : null}</Text> : null}</View>
     {trailing ?? <Feather name="chevron-right" size={16} color={colors.muted} />}
   </Pressable>
@@ -146,8 +171,13 @@ const styles = StyleSheet.create({
   navLabelActive: { color: colors.pine, fontWeight: '800' },
   courseVisual: { borderRadius: 10, overflow: 'hidden', position: 'relative' },
   coursePlaceholder: { alignItems: 'center', backgroundColor: colors.pineSoft, justifyContent: 'center' },
+  // Faint concentric arcs bleeding off the bottom-right corner, evoking a
+  // topographic contour line -- subtle enough to stay in the background.
+  coursePlaceholderContour1: { borderColor: 'rgba(16,56,42,0.06)', borderRadius: 999, borderWidth: 34, bottom: -140, height: 280, position: 'absolute', right: -110, width: 280 },
+  coursePlaceholderContour2: { borderColor: 'rgba(16,56,42,0.05)', borderRadius: 999, borderWidth: 24, bottom: -90, height: 180, position: 'absolute', right: -60, width: 180 },
   courseVisualSquareTop: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
   photoWash: { backgroundColor: 'rgba(8, 25, 17, 0.05)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  cardAttribution: { top: 5, left: 6, position: 'absolute', right: 6 }, cardAttributionText: { color: 'rgba(255,255,255,0.85)', fontSize: 8, fontWeight: '600', textAlign: 'right', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }, cardAttributionCompact: { left: 2, right: 2, top: 2 }, cardAttributionTextCompact: { fontSize: 7 },
   card: { backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden' },
   compactCard: { flex: 1, minWidth: 148 },
   cardBody: { gap: 5, padding: 12 },
