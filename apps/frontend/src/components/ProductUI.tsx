@@ -1,7 +1,8 @@
 import { Feather } from '@expo/vector-icons'
+import { Image as ExpoImage } from 'expo-image'
 import { usePathname, useRouter } from 'expo-router'
 import { ReactElement, ReactNode } from 'react'
-import { Image, ImageBackground, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Image, Pressable, RefreshControlProps, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { CoursePresentation } from '../coursePresentation'
 import { HeroImage } from '../types'
@@ -86,11 +87,18 @@ export function CourseVisual({ course, height = 116, squareTop = false, hideAttr
     )
   }
   return (
-    <ImageBackground accessibilityLabel={`${course.name} course photo`} source={course.image} resizeMode="cover" style={visualStyle}>
+    <View style={visualStyle}>
+      <ExpoImage
+        accessibilityLabel={`${course.name} course photo`}
+        cachePolicy="disk"
+        contentFit="cover"
+        source={course.image}
+        style={StyleSheet.absoluteFill}
+      />
       <View style={styles.photoWash} />
       {children}
       {hideAttribution ? null : <CardAttribution heroImage={course.heroImage} compact={compactAttribution} />}
-    </ImageBackground>
+    </View>
   )
 }
 
