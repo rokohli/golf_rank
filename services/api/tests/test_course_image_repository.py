@@ -7,7 +7,7 @@ from app.course_images.repository import CourseImageRepository
 from app.course_images.service import CourseImageService
 from app.core.config import Settings
 from app.db import make_engine, make_session_factory
-from app.models import Base, Course, CourseImageModeration, CourseImageSource, Round, User
+from app.models import Base, Course, CourseImage, CourseImageModeration, CourseImageSource, Round, User
 
 
 @pytest.fixture()
@@ -68,6 +68,38 @@ def test_add_user_image_increments_position(session: Session) -> None:
     second = repository.add_user_image(session, course.id, storage_key="course-photos/1/b.jpg", uploaded_by_user_id=user.id)
 
     assert second.position == first.position + 1
+
+
+def test_add_user_image_retries_on_position_race(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A concurrent upload can commit between this call's next_position() read
+    and its own insert, colliding on uq_course_image_position -- add_user_image
+    must retry with a fresh position rather than surface the IntegrityError."""
+    course = make_course(session)
+    user = make_user(session)
+    repository = CourseImageRepository()
+
+    session.add(CourseImage(
+        course_id=course.id, storage_key="course-photos/1/first.jpg", position=0,
+        source_type=CourseImageSource.USER, moderation_status=CourseImageModeration.PENDING,
+        uploaded_by_user_id=user.id,
+    ))
+    session.commit()
+
+    real_next_position = repository.next_position
+    calls = {"count": 0}
+
+    def stale_then_real(sess: Session, course_id: int) -> int:
+        calls["count"] += 1
+        # First read is stale (as if it ran before the concurrent commit above
+        # actually landed); every retry after that sees the real, current max.
+        return 0 if calls["count"] == 1 else real_next_position(sess, course_id)
+
+    monkeypatch.setattr(repository, "next_position", stale_then_real)
+
+    image = repository.add_user_image(session, course.id, storage_key="course-photos/1/second.jpg", uploaded_by_user_id=user.id)
+
+    assert image.position == 1
+    assert calls["count"] == 2
 
 
 def make_round(session: Session, course: Course, user: User) -> Round:

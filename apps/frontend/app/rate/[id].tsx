@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } fr
 
 import {
   confirmCoursePhotoUpload,
+  discardCoursePhotoUpload,
   getRatingCandidate,
   saveCourseRating,
   saveRatingDetails,
@@ -103,6 +104,10 @@ export default function RateCourseRoute() {
       confirmPhotoUpload={async (storageKey, roundId, dimensions) => {
         const headers = await getAuthHeaders()
         return confirmCoursePhotoUpload(courseId, storageKey, headers, dimensions, roundId)
+      }}
+      discardPhotoUpload={async (storageKey) => {
+        const headers = await getAuthHeaders()
+        return discardCoursePhotoUpload(courseId, storageKey, headers)
       }}
     />
   </>

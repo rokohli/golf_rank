@@ -137,6 +137,11 @@ class CoursePhotoConfirmRequest(BaseModel):
     round_id: int | None = Field(default=None, gt=0)
 
 
+class CoursePhotoDiscardRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    storage_key: str = Field(min_length=1, max_length=1024)
+
+
 class CourseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

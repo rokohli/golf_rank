@@ -2,6 +2,7 @@ from collections.abc import Collection
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import CourseImage, CourseImageModeration, CourseImageNegativeCache, CourseImageSource
@@ -147,23 +148,37 @@ class CourseImageRepository:
         to APPROVED. round_id, when present, is a separate axis: it makes the
         photo visible on that round's feed posting
         immediately, regardless of moderation_status."""
-        image = CourseImage(
-            course_id=course_id,
-            storage_key=storage_key,
-            alt_text=alt_text,
-            position=self.next_position(session, course_id),
-            is_hero=False,
-            source_type=CourseImageSource.USER,
-            moderation_status=CourseImageModeration.PENDING,
-            uploaded_by_user_id=uploaded_by_user_id,
-            width=width,
-            height=height,
-            round_id=round_id,
-        )
-        session.add(image)
-        session.commit()
-        session.refresh(image)
-        return image
+        # next_position() is a plain read-then-write, so two concurrent uploads
+        # to the same course can compute the same position and race on
+        # uq_course_image_position. Retry with a freshly-read position rather
+        # than locking the whole course's image rows on every upload -- a
+        # collision here is rare, so paying for a lock on the common path
+        # isn't worth it.
+        for attempt in range(3):
+            image = CourseImage(
+                course_id=course_id,
+                storage_key=storage_key,
+                alt_text=alt_text,
+                position=self.next_position(session, course_id),
+                is_hero=False,
+                source_type=CourseImageSource.USER,
+                moderation_status=CourseImageModeration.PENDING,
+                uploaded_by_user_id=uploaded_by_user_id,
+                width=width,
+                height=height,
+                round_id=round_id,
+            )
+            session.add(image)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                if attempt == 2:
+                    raise
+                continue
+            session.refresh(image)
+            return image
+        raise AssertionError("unreachable")
 
     def count_for_round(self, session: Session, round_id: int) -> int:
         return session.scalar(

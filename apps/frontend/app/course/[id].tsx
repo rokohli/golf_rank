@@ -1,12 +1,11 @@
 import { Feather } from '@expo/vector-icons'
-import * as ImagePicker from 'expo-image-picker'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
-import { contentTypeForAsset, uploadCoursePhoto } from '../../src/api/coursePhotoUpload'
+import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset, uploadCoursePhoto } from '../../src/api/coursePhotoUpload'
 import { ApiHeaders, useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
 import { PhotoViewer } from '../../src/components/PhotoViewer'
@@ -326,7 +325,7 @@ export default function CourseDetail() {
       {viewerIndex !== null ? <PhotoViewer courseName={course.name} onClose={() => setViewerIndex(null)} photos={photos} startIndex={viewerIndex} /> : null}
       <View style={styles.disclosures}>
         <DisclosureRow expanded={openDetails === 'personal'} icon="edit-3" label="Your thoughts & details" onPress={() => setOpenDetails((current) => current === 'personal' ? null : 'personal')} />
-        {openDetails === 'personal' ? <PersonalDetails courseId={numericCourseId} getAuthHeaders={getAuthHeaders} onSave={updatePersonalDetail} rating={rating} /> : null}
+        {openDetails === 'personal' ? <PersonalDetails courseId={numericCourseId} courseName={course.name} getAuthHeaders={getAuthHeaders} onPhotosChanged={refreshRating} onSave={updatePersonalDetail} rating={rating} /> : null}
         <DisclosureRow expanded={openDetails === 'friends'} icon="users" label="Friends’ thoughts & details" onPress={() => setOpenDetails((current) => current === 'friends' ? null : 'friends')} />
         {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as never)} onOpenProfile={(userId) => openUserProfile(router, userId)} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
       </View>
@@ -397,14 +396,14 @@ function FriendsThoughts({ error, loading, onOpenActivity, onOpenProfile, onRetr
 }
 type EditableDetail = 'score' | 'note' | 'favorite_hole'
 
-function PersonalDetails({ courseId, getAuthHeaders, onSave, rating }: { courseId: number | null; getAuthHeaders: () => Promise<ApiHeaders>; onSave: (field: EditableDetail, value: number | string | null) => Promise<void>; rating: CourseRatingState | null }) {
+function PersonalDetails({ courseId, courseName, getAuthHeaders, onPhotosChanged, onSave, rating }: { courseId: number | null; courseName: string; getAuthHeaders: () => Promise<ApiHeaders>; onPhotosChanged: () => Promise<void>; onSave: (field: EditableDetail, value: number | string | null) => Promise<void>; rating: CourseRatingState | null }) {
   const [expanded, setExpanded] = useState<'score' | 'notes' | 'favoriteHole' | null>(null)
   const [scoreInput, setScoreInput] = useState('')
   const [noteInput, setNoteInput] = useState('')
   const [favoriteHoleInput, setFavoriteHoleInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
-  const [photoUploadState, setPhotoUploadState] = useState<'idle' | 'uploading' | 'submitted' | 'error'>('idle')
+  const [photoUploadState, setPhotoUploadState] = useState<'idle' | 'uploading' | 'error'>('idle')
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
   useEffect(() => {
     setScoreInput(rating?.round?.score == null ? '' : String(rating.round.score))
@@ -440,18 +439,18 @@ function PersonalDetails({ courseId, getAuthHeaders, onSave, rating }: { courseI
     }
     void persist(field, value)
   }
+  const roundPhotos = rating.round?.photos ?? []
+  const photoCapReached = roundPhotos.length >= MAX_PHOTOS_PER_ROUND
   const pickAndUploadPhoto = async () => {
-    if (!courseId) return
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85 })
-    if (result.canceled || !result.assets[0]?.uri) return
-    const asset = result.assets[0]
-    const contentType = contentTypeForAsset(asset.mimeType)
-    const dimensions = asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined
+    if (!courseId || !rating.round) return
+    const picked = await pickCoursePhotoAsset()
+    if (!picked) return
     setPhotoUploadState('uploading')
     setPhotoUploadError(null)
     try {
-      await uploadCoursePhoto(courseId, asset.uri, contentType, await getAuthHeaders(), dimensions)
-      setPhotoUploadState('submitted')
+      await uploadCoursePhoto(courseId, picked.uri, picked.contentType, await getAuthHeaders(), picked.dimensions, rating.round.id)
+      setPhotoUploadState('idle')
+      await onPhotosChanged()
     } catch (reason) {
       setPhotoUploadState('error')
       setPhotoUploadError(errorMessage(reason, 'Unable to submit photo. Please try again.'))
@@ -465,23 +464,30 @@ function PersonalDetails({ courseId, getAuthHeaders, onSave, rating }: { courseI
     <DetailDisclosureRow disabled={!rating.round} expanded={expanded === 'favoriteHole'} label="Favorite hole" onPress={() => toggle('favoriteHole')} value={favoriteHole == null ? 'Not added' : `Hole ${favoriteHole}`} />
     {expanded === 'favoriteHole' ? <View style={styles.detailDropdown}><TextInput accessibilityLabel="Edit favorite hole" keyboardType="number-pad" maxLength={2} onChangeText={setFavoriteHoleInput} placeholder="1–18" style={styles.detailInput} value={favoriteHoleInput} /><SaveDetailButton label="Save favorite hole" loading={saving} onPress={() => saveNumber('favorite_hole', favoriteHoleInput)} /></View> : null}
     {editError ? <Text accessibilityRole="alert" style={styles.detailError}>{editError}</Text> : null}
-    {courseId ? (
+    {courseId && rating.round ? (
       <Pressable
         accessibilityLabel="Add photos"
         accessibilityRole="button"
-        accessibilityState={{ disabled: photoUploadState === 'uploading' }}
-        disabled={photoUploadState === 'uploading'}
+        accessibilityState={{ disabled: photoUploadState === 'uploading' || photoCapReached }}
+        disabled={photoUploadState === 'uploading' || photoCapReached}
         onPress={() => void pickAndUploadPhoto()}
-        style={styles.detailDisclosureRow}
+        style={[styles.detailDisclosureRow, photoCapReached && styles.actionDisabled]}
       >
         <Feather name="camera" size={17} color={colors.pineDark} />
         <Text style={styles.detailRowLabel}>Add photos</Text>
         {photoUploadState === 'uploading'
           ? <ActivityIndicator color={colors.pineDark} size="small" />
-          : <Text style={styles.detailRowValue}>{photoUploadState === 'submitted' ? 'Photo added' : 'Not added'}</Text>}
+          : <Text style={styles.detailRowValue}>{roundPhotos.length > 0 ? `${roundPhotos.length} photo${roundPhotos.length === 1 ? '' : 's'}` : 'Not added'}</Text>}
       </Pressable>
     ) : null}
     {photoUploadError ? <Text accessibilityRole="alert" style={styles.detailError}>{photoUploadError}</Text> : null}
+    {roundPhotos.length ? (
+      <ScrollView contentContainerStyle={styles.roundPhotoStrip} horizontal showsHorizontalScrollIndicator={false}>
+        {roundPhotos.map((photo) => (
+          photo.url ? <Image key={photo.id} accessibilityLabel={photo.alt_text ?? `${courseName} round photo`} source={{ uri: photo.url }} style={styles.roundPhotoThumb} /> : null
+        ))}
+      </ScrollView>
+    ) : null}
   </View>
 }
 function DetailDisclosureRow({ disabled = false, expanded, label, onPress, value }: { disabled?: boolean; expanded: boolean; label: string; onPress: () => void; value: string }) { return <Pressable accessibilityLabel={`${label}, ${value}`} accessibilityRole="button" accessibilityState={{ disabled, expanded }} disabled={disabled} onPress={onPress} style={[styles.detailDisclosureRow, disabled && styles.actionDisabled]}><Text style={styles.detailRowLabel}>{label}</Text><Text style={styles.detailRowValue}>{value}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={17} color={colors.pineDark} /></Pressable> }
@@ -496,7 +502,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 7, minWidth: 70 }, actionIcon: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 24, borderWidth: 1, height: 48, justifyContent: 'center', width: 48 }, actionIconPressed: { backgroundColor: colors.pine, borderColor: colors.pine }, actionLabel: { color: colors.ink, fontSize: 10 }, actionLabelPressed: { color: colors.pine, fontWeight: '700' }, actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },
   teeTimes: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 46 }, teeTimesText: { color: colors.pineDark, fontSize: 13, fontWeight: '700' }, pressed: { opacity: 0.7 },
   photoSection: { gap: 12 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, viewAllText: { color: colors.pine, fontSize: 11, fontWeight: '800' }, photoRow: { flexDirection: 'row', gap: 8 }, photoItem: { gap: 5, width: 150 }, photo: { aspectRatio: 1.25, borderRadius: 7, width: '100%' }, photoAttribution: { gap: 2 }, photoCredit: { color: colors.muted, fontSize: 9, textDecorationLine: 'underline' }, photoLicense: { color: colors.muted, fontSize: 8, textDecorationLine: 'underline' }, emptyPhotos: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, minHeight: 58 }, emptyText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
-  disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 }, roundPhotoStrip: { gap: 8, paddingHorizontal: 14, paddingVertical: 12 }, roundPhotoThumb: { borderRadius: 7, height: 64, width: 64 },
   friendsThoughts: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, friendAggregate: { alignItems: 'center', backgroundColor: '#F1EEE5', paddingVertical: 16 }, friendAggregateValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 28 }, friendAggregateLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.7, marginTop: 5, textTransform: 'uppercase' }, friendThought: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, gap: 6, paddingHorizontal: 14, paddingVertical: 13 }, friendThoughtHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, friendName: { color: colors.ink, flex: 1, fontFamily: 'Georgia', fontSize: 15 }, friendRating: { color: colors.pineDark, fontSize: 10, fontWeight: '800' }, friendNote: { color: colors.ink, fontSize: 12, lineHeight: 18 }, friendHole: { color: colors.muted, fontSize: 10, fontWeight: '700' },
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })

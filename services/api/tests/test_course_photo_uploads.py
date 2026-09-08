@@ -247,6 +247,66 @@ def test_confirm_rejects_round_id_belonging_to_another_user() -> None:
     assert storage_key in storage.deleted
 
 
+def test_discard_deletes_unconfirmed_object() -> None:
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage)
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/{course_id}/abandoned.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    response = client.post(
+        f"/api/v1/courses/{course_id}/photos/discard", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+
+    assert response.status_code == 204
+    assert storage_key in storage.deleted
+    assert storage_key not in storage.objects
+
+
+def test_discard_requires_auth() -> None:
+    client = _client(object_storage=FakeObjectStorage())
+    course_id = _pebble_id(client)
+
+    response = client.post(
+        f"/api/v1/courses/{course_id}/photos/discard",
+        json={"storage_key": f"course-photos/{course_id}/abandoned.jpg"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_discard_rejects_cross_course_storage_key() -> None:
+    client = _client(object_storage=FakeObjectStorage())
+    course_id = _pebble_id(client)
+    other_key = f"course-photos/{course_id + 1}/abandoned.jpg"
+
+    response = client.post(
+        f"/api/v1/courses/{course_id}/photos/discard", json={"storage_key": other_key}, headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
+def test_discard_refuses_already_confirmed_storage_key() -> None:
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage)
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/{course_id}/confirmed.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+    confirm = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+    assert confirm.status_code == 201
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)  # re-add: confirm doesn't delete it
+
+    response = client.post(
+        f"/api/v1/courses/{course_id}/photos/discard", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert storage_key not in storage.deleted
+
+
 def test_confirm_enforces_photo_cap_per_round() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)

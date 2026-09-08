@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import { Linking, Share } from 'react-native'
 
 import CourseDetail from '../[id]'
-import { CourseRatingState } from '../../../src/types'
+import { CourseImage, CourseRatingState } from '../../../src/types'
 
 const mockGetCourse = jest.fn()
 const mockGetCourseRating = jest.fn()
@@ -63,6 +63,8 @@ jest.mock('../../../src/api/client', () => ({
 
 jest.mock('../../../src/api/coursePhotoUpload', () => ({
   contentTypeForAsset: jest.requireActual('../../../src/api/coursePhotoUpload').contentTypeForAsset,
+  MAX_PHOTOS_PER_ROUND: jest.requireActual('../../../src/api/coursePhotoUpload').MAX_PHOTOS_PER_ROUND,
+  pickCoursePhotoAsset: jest.requireActual('../../../src/api/coursePhotoUpload').pickCoursePhotoAsset,
   uploadCoursePhoto: (...args: unknown[]) => mockUploadCoursePhoto(...args),
 }))
 
@@ -332,13 +334,26 @@ describe('course detail ratings', () => {
     expect(mockPush).toHaveBeenCalledWith('/course/7/photos')
   })
 
-  it('uploads a picked photo and shows a submitted confirmation', async () => {
+  function ratingWithRound(photos: CourseImage[] = []): CourseRatingState {
+    return {
+      ...rating(null),
+      round: { id: 4, played_on: '2026-07-10', score: null, note: null, favorite_hole: null, visibility: 'private', photos },
+    }
+  }
+
+  it('uploads a picked photo round-linked and reflects it under Your thoughts & details', async () => {
     mockGetCourse.mockResolvedValue({ ...course, images: [] })
     mockLaunchImageLibraryAsync.mockResolvedValue({
       canceled: false,
       assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg', width: 1600, height: 1200 }],
     })
     mockUploadCoursePhoto.mockResolvedValue({ id: 99, source_type: 'user' })
+    mockGetCourseRating
+      .mockResolvedValueOnce(ratingWithRound([]))
+      .mockResolvedValueOnce(ratingWithRound([{
+        id: 99, url: 'https://images.example/round-photo.jpg', alt_text: 'User-submitted photo', source_name: null,
+        source_url: null, position: 0, is_hero: false, source_type: 'user',
+      }]))
 
     render(<CourseDetail />)
     await screen.findByText('No course photos yet.')
@@ -352,8 +367,10 @@ describe('course detail ratings', () => {
       'image/jpeg',
       expect.objectContaining({ Authorization: 'Bearer test-token' }),
       { width: 1600, height: 1200 },
+      4,
     ))
-    expect(await screen.findByText('Photo added')).toBeOnTheScreen()
+    expect(await screen.findByText('1 photo')).toBeOnTheScreen()
+    expect(screen.getByLabelText('User-submitted photo')).toBeOnTheScreen()
   })
 
   it('shows a retry-able error when the upload fails', async () => {
@@ -363,6 +380,7 @@ describe('course detail ratings', () => {
       assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
     })
     mockUploadCoursePhoto.mockRejectedValue(new Error('Too many requests'))
+    mockGetCourseRating.mockResolvedValue(ratingWithRound([]))
 
     render(<CourseDetail />)
     await screen.findByText('No course photos yet.')
@@ -372,6 +390,17 @@ describe('course detail ratings', () => {
 
     expect(await screen.findByText('Too many requests')).toBeOnTheScreen()
     expect(screen.getByLabelText('Add photos')).toBeOnTheScreen()
+  })
+
+  it('disables Add photos when there is no round to link photos to yet', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, images: [] })
+    mockGetCourseRating.mockResolvedValue(rating(null))
+
+    render(<CourseDetail />)
+    await screen.findByText('No course photos yet.')
+    fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
+
+    expect(screen.queryByLabelText('Add photos')).toBeNull()
   })
 
   it('shows only known backend facts and does not invent course access', async () => {

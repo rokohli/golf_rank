@@ -197,6 +197,26 @@ export async function confirmCoursePhotoUpload(
   return response.json()
 }
 
+// Best-effort cleanup for a staged photo the user removed before Continue
+// confirmed it -- deletes the orphaned R2 object. Never throws: callers
+// treat this as fire-and-forget, since a failure here just leaves an unused
+// object in storage rather than breaking anything the user can see.
+export async function discardCoursePhotoUpload(
+  courseId: number,
+  storageKey: string,
+  headers: ApiHeaders,
+): Promise<void> {
+  try {
+    await fetch(`${baseUrl}/api/v1/courses/${courseId}/photos/discard`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ storage_key: storageKey }),
+    })
+  } catch {
+    // best-effort; see doc comment above
+  }
+}
+
 export async function getFriendsCourseThoughts(courseId: number, headers: ApiHeaders): Promise<FriendsCourseThoughts> {
   const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}/friends-thoughts`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load friends’ thoughts. Please try again.')

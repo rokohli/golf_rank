@@ -1,5 +1,4 @@
 import { Feather } from '@expo/vector-icons'
-import * as ImagePicker from 'expo-image-picker'
 import { useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -29,7 +28,7 @@ import {
   RatingTier,
 } from '../types'
 import { CoursePhotoContentType } from '../api/client'
-import { MAX_PHOTOS_PER_ROUND, contentTypeForAsset } from '../api/coursePhotoUpload'
+import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
 import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
 
@@ -54,6 +53,7 @@ export type RatingFlowProps = {
   saveDetails: (input: RatingDetailsInput) => Promise<CourseRatingState>
   startPhotoUpload: (imageUri: string, contentType: CoursePhotoContentType) => Promise<{ storageKey: string }>
   confirmPhotoUpload: (storageKey: string, roundId: number, dimensions?: { width: number; height: number }) => Promise<CourseImage>
+  discardPhotoUpload: (storageKey: string) => Promise<void>
   onClose: () => void
   today?: string
 }
@@ -81,6 +81,7 @@ export function RatingFlow({
   saveDetails,
   startPhotoUpload,
   confirmPhotoUpload,
+  discardPhotoUpload,
   onClose,
   today = localToday(),
 }: RatingFlowProps) {
@@ -126,40 +127,52 @@ export function RatingFlow({
   // brand-new round doesn't exist until Continue saves it. So the slow part
   // (the file transfer) starts immediately in the background here; the fast
   // confirm call is deferred to finalizePhotos, once a round_id is known.
+  // Ids removed by the user while their upload was still in flight -- the
+  // upload's success handler checks this before adding the photo to state,
+  // so a photo removed mid-upload gets discarded (not silently kept) once
+  // the storage key becomes known.
+  const removedWhileUploadingRef = useRef<Set<string>>(new Set())
+
   async function pickAndUploadPhoto() {
     if (totalPhotoCount >= MAX_PHOTOS_PER_ROUND) return
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85 })
-    if (result.canceled || !result.assets[0]?.uri) return
-    const asset = result.assets[0]
-    const contentType = contentTypeForAsset(asset.mimeType)
-    const dimensions = asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined
+    const picked = await pickCoursePhotoAsset()
+    if (!picked) return
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    setStagedPhotos((current) => [...current, { id, imageUri: asset.uri, contentType, dimensions, status: 'uploading' }])
+    setStagedPhotos((current) => [...current, { id, imageUri: picked.uri, contentType: picked.contentType, dimensions: picked.dimensions, status: 'uploading' }])
     setGuestMessage(null)
     try {
-      const { storageKey } = await startPhotoUpload(asset.uri, contentType)
+      const { storageKey } = await startPhotoUpload(picked.uri, picked.contentType)
+      if (removedWhileUploadingRef.current.delete(id)) {
+        void discardPhotoUpload(storageKey)
+        return
+      }
       setStagedPhotos((current) => current.map((photo) => (photo.id === id ? { ...photo, status: 'ready', storageKey } : photo)))
     } catch (reason) {
+      removedWhileUploadingRef.current.delete(id)
       setStagedPhotos((current) => current.map((photo) => (photo.id === id ? { ...photo, status: 'error' } : photo)))
       setGuestMessage(errorMessage(reason, 'Unable to upload photo. Please try again.'))
     }
   }
 
   function removeStagedPhoto(id: string) {
-    setStagedPhotos((current) => current.filter((photo) => photo.id !== id))
+    const photo = stagedPhotos.find((item) => item.id === id)
+    if (photo?.status === 'uploading') {
+      // storageKey isn't known yet -- flag it so the upload's own completion
+      // handler discards the object once it lands, instead of staging it.
+      removedWhileUploadingRef.current.add(id)
+    } else if (photo?.storageKey) {
+      void discardPhotoUpload(photo.storageKey)
+    }
+    setStagedPhotos((current) => current.filter((item) => item.id !== id))
   }
 
   async function finalizePhotos(roundId: number) {
     const ready = stagedPhotos.filter((photo) => photo.status === 'ready' && photo.storageKey)
     if (!ready.length) return
     let failed = false
-    for (const photo of ready) {
-      try {
-        await confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions)
-      } catch {
-        failed = true
-      }
-    }
+    await Promise.all(ready.map((photo) =>
+      confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions).catch(() => { failed = true })
+    ))
     setStagedPhotos([])
     if (failed) setGuestMessage('Your round was saved, but one or more photos could not be attached.')
   }
@@ -379,9 +392,9 @@ export function RatingFlow({
                 ) : null}
               </View>
               {!dateValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a valid date in MM/DD/YYYY (not in the future).</Text> : null}
-              {!scoreValid ? <Text accessibilityRole="alert" style={styles.error}>invalid score</Text> : null}
+              {!scoreValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a score from 20 to 200.</Text> : null}
               {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.error}>Favorite hole must be between 1 and 18.</Text> : null}
-              <ActionButton disabled={!roundValid || !favoriteHoleValid || busy} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
+              <ActionButton disabled={!roundValid || !favoriteHoleValid || busy || photoUploadInFlight} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
             </View>
           ) : null}
 

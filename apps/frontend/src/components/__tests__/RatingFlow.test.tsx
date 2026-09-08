@@ -55,6 +55,7 @@ function props(overrides: Partial<RatingFlowProps> = {}): RatingFlowProps {
     saveDetails: jest.fn().mockResolvedValue(existingRating),
     startPhotoUpload: jest.fn().mockResolvedValue({ storageKey: 'course-photos/1/staged.jpg' }),
     confirmPhotoUpload: jest.fn().mockResolvedValue({ id: 99, source_type: 'user' }),
+    discardPhotoUpload: jest.fn().mockResolvedValue(undefined),
     onClose: jest.fn(),
     today: '2026-07-14',
     ...overrides,
@@ -275,8 +276,32 @@ describe('RatingFlow', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Remove photo' }))
 
     expect(screen.queryByText('1 photo added')).not.toBeOnTheScreen()
+    await waitFor(() => expect(inputProps.discardPhotoUpload).toHaveBeenCalledWith('course-photos/1/staged.jpg'))
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(inputProps.confirmPhotoUpload).not.toHaveBeenCalled())
+  })
+
+  it('discards the upload once it lands if the photo was removed while still uploading', async () => {
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    let resolveUpload: (value: { storageKey: string }) => void = () => {}
+    inputProps.startPhotoUpload = jest.fn().mockReturnValue(new Promise((resolve) => { resolveUpload = resolve }))
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('Uploading…')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Remove photo' }))
+    expect(screen.queryByRole('button', { name: 'Remove photo' })).toBeNull()
+
+    resolveUpload({ storageKey: 'course-photos/1/late.jpg' })
+
+    await waitFor(() => expect(inputProps.discardPhotoUpload).toHaveBeenCalledWith('course-photos/1/late.jpg'))
+    expect(screen.queryByText('1 photo added')).not.toBeOnTheScreen()
   })
 
   it('shows a retry-able error when the round photo upload fails', async () => {
@@ -314,19 +339,19 @@ describe('RatingFlow', () => {
     expect(screen.queryByRole('button', { name: 'Add guest' })).toBeNull()
   })
 
-  it('shows "invalid score" when score is below 20 or above 200 without mentioning date', async () => {
+  it('shows a score range error when score is below 20 or above 200 without mentioning date', async () => {
     render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
     await chooseTierAndOpenRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Score' }))
     fireEvent.changeText(screen.getByLabelText('Golf score'), '19')
 
-    expect(screen.getByText('invalid score')).toBeOnTheScreen()
+    expect(screen.getByText('Enter a score from 20 to 200.')).toBeOnTheScreen()
     expect(screen.queryByText(/Enter a valid date/)).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
 
     fireEvent.changeText(screen.getByLabelText('Golf score'), '201')
-    expect(screen.getByText('invalid score')).toBeOnTheScreen()
+    expect(screen.getByText('Enter a score from 20 to 200.')).toBeOnTheScreen()
     expect(screen.queryByText(/Enter a valid date/)).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
   })
@@ -337,11 +362,11 @@ describe('RatingFlow', () => {
 
     fireEvent.press(screen.getByRole('button', { name: 'Score' }))
     fireEvent.changeText(screen.getByLabelText('Golf score'), '20')
-    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.queryByText('Enter a score from 20 to 200.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState?.disabled).toBeFalsy()
 
     fireEvent.changeText(screen.getByLabelText('Golf score'), '200')
-    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.queryByText('Enter a score from 20 to 200.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState?.disabled).toBeFalsy()
   })
 
@@ -353,7 +378,7 @@ describe('RatingFlow', () => {
     fireEvent.changeText(screen.getByLabelText('Date played'), '99/99/2026')
 
     expect(screen.getByText('Enter a valid date in MM/DD/YYYY (not in the future).')).toBeOnTheScreen()
-    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.queryByText('Enter a score from 20 to 200.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
   })
 })

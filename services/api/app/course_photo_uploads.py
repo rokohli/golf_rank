@@ -15,6 +15,7 @@ gates plain visibility, only whether a photo can become the course's hero image.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -22,8 +23,14 @@ from .core.rate_limit import photo_upload_rate_limit
 from .course_images.repository import CourseImageRepository
 from .db import get_session
 from .domain import require_course, require_user, storage_image_url, uploader_username
-from .models import Round
-from .schemas import CourseImageOut, CoursePhotoConfirmRequest, CoursePhotoUploadRequest, CoursePhotoUploadResponse
+from .models import CourseImage, Round
+from .schemas import (
+    CourseImageOut,
+    CoursePhotoConfirmRequest,
+    CoursePhotoDiscardRequest,
+    CoursePhotoUploadRequest,
+    CoursePhotoUploadResponse,
+)
 from .storage import ObjectStorage
 
 router = APIRouter(tags=["course-photo-uploads"])
@@ -114,6 +121,10 @@ def confirm_upload(
         if round_ is None or round_.user_id != user.id or round_.course_id != course.id:
             storage.delete_object(payload.storage_key)
             raise HTTPException(400, "round_id does not match this course or user")
+        # Locks the round row so two concurrent confirms for it can't both read
+        # the same count-under-cap before either commits its insert (the count
+        # check below would otherwise race: see count_for_round's caller here).
+        session.execute(select(Round).where(Round.id == round_.id).with_for_update())
         if _repository.count_for_round(session, round_.id) >= MAX_PHOTOS_PER_ROUND:
             storage.delete_object(payload.storage_key)
             raise HTTPException(422, f"A round can have at most {MAX_PHOTOS_PER_ROUND} photos")
@@ -145,3 +156,32 @@ def confirm_upload(
         uploaded_by_username=uploader_username(session, image.uploaded_by_user_id),
         round_id=image.round_id,
     )
+
+
+@router.post(
+    "/api/v1/courses/{course_id}/photos/discard",
+    status_code=204,
+    dependencies=[Depends(photo_upload_rate_limit)],
+)
+def discard_upload(
+    course_id: int,
+    payload: CoursePhotoDiscardRequest,
+    request: Request,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> None:
+    """Cleans up an R2 object a client uploaded but decided not to keep --
+    e.g. the user removed the staged photo before Continue confirmed it.
+    Only ever deletes the raw object: a storage_key that's already backed by
+    a CourseImage row is a confirmed, published photo and must go through
+    the (not-yet-built) moderation deletion flow instead, never this one."""
+    require_user(session, current, create=True)
+    require_course(session, course_id)
+    storage = _object_storage(request)
+
+    if not payload.storage_key.startswith(f"course-photos/{course_id}/"):
+        raise HTTPException(400, "storage_key does not match course")
+    if session.scalar(select(CourseImage).where(CourseImage.storage_key == payload.storage_key)) is not None:
+        raise HTTPException(409, "storage_key is already confirmed")
+
+    storage.delete_object(payload.storage_key)
