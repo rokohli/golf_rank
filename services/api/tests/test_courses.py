@@ -171,10 +171,13 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert _without_created_at(pebble_response.json()["images"]) == expected_images
 
 
-def test_course_gallery_includes_images_regardless_of_moderation_status() -> None:
-    """Moderation gates hero-image eligibility only (see resolve_hero_image /
-    CourseImageRepository.approved_images) -- it never hides a photo from the
-    course's own gallery, at any moderation_status."""
+def test_course_gallery_excludes_unapproved_images() -> None:
+    """The public, unauthenticated course gallery only ever shows APPROVED
+    photos (see domain.course_image_data) -- a PENDING or REJECTED upload is
+    not moderated yet and must not be publicly reachable (see
+    docs/product/next-features-handoff.md "Start with private photos"). It's
+    still visible to its own uploader via the round/feed path
+    (domain.round_image_data), which is a separate, authorized code path."""
     app = create_app(Settings())
     with app.state.session_factory() as session:
         pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
@@ -208,11 +211,7 @@ def test_course_gallery_includes_images_regardless_of_moderation_status() -> Non
     listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
 
     urls = {image["url"] for image in listed_pebble["images"]}
-    assert urls == {
-        "https://images.example/approved.jpg",
-        "https://images.example/pending.jpg",
-        "https://images.example/rejected.jpg",
-    }
+    assert urls == {"https://images.example/approved.jpg"}
 
 
 def test_course_gallery_excludes_wikimedia_images() -> None:

@@ -244,17 +244,21 @@ def uploader_username(session: Session | None, uploaded_by_user_id: int | None) 
 
 
 def course_image_data(course: Course) -> list[dict]:
-    """All of a course's photos, regardless of moderation_status -- moderation
-    only gates hero-image eligibility (see CourseImageRepository.approved_images,
-    used independently by CourseImageService.resolve_hero_image), never whether
-    a photo appears in the course's own gallery. Wikimedia is excluded here: it
-    only ever serves as a hero-image fallback (CourseImageService._resolve),
-    never as a gallery photo."""
+    """A course's public, unauthenticated photo gallery -- APPROVED photos only.
+    A PENDING/REJECTED user upload is visible to its uploader on their own
+    round posting (round_image_data below, served only through authorized
+    feed/round-detail paths) but must never appear here until moderation
+    approves it (see docs/product/next-features-handoff.md "Start with
+    private photos"). Wikimedia is excluded here: it only ever serves as a
+    hero-image fallback (CourseImageService._resolve), never as a gallery
+    photo."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     output = []
     for image in course.images:
         if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
+            continue
+        if image.moderation_status != CourseImageModeration.APPROVED:
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:

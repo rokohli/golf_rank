@@ -169,12 +169,35 @@ export function RatingFlow({
   async function finalizePhotos(roundId: number) {
     const ready = stagedPhotos.filter((photo) => photo.status === 'ready' && photo.storageKey)
     if (!ready.length) return
-    let failed = false
-    await Promise.all(ready.map((photo) =>
-      confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions).catch(() => { failed = true })
+    const outcomes = await Promise.all(ready.map((photo) =>
+      confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions)
+        .then(() => ({ id: photo.id, ok: true as const }))
+        .catch(() => ({ id: photo.id, ok: false as const }))
     ))
-    setStagedPhotos([])
-    if (failed) setGuestMessage('Your round was saved, but one or more photos could not be attached.')
+    // Confirmation is idempotent per storage_key (server-side), so a photo
+    // that failed to confirm stays staged -- the next Continue retries it
+    // instead of silently abandoning its already-uploaded R2 object.
+    const failedIds = new Set(outcomes.filter((outcome) => !outcome.ok).map((outcome) => outcome.id))
+    setStagedPhotos((current) => current.filter((photo) => failedIds.has(photo.id)))
+    if (failedIds.size) setGuestMessage('Your round was saved, but one or more photos could not be attached. You can try again.')
+  }
+
+  // Cleans up any staged-but-unconfirmed uploads so leaving the flow without
+  // finishing doesn't strand permanent R2 objects (e.g. closing after
+  // picking photos but before Continue saves the round).
+  function discardStagedPhotos() {
+    stagedPhotos.forEach((photo) => {
+      if (photo.status === 'uploading') {
+        removedWhileUploadingRef.current.add(photo.id)
+      } else if (photo.storageKey) {
+        void discardPhotoUpload(photo.storageKey)
+      }
+    })
+  }
+
+  function handleClose() {
+    discardStagedPhotos()
+    onClose()
   }
 
   const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
@@ -286,7 +309,7 @@ export function RatingFlow({
 
   function goBack() {
     setError(null)
-    if (stage === 'tier') onClose()
+    if (stage === 'tier') handleClose()
     else if (stage === 'round') setStage('tier')
     else if (stage === 'comparison') setStage('round')
     else setStage('round')
@@ -311,7 +334,7 @@ export function RatingFlow({
             <Feather name="arrow-left" size={21} color={colors.ink} />
           </Pressable>
           <Text numberOfLines={1} style={styles.courseName}>{course.name}</Text>
-          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.iconButton}>
+          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={8} onPress={handleClose} style={styles.iconButton}>
             <Feather name="x" size={21} color={colors.ink} />
           </Pressable>
         </View>
@@ -415,7 +438,7 @@ export function RatingFlow({
               <View style={styles.goldRule} />
               <Text style={styles.revealMeta}>{tierName(ratingState.tier)}  ·  Your course rating</Text>
               <View style={styles.revealSpacer} />
-              <ActionButton label="Done" onPress={onClose} />
+              <ActionButton label="Done" onPress={handleClose} />
             </View>
           ) : null}
 

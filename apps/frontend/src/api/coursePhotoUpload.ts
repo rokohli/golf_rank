@@ -2,7 +2,7 @@ import * as ImagePicker from 'expo-image-picker'
 
 import { ApiHeaders } from '../auth/useAuthToken'
 import { CourseImage } from '../types'
-import { CoursePhotoContentType, confirmCoursePhotoUpload, getCoursePhotoUploadUrl, uploadCoursePhotoToStorage } from './client'
+import { CoursePhotoContentType, confirmCoursePhotoUpload, discardCoursePhotoUpload, getCoursePhotoUploadUrl, uploadCoursePhotoToStorage } from './client'
 
 export function contentTypeForAsset(mimeType: string | undefined | null): CoursePhotoContentType {
   if (mimeType === 'image/png') return 'image/png'
@@ -39,7 +39,15 @@ export async function uploadCoursePhoto(
   roundId?: number,
 ): Promise<CourseImage> {
   const { storageKey } = await startCoursePhotoUpload(courseId, imageUri, contentType, headers)
-  return confirmCoursePhotoUpload(courseId, storageKey, headers, dimensions, roundId)
+  try {
+    return await confirmCoursePhotoUpload(courseId, storageKey, headers, dimensions, roundId)
+  } catch (error) {
+    // The R2 object landed but was never confirmed into a CourseImage row --
+    // clean it up rather than leaving it a permanent orphan (best-effort;
+    // discardCoursePhotoUpload never throws).
+    await discardCoursePhotoUpload(courseId, storageKey, headers)
+    throw error
+  }
 }
 
 // A round's photos can't be confirmed with a round_id until the round exists --

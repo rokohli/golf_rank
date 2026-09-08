@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -127,6 +128,17 @@ class CourseImage(Base):
             name="ck_course_image_one_locator",
         ),
         UniqueConstraint("course_id", "position", name="uq_course_image_position"),
+        # Scoped to USER uploads only (partial index) -- curated OFFICIAL rows
+        # may legitimately share one storage_key (e.g. two courses sharing a
+        # hero image, see migration 0024), but a user's confirm_upload call
+        # must be idempotent per storage_key to stop a replayed request from
+        # creating a duplicate gallery entry / consuming another round slot.
+        Index(
+            "uq_course_image_user_storage_key",
+            "storage_key",
+            unique=True,
+            postgresql_where=text("source_type = 'user'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -149,15 +161,21 @@ class CourseImage(Base):
     moderation_status: Mapped[str] = mapped_column(
         String(20), default=CourseImageModeration.APPROVED, server_default=CourseImageModeration.APPROVED, index=True
     )
+    # CASCADE, not SET NULL: a user-submitted photo is that user's content --
+    # deleting the account must remove it (row + R2 object; see main.py's
+    # delete_account, which deletes the R2 objects before the row cascade
+    # commits), never leave it stranded ownerless in a course's gallery.
     uploaded_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
     # Set only for USER-sourced photos submitted from the rating flow's "About the
     # round" step -- lets the feed show a round's own photos regardless of
     # moderation_status (hero-image moderation is a separate concern from a
-    # user's right to see their own round posting's photos).
+    # user's right to see their own round posting's photos). CASCADE: deleting
+    # the round follows an explicit retention policy -- its photos go with it
+    # (row + R2 object; see rounds.py's delete_round).
     round_id: Mapped[int | None] = mapped_column(
-        ForeignKey("rounds.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("rounds.id", ondelete="CASCADE"), nullable=True, index=True
     )
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)

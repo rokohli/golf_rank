@@ -172,9 +172,12 @@ def test_confirm_rejects_unknown_fields() -> None:
     assert response.status_code == 422
 
 
-def test_confirmed_upload_appears_in_gallery_but_not_as_hero_while_pending() -> None:
-    """Moderation gates hero-image eligibility only -- a PENDING upload shows in
-    the course's photo gallery immediately, but resolve_hero_image ignores it."""
+def test_confirmed_upload_is_not_public_while_pending() -> None:
+    """A PENDING upload must not be reachable through the unauthenticated
+    course endpoint -- neither as the hero image (resolve_hero_image ignores
+    it) nor in the public gallery (domain.course_image_data filters to
+    APPROVED only, see docs/product/next-features-handoff.md "Start with
+    private photos")."""
     storage = FakeObjectStorage()
     client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
     course_id = _pebble_id(client)
@@ -187,7 +190,7 @@ def test_confirmed_upload_appears_in_gallery_but_not_as_hero_while_pending() -> 
     image_id = confirm.json()["id"]
 
     detail = client.get(f"/api/v1/courses/{course_id}")
-    assert any(image["id"] == image_id for image in detail.json()["images"])
+    assert all(image["id"] != image_id for image in detail.json()["images"])
     assert detail.json()["hero_image"]["type"] != "USER"
 
 
@@ -222,10 +225,11 @@ def test_confirm_links_round_id_and_appears_on_feed_regardless_of_moderation() -
     state = client.get(f"/api/v1/me/course-ratings/{course_id}", headers=HEADERS).json()
     assert [photo["id"] for photo in state["round"]["photos"]] == [body["id"]]
 
-    # Moderation gates hero eligibility only -- the pending photo is still
-    # visible in the course's own gallery.
+    # The pending photo is visible on the round's own feed posting (an
+    # authorized, owner-scoped path) but must not leak into the public,
+    # unauthenticated course gallery until it's approved.
     detail = client.get(f"/api/v1/courses/{course_id}")
-    assert any(image["id"] == body["id"] for image in detail.json()["images"])
+    assert all(image["id"] != body["id"] for image in detail.json()["images"])
 
 
 def test_confirm_rejects_round_id_belonging_to_another_user() -> None:
@@ -333,3 +337,64 @@ def test_confirm_enforces_photo_cap_per_round() -> None:
 
     assert response.status_code == 422
     assert overflow_key in storage.deleted
+
+
+def test_confirm_replay_is_idempotent_and_does_not_consume_extra_round_slot() -> None:
+    """Replaying a confirm for an already-confirmed storage_key must return the
+    existing row rather than create a duplicate gallery entry or consume
+    another round-photo slot (uq_course_image_user_storage_key)."""
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
+    course_id = _pebble_id(client)
+    round_id = _rated_round_id(client, course_id, HEADERS)
+    storage_key = f"course-photos/{course_id}/round.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    first = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm",
+        json={"storage_key": storage_key, "round_id": round_id},
+        headers=HEADERS,
+    )
+    second = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm",
+        json={"storage_key": storage_key, "round_id": round_id},
+        headers=HEADERS,
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+
+    state = client.get(f"/api/v1/me/course-ratings/{course_id}", headers=HEADERS).json()
+    assert len(state["round"]["photos"]) == 1
+
+    # Four more distinct uploads should still fit under the five-photo cap --
+    # the replay above must not have consumed a slot.
+    for index in range(4):
+        extra_key = f"course-photos/{course_id}/round-extra-{index}.jpg"
+        storage.objects[extra_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+        response = client.post(
+            f"/api/v1/courses/{course_id}/photos/confirm",
+            json={"storage_key": extra_key, "round_id": round_id},
+            headers=HEADERS,
+        )
+        assert response.status_code == 201
+
+
+def test_confirm_rejects_replay_from_a_different_user() -> None:
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage)
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/{course_id}/photo.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    first = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+    assert first.status_code == 201
+
+    other_headers = {"X-Development-Subject": "dev:someone-else"}
+    second = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=other_headers,
+    )
+    assert second.status_code == 403

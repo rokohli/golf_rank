@@ -6,12 +6,12 @@ pieces; this module only orchestrates auth, validation, and persistence.
 
 Uploaded rows always land as CourseImageSource.USER / CourseImageModeration.PENDING
 -- moderation (approving/rejecting/featuring) is a separate, not-yet-built slice
-that governs ONLY hero-image eligibility (resolve_hero_image, via
-CourseImageRepository.approved_images, ignores non-APPROVED rows). A pending
-upload is immediately visible in the course's photo gallery (course_image_data
-does not filter on moderation_status) and, when uploaded with a round_id, on
-that round's feed posting too (domain.round_image_data) -- moderation never
-gates plain visibility, only whether a photo can become the course's hero image.
+that governs both hero-image eligibility (resolve_hero_image, via
+CourseImageRepository.approved_images, ignores non-APPROVED rows) and the
+course's public gallery (domain.course_image_data, same filter). A pending
+upload is visible only to its own uploader, on that round's feed posting
+(domain.round_image_data, served exclusively through authorized
+feed/round-detail paths) -- never through an unauthenticated course endpoint.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -38,6 +38,27 @@ _repository = CourseImageRepository()
 
 # Keeps storage/moderation load bounded for photos attached to a single round posting.
 MAX_PHOTOS_PER_ROUND = 5
+
+
+def _image_out(session: Session, settings, image: CourseImage) -> CourseImageOut:
+    return CourseImageOut(
+        id=image.id,
+        url=storage_image_url(settings.course_image_base_url, image.storage_key),
+        alt_text=image.alt_text,
+        source_name=None,
+        source_url=None,
+        license_name=None,
+        license_url=None,
+        position=image.position,
+        is_hero=image.is_hero,
+        source_type=image.source_type,
+        quality_score=image.quality_score,
+        width=image.width,
+        height=image.height,
+        created_at=image.created_at.isoformat() if image.created_at else None,
+        uploaded_by_username=uploader_username(session, image.uploaded_by_user_id),
+        round_id=image.round_id,
+    )
 
 
 def _object_storage(request: Request) -> ObjectStorage:
@@ -116,6 +137,15 @@ def confirm_upload(
         storage.delete_object(payload.storage_key)
         raise HTTPException(422, "Uploaded object size is out of range")
 
+    # Idempotent replay: a retried confirm for a key that's already been
+    # confirmed (uq_course_image_user_storage_key) must not create a
+    # duplicate gallery entry or consume another round-photo slot.
+    existing = _repository.find_by_storage_key(session, payload.storage_key)
+    if existing is not None:
+        if existing.uploaded_by_user_id != user.id:
+            raise HTTPException(403, "storage_key belongs to another user")
+        return _image_out(session, settings, existing)
+
     if payload.round_id is not None:
         round_ = session.get(Round, payload.round_id)
         if round_ is None or round_.user_id != user.id or round_.course_id != course.id:
@@ -138,24 +168,7 @@ def confirm_upload(
         height=payload.height,
         round_id=payload.round_id,
     )
-    return CourseImageOut(
-        id=image.id,
-        url=storage_image_url(settings.course_image_base_url, image.storage_key),
-        alt_text=image.alt_text,
-        source_name=None,
-        source_url=None,
-        license_name=None,
-        license_url=None,
-        position=image.position,
-        is_hero=image.is_hero,
-        source_type=image.source_type,
-        quality_score=image.quality_score,
-        width=image.width,
-        height=image.height,
-        created_at=image.created_at.isoformat() if image.created_at else None,
-        uploaded_by_username=uploader_username(session, image.uploaded_by_user_id),
-        round_id=image.round_id,
-    )
+    return _image_out(session, settings, image)
 
 
 @router.post(

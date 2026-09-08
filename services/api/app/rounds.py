@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from .models import (
     ActivityEvent,
     Comparison,
     Course,
+    CourseImage,
     Follow,
     OnboardingPreference,
     RankingConfidence,
@@ -460,6 +461,7 @@ def update_round(
 @router.delete("/{round_id}", status_code=204)
 def delete_round(
     round_id: int,
+    request: Request,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> Response:
@@ -476,6 +478,14 @@ def delete_round(
         from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 
         _lock_user_for_ranking_update(session, user.id)
+    # Collected before the round row (and its cascading CourseImage rows,
+    # ON DELETE CASCADE) is deleted -- R2 objects are only removed once the
+    # DB delete has actually committed, below.
+    photo_storage_keys = list(session.scalars(
+        select(CourseImage.storage_key).where(
+            CourseImage.round_id == round_.id, CourseImage.storage_key.isnot(None)
+        )
+    ).all())
     _delete_round_activity_event(session, user.id, round_.id)
     session.execute(delete(RoundNote).where(RoundNote.round_id == round_.id))
     session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_.id))
@@ -487,6 +497,10 @@ def delete_round(
     if is_rating_round:
         _stage_snapshot(session, user.id)
     session.commit()
+    storage = getattr(request.app.state, "object_storage", None)
+    if storage is not None:
+        for storage_key in photo_storage_keys:
+            storage.delete_object(storage_key)
     return Response(status_code=204)
 
 

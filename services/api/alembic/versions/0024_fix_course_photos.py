@@ -108,14 +108,16 @@ def upgrade() -> None:
         ).mappings().all()
 
         for idx, row in enumerate(forebay_presidio_images):
-            old_key = row["storage_key"]
-            new_key = old_key.replace(f"courses/{forebay_id}/", f"courses/{presidio_id}/")
+            # storage_key is left untouched -- it's just a pointer into R2, not
+            # derived from course_id, and no R2 object is copied by this
+            # migration. Renaming it to a Presidio-prefixed key here would
+            # point at bytes that were never moved, breaking the served URL
+            # (see storage_image_url, which uses storage_key verbatim).
             connection.execute(
                 course_images.update()
                 .where(course_images.c.id == row["id"])
                 .values(
                     course_id=presidio_id,
-                    storage_key=new_key,
                     alt_text="Presidio Golf Course course photo",
                     source_type="official",
                     moderation_status="approved",
@@ -165,40 +167,49 @@ def upgrade() -> None:
         fleming_id = fleming["id"]
         harding_id = harding["id"]
 
-        existing_harding_image = connection.execute(
-            sa.select(course_images.c.id).where(
-                course_images.c.course_id == harding_id,
-                course_images.c.storage_key == f"courses/{harding_id}/photo-1.jpg",
+        fleming_hero = connection.execute(
+            sa.select(course_images).where(
+                course_images.c.course_id == fleming_id,
+                course_images.c.is_hero.is_(True),
             )
-        ).first()
+        ).mappings().first()
 
-        if existing_harding_image is None:
-            fleming_hero = connection.execute(
-                sa.select(course_images).where(
-                    course_images.c.course_id == fleming_id,
-                    course_images.c.is_hero.is_(True),
+        # Reuse Fleming's actual storage_key rather than fabricating a new
+        # courses/{harding_id}/... key: no R2 object is copied by this
+        # migration, so a fabricated key would point at bytes that don't
+        # exist. storage_key has no per-row uniqueness requirement -- two
+        # rows sharing one physical object (an explicitly shared hero image)
+        # is a supported shape, same as external_url rows sharing a URL.
+        existing_harding_image = (
+            connection.execute(
+                sa.select(course_images.c.id).where(
+                    course_images.c.course_id == harding_id,
+                    course_images.c.storage_key == fleming_hero["storage_key"],
                 )
-            ).mappings().first()
+            ).first()
+            if fleming_hero is not None
+            else None
+        )
 
-            if fleming_hero is not None:
-                connection.execute(
-                    course_images.insert().values(
-                        course_id=harding_id,
-                        storage_key=f"courses/{harding_id}/photo-1.jpg",
-                        alt_text="Tpc Harding Park Harding Course course photo",
-                        source_name=fleming_hero["source_name"],
-                        source_url=fleming_hero["source_url"],
-                        position=0,
-                        is_hero=True,
-                        source_type="official",
-                        moderation_status="approved",
-                    )
+        if existing_harding_image is None and fleming_hero is not None:
+            connection.execute(
+                course_images.insert().values(
+                    course_id=harding_id,
+                    storage_key=fleming_hero["storage_key"],
+                    alt_text="Tpc Harding Park Harding Course course photo",
+                    source_name=fleming_hero["source_name"],
+                    source_url=fleming_hero["source_url"],
+                    position=0,
+                    is_hero=True,
+                    source_type="official",
+                    moderation_status="approved",
                 )
-                connection.execute(
-                    sa.delete(negative_cache).where(
-                        negative_cache.c.course_id == harding_id
-                    )
+            )
+            connection.execute(
+                sa.delete(negative_cache).where(
+                    negative_cache.c.course_id == harding_id
                 )
+            )
 
 
 def downgrade() -> None:

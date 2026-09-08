@@ -5,6 +5,7 @@ from app.main import create_app
 from app.models import (
     ActivityEvent,
     Comparison,
+    CourseImage,
     RankingConfidence,
     RankingSnapshot,
     Round,
@@ -15,6 +16,7 @@ from app.models import (
     UserCourseRating,
     UserCourseState,
 )
+from app.storage import ObjectMeta, ObjectStorage, PresignedUpload
 
 
 ALICE = {"X-Development-Subject": "dev:round-alice"}
@@ -272,6 +274,56 @@ def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
 
     with app.state.session_factory() as session:
         assert session.get(RoundNote, round_id) is None
+
+
+class _FakeObjectStorage(ObjectStorage):
+    def __init__(self) -> None:
+        self.objects: dict[str, ObjectMeta] = {}
+        self.deleted: list[str] = []
+
+    def create_course_photo_upload(self, *, course_id: int, content_type: str, expires_in_seconds: int) -> PresignedUpload | None:
+        raise NotImplementedError
+
+    def head_object(self, storage_key: str) -> ObjectMeta | None:
+        return self.objects.get(storage_key)
+
+    def delete_object(self, storage_key: str) -> None:
+        self.objects.pop(storage_key, None)
+        self.deleted.append(storage_key)
+
+
+def test_deleting_round_removes_its_photos_row_and_r2_object() -> None:
+    """Deleting a round must follow an explicit retention policy for its
+    photos: not just remove the CourseImage row (ON DELETE CASCADE on
+    round_id) but also the R2 object it points at, so the photo doesn't
+    survive round deletion in the bucket."""
+    app = create_app()
+    storage = _FakeObjectStorage()
+    app.state.object_storage = storage
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/rounds", headers=ALICE, json={"course_id": 1, "played_on": "2026-07-01"},
+    )
+    round_id = created.json()["id"]
+    storage_key = "course-photos/1/round-photo.jpg"
+
+    with app.state.session_factory() as session:
+        session.add(CourseImage(
+            course_id=1, storage_key=storage_key, position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=session.scalar(
+                select(User.id).where(User.provider_subject == "dev:round-alice")
+            ),
+            round_id=round_id,
+        ))
+        session.commit()
+        image_id = session.scalar(select(CourseImage.id).where(CourseImage.storage_key == storage_key))
+
+    deleted = client.delete(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    assert deleted.status_code == 204
+
+    with app.state.session_factory() as session:
+        assert session.get(CourseImage, image_id) is None
+    assert storage_key in storage.deleted
 
 
 def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() -> None:

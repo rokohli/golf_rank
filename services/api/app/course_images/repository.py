@@ -135,19 +135,30 @@ class CourseImageRepository:
         ))
         session.commit()
 
+    def find_by_storage_key(self, session: Session, storage_key: str) -> CourseImage | None:
+        return session.scalar(select(CourseImage).where(CourseImage.storage_key == storage_key))
+
     def add_user_image(
         self, session: Session, course_id: int, *,
         storage_key: str, uploaded_by_user_id: int,
         alt_text: str | None = None, width: int | None = None, height: int | None = None,
         round_id: int | None = None,
     ) -> CourseImage:
-        """Persists a user-submitted upload as PENDING -- it's immediately visible
-        in the course's photo gallery (course_image_data doesn't filter on
-        moderation_status), but stays ineligible for resolve_hero_image (via
-        approved_images) until a future moderation step flips moderation_status
-        to APPROVED. round_id, when present, is a separate axis: it makes the
-        photo visible on that round's feed posting
-        immediately, regardless of moderation_status."""
+        """Persists a user-submitted upload as PENDING -- it stays ineligible for
+        both resolve_hero_image (via approved_images) and the course's public
+        gallery (course_image_data) until a future moderation step flips
+        moderation_status to APPROVED. round_id, when present, is a separate
+        axis: it makes the photo visible on that round's feed posting
+        immediately, regardless of moderation_status.
+
+        Idempotent on storage_key (unique, uq_course_image_user_storage_key): a
+        replayed confirm for an already-confirmed key returns the existing
+        row instead of creating a duplicate gallery entry / consuming another
+        round-photo slot. Callers must still verify the existing row's
+        uploaded_by_user_id belongs to the caller."""
+        existing = self.find_by_storage_key(session, storage_key)
+        if existing is not None:
+            return existing
         # next_position() is a plain read-then-write, so two concurrent uploads
         # to the same course can compute the same position and race on
         # uq_course_image_position. Retry with a freshly-read position rather
@@ -173,6 +184,13 @@ class CourseImageRepository:
                 session.commit()
             except IntegrityError:
                 session.rollback()
+                # Either the position collided (retry with a fresh position) or
+                # a concurrent request already confirmed this exact storage_key
+                # (uq_course_image_user_storage_key) -- in that case return the row
+                # it created instead of raising or looping pointlessly.
+                existing = self.find_by_storage_key(session, storage_key)
+                if existing is not None:
+                    return existing
                 if attempt == 2:
                     raise
                 continue

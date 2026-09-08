@@ -1,9 +1,11 @@
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 import app.main as main_module
 from app.main import create_app
-from app.models import DeletedIdentity, User
+from app.models import CourseImage, DeletedIdentity, User
+from app.storage import ObjectMeta, ObjectStorage, PresignedUpload
 
 
 def _onboard(client: TestClient, subject: str, username: str) -> None:
@@ -136,6 +138,54 @@ def test_delete_account_removes_profile_and_dependent_rows() -> None:
         json={"assignments": [{"course_id": 1, "tier": "green", "position": 1}]},
     )
     assert alternate_create.status_code == 410
+
+
+class _FakeObjectStorage(ObjectStorage):
+    def __init__(self) -> None:
+        self.objects: dict[str, ObjectMeta] = {}
+        self.deleted: list[str] = []
+
+    def create_course_photo_upload(self, *, course_id: int, content_type: str, expires_in_seconds: int) -> PresignedUpload | None:
+        raise NotImplementedError
+
+    def head_object(self, storage_key: str) -> ObjectMeta | None:
+        return self.objects.get(storage_key)
+
+    def delete_object(self, storage_key: str) -> None:
+        self.objects.pop(storage_key, None)
+        self.deleted.append(storage_key)
+
+
+def test_delete_account_removes_uploaded_photos_row_and_r2_object() -> None:
+    """A deleted account's uploaded photos must not survive it: another user
+    could otherwise keep reading an ownerless, orphaned photo's metadata or
+    object (uploaded_by_user_id is ON DELETE CASCADE)."""
+    app = create_app()
+    storage = _FakeObjectStorage()
+    app.state.object_storage = storage
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:alice-photos"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={"home_region": "Monterey, CA", "max_green_fee": 250, "difficulty": "any", "access": "any"},
+    )
+    storage_key = "course-photos/1/alice-photo.jpg"
+    with app.state.session_factory() as session:
+        user_id = session.scalar(select(User.id).where(User.provider_subject == "dev:alice-photos"))
+        session.add(CourseImage(
+            course_id=1, storage_key=storage_key, position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=user_id,
+        ))
+        session.commit()
+        image_id = session.scalar(select(CourseImage.id).where(CourseImage.storage_key == storage_key))
+
+    response = client.delete("/api/v1/me", headers=headers)
+    assert response.status_code == 200
+
+    with app.state.session_factory() as session:
+        assert session.get(CourseImage, image_id) is None
+    assert storage_key in storage.deleted
 
 
 def test_delete_account_is_idempotent_when_no_local_account_exists() -> None:
