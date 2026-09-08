@@ -12,6 +12,11 @@ jest.mock('expo-secure-store', () => ({
   setItemAsync: jest.fn().mockResolvedValue(undefined),
 }))
 
+const mockLaunchImageLibraryAsync = jest.fn()
+jest.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
+}))
+
 const pasatiempo: Course = {
   id: 11,
   name: 'Pasatiempo Golf Club',
@@ -132,6 +137,78 @@ describe('OnboardingForm', () => {
     })
 
     jest.useRealTimers()
+  })
+
+  it('picks a profile photo and syncs it via updatePhoto only after the profile save succeeds', async () => {
+    const submit = jest.fn().mockResolvedValue(undefined)
+    const onComplete = jest.fn()
+    const searchCourses = jest.fn().mockResolvedValue([])
+    const saveOrder: string[] = []
+    const saveProfile = jest.fn().mockImplementation(async () => {
+      saveOrder.push('saveProfile')
+    })
+    const updatePhoto = jest.fn().mockImplementation(async () => {
+      saveOrder.push('updatePhoto')
+    })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-avatar.jpg' }],
+    })
+
+    render(
+      <OnboardingForm
+        onComplete={onComplete}
+        saveProfile={saveProfile}
+        searchCourses={searchCourses}
+        submit={submit}
+        updatePhoto={updatePhoto}
+      />,
+    )
+
+    expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
+    fireEvent.press(screen.getByLabelText('Choose profile photo'))
+    expect(await screen.findByLabelText('Selected profile photo')).toBeOnTheScreen()
+
+    fireEvent.changeText(screen.getByLabelText('First Name'), 'Rohan')
+    fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
+    fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(updatePhoto).toHaveBeenCalledWith('file:///picked-avatar.jpg'))
+    expect(saveOrder).toEqual(['saveProfile', 'updatePhoto'])
+  })
+
+  it('reports a photo-sync failure without losing the already-saved profile', async () => {
+    const submit = jest.fn().mockResolvedValue(undefined)
+    const searchCourses = jest.fn().mockResolvedValue([])
+    const saveProfile = jest.fn().mockResolvedValue(undefined)
+    const updatePhoto = jest.fn().mockRejectedValue(new Error('Upload failed'))
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-avatar.jpg' }],
+    })
+
+    render(
+      <OnboardingForm
+        onComplete={jest.fn()}
+        saveProfile={saveProfile}
+        searchCourses={searchCourses}
+        submit={submit}
+        updatePhoto={updatePhoto}
+      />,
+    )
+
+    expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
+    fireEvent.press(screen.getByLabelText('Choose profile photo'))
+    await screen.findByLabelText('Selected profile photo')
+
+    fireEvent.changeText(screen.getByLabelText('First Name'), 'Rohan')
+    fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
+    fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText('Upload failed')).toBeOnTheScreen()
+    expect(saveProfile).toHaveBeenCalled()
   })
 })
 

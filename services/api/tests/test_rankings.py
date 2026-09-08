@@ -3,7 +3,17 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, Follow, OnboardingPreference, Profile, RankingSnapshot, User, UserBlock
+from app.models import (
+    Course,
+    CourseImage,
+    CourseImageSource,
+    Follow,
+    OnboardingPreference,
+    Profile,
+    RankingSnapshot,
+    User,
+    UserBlock,
+)
 
 
 HEADERS = {"X-Development-Subject": "dev:ranker"}
@@ -65,6 +75,7 @@ def test_ranking_snapshots_include_current_attributed_course_images() -> None:
             source_url="https://golfrank.example/photos/ranked-course",
             position=0,
             is_hero=True,
+            source_type=CourseImageSource.OFFICIAL,
         ))
         session.commit()
 
@@ -85,10 +96,12 @@ def test_ranking_snapshots_include_current_attributed_course_images() -> None:
         "license_url": None,
         "position": 0,
         "is_hero": True,
-        "source_type": "wikimedia",
+        "source_type": "official",
         "quality_score": None,
         "width": None,
         "height": None,
+        "uploaded_by_username": None,
+        "round_id": None,
     }
 
     def _images_without_created_at(payload: dict) -> list[dict]:

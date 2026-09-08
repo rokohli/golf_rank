@@ -1,7 +1,7 @@
 from collections.abc import Collection
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..models import CourseImage, CourseImageModeration, CourseImageNegativeCache, CourseImageSource
@@ -133,6 +133,42 @@ class CourseImageRepository:
             height=height,
         ))
         session.commit()
+
+    def add_user_image(
+        self, session: Session, course_id: int, *,
+        storage_key: str, uploaded_by_user_id: int,
+        alt_text: str | None = None, width: int | None = None, height: int | None = None,
+        round_id: int | None = None,
+    ) -> CourseImage:
+        """Persists a user-submitted upload as PENDING -- it's immediately visible
+        in the course's photo gallery (course_image_data doesn't filter on
+        moderation_status), but stays ineligible for resolve_hero_image (via
+        approved_images) until a future moderation step flips moderation_status
+        to APPROVED. round_id, when present, is a separate axis: it makes the
+        photo visible on that round's feed posting
+        immediately, regardless of moderation_status."""
+        image = CourseImage(
+            course_id=course_id,
+            storage_key=storage_key,
+            alt_text=alt_text,
+            position=self.next_position(session, course_id),
+            is_hero=False,
+            source_type=CourseImageSource.USER,
+            moderation_status=CourseImageModeration.PENDING,
+            uploaded_by_user_id=uploaded_by_user_id,
+            width=width,
+            height=height,
+            round_id=round_id,
+        )
+        session.add(image)
+        session.commit()
+        session.refresh(image)
+        return image
+
+    def count_for_round(self, session: Session, round_id: int) -> int:
+        return session.scalar(
+            select(func.count()).select_from(CourseImage).where(CourseImage.round_id == round_id)
+        ) or 0
 
     def get_negative_cache(self, session: Session, course_id: int, provider: str) -> CourseImageNegativeCache | None:
         row = session.scalar(

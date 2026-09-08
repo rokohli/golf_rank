@@ -8,7 +8,16 @@ from sqlalchemy.orm import Session, object_session
 
 from .core.auth import CurrentUser
 from .course_images.repository import _rank_key
-from .models import Course, CourseImage, CourseImageModeration, CourseReconciliation, DeletedIdentity, User
+from .models import (
+    Course,
+    CourseImage,
+    CourseImageModeration,
+    CourseImageSource,
+    CourseReconciliation,
+    DeletedIdentity,
+    Profile,
+    User,
+)
 
 
 def lock_identity_transaction(session: Session, provider_subject: str) -> None:
@@ -145,10 +154,9 @@ def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -
 
 def course_card_hero_data(course: Course) -> dict:
     """Cheap, read-only mirror of CourseImageService.resolve_hero_image()'s
-    OFFICIAL/USER/WIKIMEDIA/SATELLITE ordering for list/search payloads, which
-    are rendered from already-loaded rows and can't afford one Wikimedia
-    lookup + lock per card. Any change to that priority order or to satellite
-    eligibility must be mirrored here."""
+    OFFICIAL/USER/WIKIMEDIA ordering for list/search payloads, which are
+    rendered from already-loaded rows and can't afford one Wikimedia lookup +
+    lock per card. Any change to that priority order must be mirrored here."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     positive_ttl = (
@@ -185,14 +193,6 @@ def course_card_hero_data(course: Course) -> dict:
     if wikimedias and not is_wikimedia_negative_cached(course):
         best_img, best_url = min(wikimedias, key=lambda pair: _rank_key(pair[0]))
         return _hero_dict("WIKIMEDIA", best_img, best_url, course.name)
-
-    if session is not None:
-        satellite_provider = session.info.get("satellite_provider")
-        satellite_options = session.info.get("satellite_options")
-        if satellite_provider is not None and satellite_options is not None:
-            satellite = satellite_provider.get_course_image(course, satellite_options)
-            if satellite is not None:
-                return satellite.to_dict()
 
     return {
         "type": "NONE",
@@ -236,12 +236,25 @@ def course_data(course: Course) -> dict:
     }
 
 
+def uploader_username(session: Session | None, uploaded_by_user_id: int | None) -> str | None:
+    if session is None or uploaded_by_user_id is None:
+        return None
+    profile = session.get(Profile, uploaded_by_user_id)
+    return profile.username if profile else None
+
+
 def course_image_data(course: Course) -> list[dict]:
+    """All of a course's photos, regardless of moderation_status -- moderation
+    only gates hero-image eligibility (see CourseImageRepository.approved_images,
+    used independently by CourseImageService.resolve_hero_image), never whether
+    a photo appears in the course's own gallery. Wikimedia is excluded here: it
+    only ever serves as a hero-image fallback (CourseImageService._resolve),
+    never as a gallery photo."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     output = []
     for image in course.images:
-        if image.moderation_status != CourseImageModeration.APPROVED:
+        if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:
@@ -261,6 +274,7 @@ def course_image_data(course: Course) -> list[dict]:
             "width": image.width,
             "height": image.height,
             "created_at": image.created_at.isoformat() if image.created_at else None,
+            "uploaded_by_username": uploader_username(session, image.uploaded_by_user_id),
         })
     return output
 
@@ -269,3 +283,37 @@ def storage_image_url(base_url: str | None, storage_key: str | None) -> str | No
     if not base_url or not storage_key:
         return None
     return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"
+
+
+def round_image_data(session: Session, round_id: int) -> list[dict]:
+    """Photos submitted with a specific round, regardless of moderation_status --
+    moderation only gates hero-image/course-gallery eligibility (course_image_data
+    above), never a user's own round posting."""
+    image_base_url = session.info.get("course_image_base_url")
+    images = session.scalars(
+        select(CourseImage).where(CourseImage.round_id == round_id).order_by(CourseImage.position)
+    ).all()
+    output = []
+    for image in images:
+        url = image.external_url or storage_image_url(image_base_url, image.storage_key)
+        if url is None:
+            continue
+        output.append({
+            "id": image.id,
+            "url": url,
+            "alt_text": image.alt_text,
+            "source_name": image.source_name,
+            "source_url": image.source_url,
+            "license_name": image.license_name,
+            "license_url": image.license_url,
+            "position": image.position,
+            "is_hero": image.is_hero,
+            "source_type": image.source_type,
+            "quality_score": image.quality_score,
+            "width": image.width,
+            "height": image.height,
+            "created_at": image.created_at.isoformat() if image.created_at else None,
+            "uploaded_by_username": uploader_username(session, image.uploaded_by_user_id),
+            "round_id": image.round_id,
+        })
+    return output

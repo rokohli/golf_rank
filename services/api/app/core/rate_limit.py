@@ -291,6 +291,36 @@ async def candidate_rate_limit(
     apply_rate_limit(response, quota)
 
 
+async def photo_upload_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    settings = request.app.state.settings
+    policy = RateLimitPolicy(
+        "course-photo-upload",
+        settings.photo_upload_rate_limit_capacity,
+        settings.photo_upload_rate_limit_refill_per_second,
+    )
+    for identity_type, identity in (
+        ("user", user.provider_subject),
+        ("ip", client_ip(request, settings)),
+    ):
+        decision = await request.app.state.rate_limiter.token_bucket(
+            policy=policy,
+            identity_type=identity_type,
+            identity=identity,
+        )
+        apply_rate_limit(response, decision)
+    quota = await request.app.state.rate_limiter.daily_quota(
+        name="course-photo-upload",
+        limit=settings.photo_upload_daily_quota,
+        identity_type="user",
+        identity=user.provider_subject,
+    )
+    apply_rate_limit(response, quota)
+
+
 async def ai_planner_rate_limit(
     request: Request,
     response: Response,

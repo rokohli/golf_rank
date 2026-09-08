@@ -132,6 +132,16 @@ def test_round_rejects_future_dates_and_unrealistic_scores() -> None:
         json={"course_id": 1, "played_on": "2099-01-01", "score": 12},
     )
     assert response.status_code == 422
+    assert client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 19},
+    ).status_code == 422
+    assert client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 201},
+    ).status_code == 422
 
 
 def test_repeated_course_visits_are_distinct_and_summary_and_filters_are_derived() -> None:

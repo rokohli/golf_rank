@@ -81,7 +81,7 @@ class ContactLinkStatusOut(BaseModel):
 
 
 class CourseHeroImageOut(BaseModel):
-    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "SATELLITE", "NONE"]
+    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
     url: str | None = None
     thumbnail_url: str | None = None
     attribution: str | None = None
@@ -108,6 +108,33 @@ class CourseImageOut(BaseModel):
     width: int | None = None
     height: int | None = None
     created_at: str | None = None
+    uploaded_by_username: str | None = None
+    round_id: int | None = None
+
+
+class CoursePhotoUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+
+
+class CoursePhotoUploadResponse(BaseModel):
+    upload_url: str
+    storage_key: str
+    content_type: str
+    expires_in_seconds: int
+
+
+class CoursePhotoConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    storage_key: str = Field(min_length=1, max_length=1024)
+    # Client-reported, non-authoritative hints only (aspect-ratio ranking display) --
+    # never trusted for size/type/security decisions, those come from storage.head_object.
+    width: int | None = Field(default=None, gt=0, le=20000)
+    height: int | None = Field(default=None, gt=0, le=20000)
+    # Links this photo to the round it was submitted with, so it shows on that
+    # round's feed posting regardless of moderation_status. Ownership (belongs
+    # to the current user, matches course_id) is verified server-side.
+    round_id: int | None = Field(default=None, gt=0)
 
 
 class CourseOut(BaseModel):
@@ -148,7 +175,7 @@ ComparisonResult = Literal["course_a", "course_b", "too_close"]
 class CourseRatingIn(BaseModel):
     tier: RankingTier
     played_on: date
-    score: int | None = Field(default=None, ge=40, le=250)
+    score: int | None = Field(default=None, ge=20, le=200)
     comparison_course_id: int | None = Field(default=None, gt=0)
     comparison_result: ComparisonResult | None = None
 
@@ -194,6 +221,7 @@ class RatingRoundOut(BaseModel):
     note: str | None
     favorite_hole: int | None
     visibility: Literal["private", "friends"]
+    photos: list[CourseImageOut] = Field(default_factory=list)
 
 
 class RatingCompanionOut(BaseModel):

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
 from .core.config import Settings
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, require_course, require_user, round_image_data, stored_user
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -384,6 +384,7 @@ def _activity_data(session: Session, event: ActivityEvent) -> dict:
         data["note"] = note.body
     if round_.favorite_hole is not None:
         data["favorite_hole"] = round_.favorite_hole
+    data["photos"] = round_image_data(session, round_.id)
     return data
 
 

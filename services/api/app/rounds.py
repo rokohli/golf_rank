@@ -36,7 +36,7 @@ class RoundIn(BaseModel):
 
     course_id: int = Field(gt=0)
     played_on: date
-    score: int | None = Field(default=None, ge=40, le=250)
+    score: int | None = Field(default=None, ge=20, le=200)
     note: str | None = Field(default=None, max_length=5000)
     favorite_hole: int | None = Field(default=None, ge=1, le=18)
     friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
@@ -64,7 +64,7 @@ class RoundPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     played_on: date | None = None
-    score: int | None = Field(default=None, ge=40, le=250)
+    score: int | None = Field(default=None, ge=20, le=200)
     note: str | None = Field(default=None, max_length=5000)
     favorite_hole: int | None = Field(default=None, ge=1, le=18)
     friend_user_ids: list[int] | None = Field(default=None, max_length=40)

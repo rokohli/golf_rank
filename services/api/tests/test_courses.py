@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, CourseImageModeration, CourseReconciliation
+from app.models import Course, CourseImage, CourseImageModeration, CourseImageSource, CourseReconciliation
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -97,6 +97,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
                 license_url="https://creativecommons.org/licenses/by-sa/4.0/",
                 position=0,
                 is_hero=True,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
@@ -105,6 +106,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
                 source_name="GolfRank photographer",
                 source_url="https://golfrank.example/photos/pebble-green",
                 position=1,
+                source_type=CourseImageSource.OFFICIAL,
             ),
         ])
         session.commit()
@@ -127,10 +129,12 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
             "position": 0,
             "is_hero": True,
-            "source_type": "wikimedia",
+            "source_type": "official",
             "quality_score": None,
             "width": None,
             "height": None,
+            "uploaded_by_username": None,
+            "round_id": None,
         },
         {
             "id": 2,
@@ -142,10 +146,12 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": None,
             "position": 1,
             "is_hero": False,
-            "source_type": "wikimedia",
+            "source_type": "official",
             "quality_score": None,
             "width": None,
             "height": None,
+            "uploaded_by_username": None,
+            "round_id": None,
         },
     ]
 
@@ -165,7 +171,10 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert _without_created_at(pebble_response.json()["images"]) == expected_images
 
 
-def test_course_detail_hides_non_approved_images() -> None:
+def test_course_gallery_includes_images_regardless_of_moderation_status() -> None:
+    """Moderation gates hero-image eligibility only (see resolve_hero_image /
+    CourseImageRepository.approved_images) -- it never hides a photo from the
+    course's own gallery, at any moderation_status."""
     app = create_app(Settings())
     with app.state.session_factory() as session:
         pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
@@ -176,18 +185,21 @@ def test_course_detail_hides_non_approved_images() -> None:
                 position=0,
                 is_hero=True,
                 moderation_status=CourseImageModeration.APPROVED,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
                 external_url="https://images.example/pending.jpg",
                 position=1,
                 moderation_status=CourseImageModeration.PENDING,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
                 external_url="https://images.example/rejected.jpg",
                 position=2,
                 moderation_status=CourseImageModeration.REJECTED,
+                source_type=CourseImageSource.OFFICIAL,
             ),
         ])
         session.commit()
@@ -195,8 +207,42 @@ def test_course_detail_hides_non_approved_images() -> None:
 
     listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
 
-    urls = [image["url"] for image in listed_pebble["images"]]
-    assert urls == ["https://images.example/approved.jpg"]
+    urls = {image["url"] for image in listed_pebble["images"]}
+    assert urls == {
+        "https://images.example/approved.jpg",
+        "https://images.example/pending.jpg",
+        "https://images.example/rejected.jpg",
+    }
+
+
+def test_course_gallery_excludes_wikimedia_images() -> None:
+    """Wikimedia only ever serves as a hero-image fallback (CourseImageService
+    ._resolve) -- it must never surface as a gallery photo."""
+    app = create_app(Settings())
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/official.jpg",
+                position=0,
+                is_hero=True,
+                source_type=CourseImageSource.OFFICIAL,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/wikimedia.jpg",
+                position=1,
+                source_type=CourseImageSource.WIKIMEDIA,
+            ),
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+
+    urls = {image["url"] for image in listed_pebble["images"]}
+    assert urls == {"https://images.example/official.jpg"}
 
 
 def test_course_detail_returns_not_found_for_unknown_id() -> None:

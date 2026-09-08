@@ -3,10 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native'
 
 import {
+  confirmCoursePhotoUpload,
   getRatingCandidate,
   saveCourseRating,
   saveRatingDetails,
 } from '../../src/api/client'
+import { startCoursePhotoUpload } from '../../src/api/coursePhotoUpload'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { RatingFlow } from '../../src/components/RatingFlow'
 import { loadRatingBootstrap } from '../../src/rating/loadRatingBootstrap'
@@ -93,6 +95,14 @@ export default function RateCourseRoute() {
       saveRating={async (input) => {
         const headers = await getAuthHeaders()
         return saveCourseRating(courseId, input, headers)
+      }}
+      startPhotoUpload={async (imageUri, contentType) => {
+        const headers = await getAuthHeaders()
+        return startCoursePhotoUpload(courseId, imageUri, contentType, headers)
+      }}
+      confirmPhotoUpload={async (storageKey, roundId, dimensions) => {
+        const headers = await getAuthHeaders()
+        return confirmCoursePhotoUpload(courseId, storageKey, headers, dimensions, roundId)
       }}
     />
   </>

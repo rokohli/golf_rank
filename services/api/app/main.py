@@ -22,8 +22,8 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
-from .course_images.providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider
 from .course_images.service import CourseImageService
+from .course_photo_uploads import router as course_photo_uploads_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
@@ -75,6 +75,7 @@ from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut, normalize_username
 from .seed import seed_test_courses
 from .social import notify_linked_contacts, router as social_router
+from .storage import build_object_storage
 
 
 logger = logging.getLogger("golfrank.catalog")
@@ -120,16 +121,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = rate_limiter
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
     app.state.course_image_service = CourseImageService(settings=settings)
+    app.state.object_storage = build_object_storage(settings)
     app.state.session_factory = make_session_factory(
         engine,
         course_image_base_url=settings.course_image_base_url,
-        satellite_provider=MapboxSatelliteImageProvider(access_token=settings.mapbox_access_token),
-        satellite_options=MapboxOptions(
-            width=settings.mapbox_static_image_width,
-            height=settings.mapbox_static_image_height,
-            zoom=settings.mapbox_static_image_zoom,
-            pixel_ratio=settings.mapbox_static_image_pixel_ratio,
-        ),
         wikimedia_cache_positive_ttl_seconds=settings.wikimedia_cache_positive_ttl_seconds,
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
@@ -139,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(course_state_router, dependencies=authenticated_dependencies)
     app.include_router(social_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
+    app.include_router(course_photo_uploads_router)
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
 

@@ -22,7 +22,15 @@
         {
           "locationWhenInUsePermission": "Allow GolfRank to use your location to find nearby golf courses."
         }
-      ]
-    ]
+      ],
+      "./plugins/withFmtConstevalFix.js"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ec870bc1-2bcd-42ea-bbf2-a55b0577d064"
+      }
+    },
+    "owner": "rokohli"
   }
 }

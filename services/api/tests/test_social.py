@@ -128,6 +128,7 @@ def test_feed_includes_shared_round_note_and_favorite_hole() -> None:
         "favorite_hole": 7,
         "rating": 9.2,
         "tier": "green",
+        "photos": [],
     }
 
     # Older events did not persist these optional fields. The feed must still

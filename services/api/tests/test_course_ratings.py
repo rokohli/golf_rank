@@ -340,7 +340,10 @@ def test_rating_validates_future_date_score_and_comparison_pair() -> None:
         "/api/v1/me/course-ratings/1", headers=ALICE, json=_rating(played_on=future)
     ).status_code == 422
     assert client.put(
-        "/api/v1/me/course-ratings/1", headers=ALICE, json=_rating(score=39)
+        "/api/v1/me/course-ratings/1", headers=ALICE, json=_rating(score=19)
+    ).status_code == 422
+    assert client.put(
+        "/api/v1/me/course-ratings/1", headers=ALICE, json=_rating(score=201)
     ).status_code == 422
     assert client.put(
         "/api/v1/me/course-ratings/1",

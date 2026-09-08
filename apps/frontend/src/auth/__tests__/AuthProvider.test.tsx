@@ -1,23 +1,40 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
-import { Text } from 'react-native'
+import { Pressable, Text } from 'react-native'
 
-import { AuthProvider } from '../AuthProvider'
+import { AuthProvider, useAuthGate } from '../AuthProvider'
 
 const mockStartSSOFlow = jest.fn()
 const mockSetActive = jest.fn()
 const mockSignInCreate = jest.fn()
 const mockAttemptFirstFactor = jest.fn()
+const mockPrepareFirstFactor = jest.fn()
+const mockAttemptSecondFactor = jest.fn()
+const mockPrepareSecondFactor = jest.fn()
 const mockResetPassword = jest.fn()
 const mockSignUpCreate = jest.fn()
+const mockSetProfileImage = jest.fn()
+const mockReadAsStringAsync = jest.fn()
 let mockUrlListener: ((event: { url: string }) => void) | null = null
+let mockUser: {
+  firstName: string
+  hasImage: boolean
+  imageUrl: string
+  phoneNumbers: { verification: { status: string } }[]
+  setProfileImage: jest.Mock
+} | null = null
 
 jest.mock('@clerk/expo', () => ({
   ClerkProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Show: ({ children, when }: { children: React.ReactNode; when: string }) =>
-    when === 'signed-out' ? <>{children}</> : null,
+    when === (mockUser ? 'signed-in' : 'signed-out') ? <>{children}</> : null,
   useAuth: () => ({ signOut: jest.fn() }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
-  useUser: () => ({ isLoaded: true, isSignedIn: false, user: null }),
+  useUser: () => ({ isLoaded: true, isSignedIn: mockUser !== null, user: mockUser }),
+}))
+
+jest.mock('expo-file-system', () => ({
+  EncodingType: { Base64: 'base64' },
+  readAsStringAsync: (...args: unknown[]) => mockReadAsStringAsync(...args),
 }))
 
 jest.mock('@clerk/expo/legacy', () => ({
@@ -26,7 +43,10 @@ jest.mock('@clerk/expo/legacy', () => ({
     setActive: mockSetActive,
     signIn: {
       attemptFirstFactor: mockAttemptFirstFactor,
+      attemptSecondFactor: mockAttemptSecondFactor,
       create: mockSignInCreate,
+      prepareFirstFactor: mockPrepareFirstFactor,
+      prepareSecondFactor: mockPrepareSecondFactor,
       resetPassword: mockResetPassword,
     },
   }),
@@ -78,10 +98,49 @@ describe('AuthProvider', () => {
   const originalPublishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY
 
   afterEach(() => {
-    process.env.EXPO_PUBLIC_AUTH_MODE = originalAuthMode
-    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = originalPublishableKey
+    // `process.env.X = undefined` coerces to the string "undefined" in Node,
+    // not deletion -- restoring an originally-unset var this way leaves a
+    // truthy value behind for later tests.
+    if (originalAuthMode === undefined) delete process.env.EXPO_PUBLIC_AUTH_MODE
+    else process.env.EXPO_PUBLIC_AUTH_MODE = originalAuthMode
+    if (originalPublishableKey === undefined) delete process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY
+    else process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = originalPublishableKey
     mockUrlListener = null
+    mockUser = null
     jest.clearAllMocks()
+  })
+
+  it('converts a picked local file to a base64 data URI before handing it to Clerk', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockReadAsStringAsync.mockResolvedValue('ZmFrZWJhc2U2NA==')
+
+    function ProfileImageProbe() {
+      const { updateProfileImage } = useAuthGate()
+      return (
+        <Pressable onPress={() => void updateProfileImage('file:///picked-photo.jpg')}>
+          <Text>Update photo</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <ProfileImageProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Update photo'))
+
+    await waitFor(() => expect(mockReadAsStringAsync).toHaveBeenCalledWith('file:///picked-photo.jpg', { encoding: 'base64' }))
+    expect(mockSetProfileImage).toHaveBeenCalledWith({ file: 'data:image/jpeg;base64,ZmFrZWJhc2U2NA==' })
   })
 
   it('does not support admin-development as a no-Clerk auth mode', () => {
@@ -317,6 +376,102 @@ describe('AuthProvider', () => {
         strategy: 'password',
       })
       expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_123' })
+    })
+  })
+
+  it('completes sign-in with an emailed verification code when Clerk requires a first factor', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockSignInCreate.mockResolvedValue({
+      status: 'needs_first_factor',
+      supportedFirstFactors: [{ emailAddressId: 'idn_email_1', strategy: 'email_code' }],
+    })
+    mockPrepareFirstFactor.mockResolvedValue({ status: 'needs_first_factor' })
+    mockAttemptFirstFactor.mockResolvedValue({ createdSessionId: 'sess_verified', status: 'complete' })
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+    fireEvent.changeText(screen.getByLabelText('Email or Username'), 'rohan@example.com')
+    fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
+    fireEvent.press(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByLabelText('Enter the code sent to your email')).toBeOnTheScreen()
+    await waitFor(() => expect(mockPrepareFirstFactor).toHaveBeenCalledWith({ strategy: 'email_code', emailAddressId: 'idn_email_1' }))
+
+    fireEvent.changeText(screen.getByLabelText('Enter the code sent to your email'), '654321')
+    fireEvent.press(screen.getByRole('button', { name: 'Verify Code' }))
+
+    await waitFor(() => {
+      expect(mockAttemptFirstFactor).toHaveBeenCalledWith({ strategy: 'email_code', code: '654321' })
+      expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_verified' })
+    })
+  })
+
+  it('retries password as a pending first factor when create() leaves it unvalidated', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockSignInCreate.mockResolvedValue({
+      status: 'needs_first_factor',
+      supportedFirstFactors: [{ strategy: 'password' }, { strategy: 'reset_password_phone_code' }],
+    })
+    mockAttemptFirstFactor.mockResolvedValue({ createdSessionId: 'sess_password_retry', status: 'complete' })
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+    fireEvent.changeText(screen.getByLabelText('Email or Username'), 'rohan@example.com')
+    fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
+    fireEvent.press(screen.getByRole('button', { name: 'Sign In' }))
+
+    await waitFor(() => {
+      expect(mockAttemptFirstFactor).toHaveBeenCalledWith({ strategy: 'password', password: 'correct horse battery staple' })
+      expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_password_retry' })
+    })
+  })
+
+  it('completes sign-in through Clerk Device Trust when signing in from an unrecognized device', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockSignInCreate.mockResolvedValue({
+      status: 'needs_client_trust',
+      supportedFirstFactors: [],
+      supportedSecondFactors: [{ phoneNumberId: 'idn_phone_1', strategy: 'phone_code' }],
+    })
+    mockPrepareSecondFactor.mockResolvedValue({ status: 'needs_client_trust' })
+    mockAttemptSecondFactor.mockResolvedValue({ createdSessionId: 'sess_trusted', status: 'complete' })
+
+    render(
+      <AuthProvider>
+        <Text>Onboarding form</Text>
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByRole('button', { name: 'Log In' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with Email' }))
+    fireEvent.changeText(screen.getByLabelText('Email or Username'), 'rohan@example.com')
+    fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse battery staple')
+    fireEvent.press(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByLabelText('Enter the code sent to your phone to verify this device')).toBeOnTheScreen()
+    await waitFor(() => expect(mockPrepareSecondFactor).toHaveBeenCalledWith({ strategy: 'phone_code', phoneNumberId: 'idn_phone_1' }))
+
+    fireEvent.changeText(screen.getByLabelText('Enter the code sent to your phone to verify this device'), '112233')
+    fireEvent.press(screen.getByRole('button', { name: 'Verify Code' }))
+
+    await waitFor(() => {
+      expect(mockAttemptSecondFactor).toHaveBeenCalledWith({ strategy: 'phone_code', code: '112233' })
+      expect(mockSetActive).toHaveBeenCalledWith({ session: 'sess_trusted' })
     })
   })
 

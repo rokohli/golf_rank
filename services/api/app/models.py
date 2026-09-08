@@ -152,6 +152,13 @@ class CourseImage(Base):
     uploaded_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Set only for USER-sourced photos submitted from the rating flow's "About the
+    # round" step -- lets the feed show a round's own photos regardless of
+    # moderation_status (hero-image moderation is a separate concern from a
+    # user's right to see their own round posting's photos).
+    round_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rounds.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -16,6 +16,8 @@ const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
   Authorization: 'Bearer test-token',
 })
+const mockLaunchImageLibraryAsync = jest.fn()
+const mockUploadCoursePhoto = jest.fn()
 const mockPush = jest.fn()
 const mockRouter = { back: jest.fn(), push: mockPush }
 const mockShare = jest.spyOn(Share, 'share')
@@ -57,6 +59,15 @@ jest.mock('../../../src/api/client', () => ({
   removeCourseFromList: (...args: unknown[]) => mockRemoveCourseFromList(...args),
   saveCourseToList: (...args: unknown[]) => mockSaveCourseToList(...args),
   updateRound: (...args: unknown[]) => mockUpdateRound(...args),
+}))
+
+jest.mock('../../../src/api/coursePhotoUpload', () => ({
+  contentTypeForAsset: jest.requireActual('../../../src/api/coursePhotoUpload').contentTypeForAsset,
+  uploadCoursePhoto: (...args: unknown[]) => mockUploadCoursePhoto(...args),
+}))
+
+jest.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
 }))
 
 jest.mock('../../../src/auth/useAuthToken', () => ({
@@ -168,7 +179,6 @@ describe('course detail ratings', () => {
     expect(screen.getByRole('button', { name: 'Score, 79' })).toBeOnTheScreen()
     expect(screen.getByRole('button', { name: 'Notes, Added' })).toBeOnTheScreen()
     expect(screen.getByRole('button', { name: 'Favorite hole, Hole 16' })).toBeOnTheScreen()
-    expect(screen.getByLabelText('Add photos, coming soon')).toBeOnTheScreen()
     expect(screen.queryByText('Fast greens.')).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Score, 79' }))
@@ -185,7 +195,6 @@ describe('course detail ratings', () => {
     fireEvent.changeText(screen.getByLabelText('Edit favorite hole'), '7')
     fireEvent.press(screen.getByRole('button', { name: 'Save favorite hole' }))
     await waitFor(() => expect(mockUpdateRound).toHaveBeenCalledWith(42, { favorite_hole: 7 }, expect.any(Object)))
-    expect(screen.queryByRole('button', { name: /Add photos/ })).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends’ thoughts & details' }))
     expect(screen.getByText('No friends have rated this course yet.')).toBeOnTheScreen()
@@ -278,6 +287,91 @@ describe('course detail ratings', () => {
     expect(await screen.findByText('No course photos yet.')).toBeOnTheScreen()
     expect(screen.getByLabelText('Test Links course header')).toBeOnTheScreen()
     expect(screen.queryByLabelText('Test Links course photo')).toBeNull()
+  })
+
+  it('shows no source/license credit line for a user-submitted photo', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      images: [{
+        id: 8,
+        url: 'https://images.example/user-photo.jpg',
+        alt_text: 'User-submitted photo of Test Links',
+        source_name: null,
+        source_url: null,
+        source_type: 'user',
+        uploaded_by_username: 'golfer_jane',
+        position: 0,
+        is_hero: false,
+      }],
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByLabelText('User-submitted photo of Test Links')).toBeOnTheScreen()
+    expect(screen.queryByText('Uploaded by @golfer_jane')).toBeNull()
+    expect(screen.queryByRole('link', { name: /Open source for photo/ })).toBeNull()
+  })
+
+  it('shows a View all link once there are more photos than the inline preview', async () => {
+    const images = Array.from({ length: 7 }, (_, index) => ({
+      id: index + 1,
+      url: `https://images.example/${index + 1}.jpg`,
+      alt_text: `Photo ${index + 1}`,
+      source_name: 'Photographer',
+      source_url: 'https://images.example/license',
+      position: index,
+      is_hero: index === 0,
+    }))
+    mockGetCourse.mockResolvedValue({ ...course, images })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByLabelText('Photo 1')).toBeOnTheScreen()
+    const viewAll = screen.getByText('View all')
+    fireEvent.press(viewAll)
+    expect(mockPush).toHaveBeenCalledWith('/course/7/photos')
+  })
+
+  it('uploads a picked photo and shows a submitted confirmation', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, images: [] })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg', width: 1600, height: 1200 }],
+    })
+    mockUploadCoursePhoto.mockResolvedValue({ id: 99, source_type: 'user' })
+
+    render(<CourseDetail />)
+    await screen.findByText('No course photos yet.')
+    fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
+
+    fireEvent.press(screen.getByLabelText('Add photos'))
+
+    await waitFor(() => expect(mockUploadCoursePhoto).toHaveBeenCalledWith(
+      7,
+      'file:///picked-photo.jpg',
+      'image/jpeg',
+      expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      { width: 1600, height: 1200 },
+    ))
+    expect(await screen.findByText('Photo added')).toBeOnTheScreen()
+  })
+
+  it('shows a retry-able error when the upload fails', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, images: [] })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    mockUploadCoursePhoto.mockRejectedValue(new Error('Too many requests'))
+
+    render(<CourseDetail />)
+    await screen.findByText('No course photos yet.')
+    fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
+
+    fireEvent.press(screen.getByLabelText('Add photos'))
+
+    expect(await screen.findByText('Too many requests')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Add photos')).toBeOnTheScreen()
   })
 
   it('shows only known backend facts and does not invent course access', async () => {

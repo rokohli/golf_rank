@@ -1,9 +1,6 @@
-from datetime import datetime, timedelta, timezone
-
 import pytest
 from sqlalchemy.orm import Session
 
-from app.course_images.providers.mapbox import MapboxOptions
 from app.course_images.providers.wikimedia import WikimediaLookup
 from app.course_images.repository import CourseImageRepository
 from app.course_images.service import CourseImageService
@@ -61,36 +58,14 @@ class FakeWikimediaProvider:
         return self._lookup
 
 
-class FakeSatelliteProvider:
-    def __init__(self, result: CourseImageResult | None = None, error: Exception | None = None):
-        self._result = result
-        self._error = error
-        self.calls: list = []
-
-    def get_course_image(self, course, options: MapboxOptions):
-        self.calls.append((course, options))
-        if self._error:
-            raise self._error
-        return self._result
-
-
-def make_service(session: Session, *, wikimedia=None, satellite=None, positive_ttl_seconds=None) -> CourseImageService:
+def make_service(session: Session, *, wikimedia=None, positive_ttl_seconds=None) -> CourseImageService:
     return CourseImageService(
         settings=Settings(
-            mapbox_access_token="pk.test", wikimedia_live_lookup_enabled=True,
+            wikimedia_live_lookup_enabled=True,
             **({"wikimedia_cache_positive_ttl_seconds": positive_ttl_seconds} if positive_ttl_seconds is not None else {}),
         ),
         repository=CourseImageRepository(),
         wikimedia_provider=wikimedia or FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None)),
-        satellite_provider=satellite or FakeSatelliteProvider(),
-    )
-
-
-def satellite_result(course_name: str) -> CourseImageResult:
-    return CourseImageResult(
-        type="SATELLITE", url="https://api.mapbox.com/x.png", thumbnail_url=None, attribution="Mapbox",
-        license=None, license_url=None, source_url=None, alt_text=f"Aerial view of {course_name}",
-        width=1280, height=640,
     )
 
 
@@ -114,14 +89,11 @@ def test_official_overrides_everything(session):
     course = make_course(session)
     add_image(session, course, source_type=CourseImageSource.USER, is_hero=True)
     add_image(session, course, source_type=CourseImageSource.OFFICIAL, external_url="https://example.com/official.jpg")
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
-    service = make_service(session, satellite=satellite)
 
-    result = service.resolve_hero_image(session, course)
+    result = make_service(session).resolve_hero_image(session, course)
 
     assert result.type == "OFFICIAL"
     assert result.url == "https://example.com/official.jpg"
-    assert satellite.calls == []  # 10. Mapbox is NOT called if a higher-priority image exists
 
 
 # 2. approved user photo is used when there is no official image
@@ -189,63 +161,34 @@ def test_cached_wikimedia_avoids_new_request(session):
     assert wikimedia.calls == 0
 
 
-# 8. low-confidence Wikimedia result is rejected
-def test_low_confidence_wikimedia_rejected_falls_to_satellite(session):
+# 8. low-confidence Wikimedia result is rejected and the resolver falls to NONE
+def test_low_confidence_wikimedia_rejected_falls_to_none(session):
     course = make_course(session)
     photo = ExternalPhoto(url="x", source_name="?", source_url="y", width=400, height=300)
     wikimedia = FakeWikimediaProvider(lookup=WikimediaLookup(result=None, confidence=0.2, photo=photo))
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
 
-    result = make_service(session, wikimedia=wikimedia, satellite=satellite).resolve_hero_image(session, course)
-
-    assert result.type == "SATELLITE"
-
-
-# 9. Mapbox is used when Wikimedia returns no trustworthy result
-def test_mapbox_used_when_wikimedia_has_nothing(session):
-    course = make_course(session)
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
-
-    result = make_service(session, satellite=satellite).resolve_hero_image(session, course)
-
-    assert result.type == "SATELLITE"
-    assert len(satellite.calls) == 1
-
-
-# 11. Mapbox is not called for invalid coordinates -- the real provider (not
-# a fake that would blindly accept anything) refuses out-of-range coordinates
-# and the resolver falls through to NONE rather than rendering a bogus image.
-def test_mapbox_declines_invalid_coordinates_and_resolver_falls_to_none(session):
-    from app.course_images.providers.mapbox import MapboxSatelliteImageProvider
-
-    course = make_course(session, latitude=200.0, longitude=-121.9491)
-    wikimedia = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
-    satellite = MapboxSatelliteImageProvider(access_token="pk.test")
-
-    result = make_service(session, wikimedia=wikimedia, satellite=satellite).resolve_hero_image(session, course)
+    result = make_service(session, wikimedia=wikimedia).resolve_hero_image(session, course)
 
     assert result.type == "NONE"
 
 
-# 12. NONE is returned when Mapbox fails / 13. Mapbox failure does not break resolution
-def test_none_returned_when_mapbox_fails(session):
-    satellite = FakeSatelliteProvider(error=RuntimeError("mapbox down"))
+# 9. NONE is returned when Wikimedia returns no trustworthy result (no lower tier left)
+def test_none_used_when_wikimedia_has_nothing(session):
     course = make_course(session)
 
-    result = make_service(session, satellite=satellite).resolve_hero_image(session, course)
+    result = make_service(session).resolve_hero_image(session, course)
 
     assert result.type == "NONE"
 
 
-# 14. Wikimedia failure falls through to Mapbox
-def test_wikimedia_failure_falls_through_to_mapbox(session):
+# 14. Wikimedia failure falls through to NONE
+def test_wikimedia_failure_falls_through_to_none(session):
     course = make_course(session)
     wikimedia = FakeWikimediaProvider(error=RuntimeError("commons unavailable"))
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
 
-    result = make_service(session, wikimedia=wikimedia, satellite=satellite).resolve_hero_image(session, course)
+    result = make_service(session, wikimedia=wikimedia).resolve_hero_image(session, course)
 
-    assert result.type == "SATELLITE"
+    assert result.type == "NONE"
 
 
 # transient Wikimedia failures must not be cached (so the next request retries)
@@ -272,11 +215,10 @@ def test_attribution_and_license_metadata(session):
 
 # 16 / 17 / 18. no separate hero cache to go stale -- official/user reads are
 # always live, so promoting/demoting a source is reflected on the very next call
-def test_newly_approved_user_image_replaces_satellite_fallback(session):
+def test_newly_approved_user_image_replaces_none_fallback(session):
     course = make_course(session)
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
-    service = make_service(session, satellite=satellite)
-    assert service.resolve_hero_image(session, course).type == "SATELLITE"
+    service = make_service(session)
+    assert service.resolve_hero_image(session, course).type == "NONE"
 
     add_image(session, course, source_type=CourseImageSource.USER, external_url="https://example.com/new-user.jpg")
 
@@ -334,8 +276,9 @@ def test_stale_wikimedia_cache_triggers_refresh(session):
     assert all_photos[1].external_url == "https://example.com/gallery.jpg"
 
 
-# a stale cache entry is still served (rather than nothing) when the refresh
-# attempt itself fails -- fail open, same as any other Wikimedia error
+# a stale cache entry is evicted (rather than served) when the refresh attempt
+# is authoritative and finds nothing -- with no satellite tier left, the
+# resolver now falls through straight to NONE
 def test_stale_wikimedia_cache_evicted_on_authoritative_miss(session):
     course = make_course(session)
     stale_hero = add_image(
@@ -347,12 +290,11 @@ def test_stale_wikimedia_cache_evicted_on_authoritative_miss(session):
         external_url="https://example.com/gallery.jpg", is_hero=False, position=1,
     )
     wikimedia = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
-    satellite = FakeSatelliteProvider(satellite_result(course.name))
-    service = make_service(session, wikimedia=wikimedia, satellite=satellite, positive_ttl_seconds=-1)
+    service = make_service(session, wikimedia=wikimedia, positive_ttl_seconds=-1)
 
     result = service.resolve_hero_image(session, course)
 
-    assert result.type == "SATELLITE"
+    assert result.type == "NONE"
     # only the stale hero was evicted on authoritative miss; other photos are preserved
     remaining = session.query(CourseImage).filter_by(
         course_id=course.id, source_type=CourseImageSource.WIKIMEDIA,

@@ -70,7 +70,7 @@ function isDisplayableCourseImage(image: CourseImage): boolean {
 }
 
 // The course-detail API resolves and returns `hero_image` per the backend's
-// OFFICIAL -> USER -> WIKIMEDIA -> SATELLITE -> NONE priority; list/search
+// OFFICIAL -> USER -> WIKIMEDIA -> NONE priority; list/search
 // payloads provide the resolved card hero (or an explicit NONE when suppressed
 // by negative cache). A *present* hero_image -- including an explicit NONE
 // result -- is authoritative and must not be second-guessed by the array

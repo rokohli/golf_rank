@@ -3,6 +3,7 @@ import { useSignIn, useSignUp } from '@clerk/expo/legacy'
 import { tokenCache } from '@clerk/expo/token-cache'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import * as AuthSession from 'expo-auth-session'
+import * as FileSystem from 'expo-file-system'
 import * as Linking from 'expo-linking'
 import { useRouter } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
@@ -52,6 +53,12 @@ function DevelopmentAuthGate({ children }: { children: ReactNode }) {
 const { height: screenHeight } = Dimensions.get('window')
 const compactAuth = screenHeight < 780
 
+type SignInVerification = {
+  mode: 'first_factor' | 'second_factor'
+  strategy: 'email_code' | 'phone_code'
+  label: string
+}
+
 function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [loadingAction, setLoadingAction] = useState<
@@ -62,6 +69,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     | 'request-reset'
     | 'verify-reset'
     | 'update-password'
+    | 'verify-sign-in'
     | null
   >(null)
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>(initialMode)
@@ -73,6 +81,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
   const [emailFormVisible, setEmailFormVisible] = useState(false)
+  const [signInVerification, setSignInVerification] = useState<SignInVerification | null>(null)
   const { startSSOFlow } = useSSO()
   const signInState = useSignIn()
   const signUpState = useSignUp()
@@ -140,20 +149,68 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     setLoadingAction('email-sign-in')
 
     try {
-      const result = await signInState.signIn.create({
+      let result: unknown = await signInState.signIn.create({
         identifier: emailAddress.trim(),
         password,
         strategy: 'password',
       })
+      // Some Clerk configs leave `password` unvalidated by create() and list it
+      // as a still-pending first factor (needs_first_factor) instead of
+      // completing inline -- retry it explicitly as a first-factor attempt.
+      result = await completePasswordFirstFactorIfNeeded(signInState.signIn, result, password)
 
-      if (result.createdSessionId) {
-        await signInState.setActive({ session: result.createdSessionId })
+      const sessionId = clerkStringField(result, 'createdSessionId')
+      if (sessionId) {
+        await signInState.setActive({ session: sessionId })
         return
       }
 
-      setErrorMessage('Clerk needs another verification step before this sign-in can finish.')
+      const verification = await prepareSignInVerification(signInState.signIn, result)
+      if (verification) {
+        setSignInVerification(verification)
+        setVerificationCode('')
+        return
+      }
+
+      setErrorMessage(signInIncompleteMessage(result))
     } catch (reason) {
       setErrorMessage(authErrorMessage(reason, 'Unable to sign in with that email and password.'))
+    } finally {
+      setLoadingAction(null)
+    }
+  }
+
+  const verifySignInCode = async () => {
+    if (!signInState.isLoaded || !signInVerification) return
+    setErrorMessage(null)
+    setLoadingAction('verify-sign-in')
+
+    try {
+      const attempt = signInVerification.mode === 'second_factor'
+        ? clerkFunctionField(signInState.signIn, 'attemptSecondFactor')
+        : clerkFunctionField(signInState.signIn, 'attemptFirstFactor')
+      if (!attempt) {
+        setErrorMessage('Clerk sign-in is not ready to verify a code. Please try again.')
+        return
+      }
+      const result = await attempt({ strategy: signInVerification.strategy, code: verificationCode.trim() })
+
+      if (clerkStringField(result, 'createdSessionId')) {
+        await signInState.setActive({ session: clerkStringField(result, 'createdSessionId') })
+        setSignInVerification(null)
+        return
+      }
+
+      const nextVerification = await prepareSignInVerification(signInState.signIn, result)
+      if (nextVerification) {
+        setSignInVerification(nextVerification)
+        setVerificationCode('')
+        return
+      }
+
+      setErrorMessage(signInIncompleteMessage(result))
+    } catch (reason) {
+      setErrorMessage(authErrorMessage(reason, 'Unable to verify that code. Please try again.'))
     } finally {
       setLoadingAction(null)
     }
@@ -282,6 +339,7 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
     setResetStep(null)
     setEmailFormVisible(false)
     setVerificationCode('')
+    setSignInVerification(null)
     setErrorMessage(null)
   }
 
@@ -406,6 +464,27 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
         <>
           <Divider />
 
+          {signInVerification ? (
+            <>
+              <AuthField
+                autoCapitalize="none"
+                autoFocus
+                icon={<Feather name="hash" size={20} color="#6C746F" />}
+                inputMode="numeric"
+                keyboardType="number-pad"
+                label={signInVerification.label}
+                onChangeText={setVerificationCode}
+                placeholder="123456"
+                value={verificationCode}
+              />
+              <PrimaryAuthButton
+                disabled={loadingAction !== null || !verificationCode.trim()}
+                label={loadingAction === 'verify-sign-in' ? 'Verifying...' : 'Verify Code'}
+                onPress={verifySignInCode}
+              />
+            </>
+          ) : (
+          <>
           <AuthField
             autoCapitalize="none"
             autoComplete="email"
@@ -462,6 +541,8 @@ function ClerkAuthActions({ initialMode }: { initialMode: 'sign-in' | 'sign-up' 
             }
             onPress={mode === 'sign-in' ? signInWithEmail : signUpWithEmail}
           />
+          </>
+          )}
         </>
       ) : null}
 
@@ -656,6 +737,78 @@ function signUpIncompleteMessage(result: unknown) {
   }
 
   return `Clerk did not create a session (status: ${status}). Check User & authentication settings in the Clerk dashboard.`
+}
+
+async function completePasswordFirstFactorIfNeeded(signIn: unknown, result: unknown, password: string): Promise<unknown> {
+  if (clerkResourceStatus(result) !== 'needs_first_factor') return result
+
+  const hasPasswordFactor = clerkObjectArrayField(result, 'supportedFirstFactors').some((factor) => factor.strategy === 'password')
+  if (!hasPasswordFactor) return result
+
+  const attempt = clerkFunctionField(signIn, 'attemptFirstFactor')
+  if (!attempt) return result
+
+  return attempt({ strategy: 'password', password })
+}
+
+async function prepareSignInVerification(signIn: unknown, result: unknown): Promise<SignInVerification | null> {
+  const status = clerkResourceStatus(result)
+  // needs_client_trust (Device Trust, Clerk's new-device credential-stuffing
+  // protection) uses the exact same prepareSecondFactor/attemptSecondFactor
+  // API as an ordinary needs_second_factor on this SDK's legacy SignIn
+  // resource -- there is no separate `.mfa` API here (that's only on Clerk's
+  // newer, non-legacy SignIn Future surface).
+  const usesSecondFactorApi = status === 'needs_second_factor' || status === 'needs_client_trust'
+  if (status !== 'needs_first_factor' && !usesSecondFactorApi) return null
+
+  const factors = clerkObjectArrayField(result, usesSecondFactorApi ? 'supportedSecondFactors' : 'supportedFirstFactors')
+  const codeFactor = factors.find((factor) => factor.strategy === 'email_code' || factor.strategy === 'phone_code')
+  if (!codeFactor) return null
+
+  const prepare = clerkFunctionField(signIn, usesSecondFactorApi ? 'prepareSecondFactor' : 'prepareFirstFactor')
+  if (!prepare) return null
+
+  const strategy = codeFactor.strategy as 'email_code' | 'phone_code'
+  await prepare({
+    strategy,
+    ...(typeof codeFactor.emailAddressId === 'string' ? { emailAddressId: codeFactor.emailAddressId } : {}),
+    ...(typeof codeFactor.phoneNumberId === 'string' ? { phoneNumberId: codeFactor.phoneNumberId } : {}),
+  })
+
+  const verifyingDevice = status === 'needs_client_trust'
+  return {
+    mode: usesSecondFactorApi ? 'second_factor' : 'first_factor',
+    strategy,
+    label: strategy === 'email_code'
+      ? `Enter the code sent to your email${verifyingDevice ? ' to verify this device' : ''}`
+      : `Enter the code sent to your phone${verifyingDevice ? ' to verify this device' : ''}`,
+  }
+}
+
+function signInIncompleteMessage(result: unknown) {
+  const status = clerkResourceStatus(result)
+  const firstFactors = clerkObjectArrayField(result, 'supportedFirstFactors').map((factor) => factor.strategy)
+  const secondFactors = clerkObjectArrayField(result, 'supportedSecondFactors').map((factor) => factor.strategy)
+
+  console.info('Clerk sign-in requires an unsupported verification step', { status, firstFactors, secondFactors })
+
+  if (firstFactors.length > 0) {
+    return `Clerk needs a first-factor verification we don't support yet: ${firstFactors.join(', ')}. We support password, email code, and phone code.`
+  }
+  if (secondFactors.length > 0) {
+    return `Clerk needs a second-factor verification we don't support yet: ${secondFactors.join(', ')}. We support email code and phone code.`
+  }
+
+  return `Clerk did not complete sign-in (status: ${status}).`
+}
+
+function clerkObjectArrayField(resource: unknown, field: string): Record<string, unknown>[] {
+  if (resource && typeof resource === 'object' && field in resource) {
+    const value = (resource as Record<string, unknown>)[field]
+    if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+  }
+
+  return []
 }
 
 function ssoMissingSessionMessage(redirectUrl: string, signIn: unknown, signUp: unknown) {
@@ -1087,7 +1240,13 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         signOut,
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
-          await user.setProfileImage({ file })
+          // Clerk's `file` param accepts a string only as a base64 data URI, not a
+          // bare local file:// path -- the picker (expo-image-picker) only ever
+          // gives us the latter, so it has to be read and re-encoded here first.
+          const base64 = await FileSystem.readAsStringAsync(file, { encoding: FileSystem.EncodingType.Base64 })
+          const extension = file.split('.').pop()?.toLowerCase()
+          const mimeType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg'
+          await user.setProfileImage({ file: `data:${mimeType};base64,${base64}` })
         },
         updateUserProfile: async ({ firstName, lastName, username }) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')

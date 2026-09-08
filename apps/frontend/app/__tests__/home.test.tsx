@@ -114,6 +114,25 @@ describe('Home social feed', () => {
     expect(note).toHaveProp('numberOfLines', 3)
     expect(note).toHaveProp('ellipsizeMode', 'tail')
   })
+
+  it('shows a round\'s own photos in the feed regardless of moderation status', async () => {
+    mockGetFeed.mockResolvedValue({
+      items: [{
+        ...activity,
+        data: {
+          ...activity.data,
+          photos: [
+            { id: 1, url: 'https://cdn.example/a.jpg', alt_text: null, source_name: null, source_url: null, position: 0, is_hero: false },
+            { id: 2, url: 'https://cdn.example/b.jpg', alt_text: null, source_name: null, source_url: null, position: 1, is_hero: false },
+          ],
+        },
+      }],
+      next_cursor: null,
+    })
+    render(<Home />)
+
+    expect(await screen.findAllByLabelText('Round photo')).toHaveLength(2)
+  })
 })
 
 describe('home greeting', () => {

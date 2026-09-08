@@ -40,11 +40,13 @@ export type CourseImage = {
   width?: number | null
   height?: number | null
   created_at?: string | null
+  uploaded_by_username?: string | null
+  round_id?: number | null
 }
 
 // Normalized shape from CourseImageService.resolveCourseHeroImage -- the
 // frontend renders off `type` alone and never needs provider-specific logic.
-export type HeroImageType = 'OFFICIAL' | 'USER' | 'WIKIMEDIA' | 'SATELLITE' | 'NONE'
+export type HeroImageType = 'OFFICIAL' | 'USER' | 'WIKIMEDIA' | 'NONE'
 
 export type HeroImage = {
   type: HeroImageType
@@ -147,6 +149,7 @@ export type CourseRatingState = {
     note: string | null
     favorite_hole: number | null
     visibility: 'private' | 'friends'
+    photos: CourseImage[]
   } | null
   companions: {
     friend_user_id: number | null

@@ -3,6 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { RatingFlow, RatingFlowProps } from '../RatingFlow'
 import { CourseRatingState } from '../../types'
 
+const mockLaunchImageLibraryAsync = jest.fn()
+jest.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
+}))
+
 const course = {
   id: 1,
   name: 'Pebble Beach Golf Links',
@@ -35,6 +40,7 @@ const existingRating: CourseRatingState = {
     note: 'Fast greens',
     favorite_hole: 7,
     visibility: 'private',
+    photos: [],
   },
   companions: [{ friend_user_id: 22, guest_name: null }],
 }
@@ -47,6 +53,8 @@ function props(overrides: Partial<RatingFlowProps> = {}): RatingFlowProps {
     getCandidate: jest.fn().mockResolvedValue({ ...course, id: 2, name: 'Spyglass Hill' }),
     saveRating: jest.fn().mockResolvedValue({ ...existingRating, personal_rating: 9.1 }),
     saveDetails: jest.fn().mockResolvedValue(existingRating),
+    startPhotoUpload: jest.fn().mockResolvedValue({ storageKey: 'course-photos/1/staged.jpg' }),
+    confirmPhotoUpload: jest.fn().mockResolvedValue({ id: 99, source_type: 'user' }),
     onClose: jest.fn(),
     today: '2026-07-14',
     ...overrides,
@@ -91,9 +99,17 @@ describe('RatingFlow', () => {
     expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
   })
 
-  it('keeps a new rating private by default', async () => {
+  it('shares a new rating with friends by default', async () => {
     render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
     await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
+    expect(screen.getByLabelText('Share with friends').props.value).toBe(true)
+  })
+
+  it('respects an existing private round instead of overriding it with the new-rating default', async () => {
+    render(<RatingFlow {...props({ initialRating: existingRating })} />)
+    await openExistingRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
     expect(screen.getByLabelText('Share with friends').props.value).toBe(false)
@@ -211,17 +227,74 @@ describe('RatingFlow', () => {
     expect(await screen.findByLabelText('Your rating is 9.2 out of 10')).toBeOnTheScreen()
   })
 
-  it('shows the photos placeholder and saves selected existing friends from About the round', async () => {
+  it('saves selected existing friends from About the round', async () => {
     const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
     render(<RatingFlow {...inputProps} />)
     await openExistingRound()
 
-    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
-    expect(screen.getByText('Photo upload is coming soon.')).toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
     fireEvent.press(screen.getByRole('button', { name: 'Select Morgan Golfer' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({ friend_user_ids: [22] })))
+  })
+
+  it('stages a picked photo immediately and confirms it once Continue is pressed', async () => {
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg', width: 1600, height: 1200 }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+
+    await waitFor(() => expect(inputProps.startPhotoUpload).toHaveBeenCalledWith('file:///picked-photo.jpg', 'image/jpeg'))
+    expect(await screen.findByText('1 photo added')).toBeOnTheScreen()
+    expect(inputProps.confirmPhotoUpload).not.toHaveBeenCalled()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledWith(
+      'course-photos/1/staged.jpg', 4, { width: 1600, height: 1200 },
+    ))
+  })
+
+  it('lets the user remove a staged photo before it is confirmed', async () => {
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Remove photo' }))
+
+    expect(screen.queryByText('1 photo added')).not.toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).not.toHaveBeenCalled())
+  })
+
+  it('shows a retry-able error when the round photo upload fails', async () => {
+    const inputProps = props({
+      initialRating: { ...existingRating, companions: [] },
+      startPhotoUpload: jest.fn().mockRejectedValue(new Error('Too many requests')),
+    })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+
+    expect(await screen.findByText('Too many requests')).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Photos' })).toBeOnTheScreen()
   })
 
   it('shows a compact friend list and searches additional friends without guest controls', async () => {
@@ -239,5 +312,48 @@ describe('RatingFlow', () => {
     fireEvent.changeText(screen.getByLabelText('Search friends'), 'Sam')
     fireEvent.press(screen.getByRole('button', { name: 'Select Sam Park' }))
     expect(screen.queryByRole('button', { name: 'Add guest' })).toBeNull()
+  })
+
+  it('shows "invalid score" when score is below 20 or above 200 without mentioning date', async () => {
+    render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
+    await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Score' }))
+    fireEvent.changeText(screen.getByLabelText('Golf score'), '19')
+
+    expect(screen.getByText('invalid score')).toBeOnTheScreen()
+    expect(screen.queryByText(/Enter a valid date/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
+
+    fireEvent.changeText(screen.getByLabelText('Golf score'), '201')
+    expect(screen.getByText('invalid score')).toBeOnTheScreen()
+    expect(screen.queryByText(/Enter a valid date/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
+  })
+
+  it('accepts boundary scores 20 and 200 without error', async () => {
+    render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
+    await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Score' }))
+    fireEvent.changeText(screen.getByLabelText('Golf score'), '20')
+    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState?.disabled).toBeFalsy()
+
+    fireEvent.changeText(screen.getByLabelText('Golf score'), '200')
+    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState?.disabled).toBeFalsy()
+  })
+
+  it('shows date error without mentioning score when date is invalid', async () => {
+    render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
+    await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Played' }))
+    fireEvent.changeText(screen.getByLabelText('Date played'), '99/99/2026')
+
+    expect(screen.getByText('Enter a valid date in MM/DD/YYYY (not in the future).')).toBeOnTheScreen()
+    expect(screen.queryByText('invalid score')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
   })
 })
