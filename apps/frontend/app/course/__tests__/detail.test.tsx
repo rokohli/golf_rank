@@ -334,6 +334,30 @@ describe('course detail ratings', () => {
     expect(mockPush).toHaveBeenCalledWith('/course/7/photos')
   })
 
+  it('mounts the full-screen photo viewer outside the page ScrollView', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      images: [{
+        id: 1, url: 'https://images.example/1.jpg', alt_text: 'Photo 1', source_name: 'Photographer',
+        source_url: 'https://images.example/license', position: 0, is_hero: true,
+      }],
+    })
+
+    render(<CourseDetail />)
+    fireEvent.press(await screen.findByLabelText('View photo 1 of 1'))
+
+    let node = screen.getByLabelText('Close photo viewer')
+    while (node.parent) {
+      // A ScrollView host node's type name is 'RCTScrollView' under
+      // react-native's test renderer -- if the viewer is inside the page's
+      // ProductScreen ScrollView, its absolute-fill overlay is positioned
+      // relative to scrolled content instead of the viewport (the bug this
+      // asserts against), and one of these ancestors would be it.
+      expect(node.type).not.toBe('RCTScrollView')
+      node = node.parent
+    }
+  })
+
   function ratingWithRound(photos: CourseImage[] = []): CourseRatingState {
     return {
       ...rating(null),
@@ -371,6 +395,38 @@ describe('course detail ratings', () => {
     ))
     expect(await screen.findByText('1 photo')).toBeOnTheScreen()
     expect(screen.getByLabelText('User-submitted photo')).toBeOnTheScreen()
+  })
+
+  it('refreshes the top course-photo gallery after attaching a photo', async () => {
+    mockGetCourse
+      .mockResolvedValueOnce({ ...course, images: [] })
+      .mockResolvedValueOnce({
+        ...course,
+        images: [{
+          id: 99, url: 'https://images.example/round-photo.jpg', alt_text: 'User-submitted photo', source_name: null,
+          source_url: null, position: 0, is_hero: false, source_type: 'user',
+        }],
+      })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg', width: 1600, height: 1200 }],
+    })
+    mockUploadCoursePhoto.mockResolvedValue({ id: 99, source_type: 'user' })
+    mockGetCourseRating
+      .mockResolvedValueOnce(ratingWithRound([]))
+      .mockResolvedValueOnce(ratingWithRound([{
+        id: 99, url: 'https://images.example/round-photo.jpg', alt_text: 'User-submitted photo', source_name: null,
+        source_url: null, position: 0, is_hero: false, source_type: 'user',
+      }]))
+
+    render(<CourseDetail />)
+    await screen.findByText('No course photos yet.')
+    fireEvent.press(screen.getByRole('button', { name: 'Your thoughts & details' }))
+
+    fireEvent.press(screen.getByLabelText('Add photos'))
+
+    await waitFor(() => expect(mockGetCourse).toHaveBeenCalledTimes(2))
+    expect(await screen.findByLabelText('View photo 1 of 1')).toBeOnTheScreen()
   })
 
   it('shows a retry-able error when the upload fails', async () => {

@@ -138,8 +138,14 @@ class R2ObjectStorage:
 
 def build_object_storage(settings) -> ObjectStorage | None:
     """Returns None if R2 isn't fully configured -- callers must treat that as
-    a 503, never silently skip validation."""
-    if not all([settings.r2_account_id, settings.r2_access_key_id, settings.r2_secret_access_key, settings.r2_bucket_name]):
+    a 503, never silently skip validation. course_image_base_url counts as
+    part of "configured": without it, storage_image_url() can't build a
+    servable URL, so confirm_upload would still succeed, consume a round
+    slot, and return url: null forever -- a photo nobody can ever see."""
+    if not all([
+        settings.r2_account_id, settings.r2_access_key_id, settings.r2_secret_access_key,
+        settings.r2_bucket_name, settings.course_image_base_url,
+    ]):
         return None
     return R2ObjectStorage(
         account_id=settings.r2_account_id,

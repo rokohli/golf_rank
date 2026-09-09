@@ -1,6 +1,7 @@
 from botocore.exceptions import EndpointConnectionError
 
-from app.storage import R2ObjectStorage
+from app.core.config import Settings
+from app.storage import R2ObjectStorage, build_object_storage
 
 
 class _RaisingClient:
@@ -20,3 +21,24 @@ def test_delete_object_swallows_transport_failures() -> None:
     storage._client = _RaisingClient()
 
     storage.delete_object("course-photos/1/photo.jpg")
+
+
+_R2_CREDS = {
+    "r2_account_id": "acct", "r2_access_key_id": "key", "r2_secret_access_key": "secret",
+    "r2_bucket_name": "bucket",
+}
+
+
+def test_build_object_storage_requires_a_serving_base_url() -> None:
+    """R2 credentials alone aren't "configured": without course_image_base_url,
+    storage_image_url() can never build a servable URL, so confirm_upload
+    would still succeed, consume a round slot, and return url: null forever
+    -- a photo nobody can ever see. Uploads must stay disabled (503) until
+    the base URL is set too."""
+    settings = Settings(**_R2_CREDS, course_image_base_url=None)
+    assert build_object_storage(settings) is None
+
+
+def test_build_object_storage_enabled_once_base_url_is_set() -> None:
+    settings = Settings(**_R2_CREDS, course_image_base_url="https://cdn.example/assets")
+    assert build_object_storage(settings) is not None

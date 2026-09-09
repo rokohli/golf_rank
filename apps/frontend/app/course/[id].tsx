@@ -22,6 +22,7 @@ export default function CourseDetail() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const { getAuthHeaders } = useAuthHeaders()
   const mounted = useRef(true)
+  const isInitialFocus = useRef(true)
   const ratingRequestVersion = useRef(0)
   const savedRequestVersion = useRef(0)
   const friendsRequestVersion = useRef(0)
@@ -80,6 +81,7 @@ export default function CourseDetail() {
   }, [numericCourseId])
 
   useEffect(() => {
+    isInitialFocus.current = true
     void loadCourse()
   }, [loadCourse])
 
@@ -120,6 +122,24 @@ export default function CourseDetail() {
       if (mounted.current && requestVersion === ratingRequestVersion.current) setRatingLoading(false)
     }
   }, [getAuthHeaders, numericCourseId])
+
+  // Lighter-weight than loadCourse(): updates the gallery/hero data a newly
+  // attached photo affects without resetting course/courseLoading, which
+  // would flash the whole header through a loading skeleton just to pick up
+  // one photo.
+  const refreshPublicCourse = useCallback(async () => {
+    if (!numericCourseId) return
+    try {
+      const nextCourse = await getCourse(numericCourseId)
+      if (!mounted.current) return
+      setPublicCourse(nextCourse)
+      setCourse(toCoursePresentation(nextCourse))
+    } catch {
+      // Best-effort refresh -- the existing gallery data just stays stale
+      // until the next successful load; loadCourse's own retry affordance
+      // covers a genuinely broken fetch.
+    }
+  }, [numericCourseId])
 
   const refreshSavedState = useCallback(async () => {
     const requestVersion = ++savedRequestVersion.current
@@ -164,6 +184,10 @@ export default function CourseDetail() {
       if (mounted.current && requestVersion === friendsRequestVersion.current) setFriendsThoughtsLoading(false)
     }
   }, [getAuthHeaders, numericCourseId])
+
+  const refreshAfterPhotoChange = useCallback(async () => {
+    await Promise.all([refreshRating(), refreshPublicCourse()])
+  }, [refreshPublicCourse, refreshRating])
 
   const updatePersonalDetail = useCallback(async (field: EditableDetail, value: number | string | null) => {
     const roundId = rating?.round?.id
@@ -232,12 +256,20 @@ export default function CourseDetail() {
     void refreshRating()
     void refreshSavedState()
     void refreshFriendsThoughts()
+    // loadCourse's own effect already covers the very first load (with its
+    // own dedicated loading/error/retry state) -- only re-fetch here on a
+    // genuine return to focus, so this doesn't race or double-fetch with it.
+    if (isInitialFocus.current) {
+      isInitialFocus.current = false
+    } else {
+      void refreshPublicCourse()
+    }
     return () => {
       ratingRequestVersion.current += 1
       savedRequestVersion.current += 1
       friendsRequestVersion.current += 1
     }
-  }, [refreshFriendsThoughts, refreshRating, refreshSavedState]))
+  }, [refreshFriendsThoughts, refreshPublicCourse, refreshRating, refreshSavedState]))
 
   if (!course) {
     return <>
@@ -322,14 +354,18 @@ export default function CourseDetail() {
           </ScrollView>
         ) : <View style={styles.emptyPhotos}><Feather name="camera" size={20} color={colors.muted} /><Text style={styles.emptyText}>No course photos yet.</Text></View>}
       </View>
-      {viewerIndex !== null ? <PhotoViewer courseName={course.name} onClose={() => setViewerIndex(null)} photos={photos} startIndex={viewerIndex} /> : null}
       <View style={styles.disclosures}>
         <DisclosureRow expanded={openDetails === 'personal'} icon="edit-3" label="Your thoughts & details" onPress={() => setOpenDetails((current) => current === 'personal' ? null : 'personal')} />
-        {openDetails === 'personal' ? <PersonalDetails courseId={numericCourseId} courseName={course.name} getAuthHeaders={getAuthHeaders} onPhotosChanged={refreshRating} onSave={updatePersonalDetail} rating={rating} /> : null}
+        {openDetails === 'personal' ? <PersonalDetails courseId={numericCourseId} courseName={course.name} getAuthHeaders={getAuthHeaders} onPhotosChanged={refreshAfterPhotoChange} onSave={updatePersonalDetail} rating={rating} /> : null}
         <DisclosureRow expanded={openDetails === 'friends'} icon="users" label="Friends’ thoughts & details" onPress={() => setOpenDetails((current) => current === 'friends' ? null : 'friends')} />
         {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as never)} onOpenProfile={(userId) => openUserProfile(router, userId)} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
       </View>
     </ProductScreen>
+    {/* Rendered outside ProductScreen's ScrollView -- mounted inside it, the
+        overlay's absolute-fill positions relative to its scrolled-content
+        parent instead of the viewport, so opening it after scrolling down
+        could leave it partly or fully off-screen. */}
+    {viewerIndex !== null ? <PhotoViewer courseName={course.name} onClose={() => setViewerIndex(null)} photos={photos} startIndex={viewerIndex} /> : null}
   </>
 }
 
