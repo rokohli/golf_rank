@@ -144,11 +144,12 @@ class CourseImageRepository:
         alt_text: str | None = None, width: int | None = None, height: int | None = None,
         round_id: int | None = None,
     ) -> CourseImage:
-        """Persists a user-submitted upload as PENDING -- it stays ineligible for
-        both resolve_hero_image (via approved_images) and the course's public
-        gallery (course_image_data) until a future moderation step flips
-        moderation_status to APPROVED. round_id, when present, is a separate
-        axis: it makes the photo visible on that round's feed posting
+        """Persists a user-submitted upload as PENDING -- it's immediately visible
+        in the course's photo gallery (course_image_data doesn't filter on
+        moderation_status), but stays ineligible for resolve_hero_image (via
+        approved_images) until a future moderation step flips moderation_status
+        to APPROVED. round_id, when present, is a separate axis: it makes the
+        photo visible on that round's feed posting
         immediately, regardless of moderation_status.
 
         Idempotent on storage_key (unique, uq_course_image_user_storage_key): a

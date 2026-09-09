@@ -291,14 +291,10 @@ async def candidate_rate_limit(
     apply_rate_limit(response, quota)
 
 
-async def photo_upload_rate_limit(
-    request: Request,
-    response: Response,
-    user: CurrentUser = Depends(current_user),
-) -> None:
+async def _photo_rate_limit(name: str, request: Request, response: Response, user: CurrentUser) -> None:
     settings = request.app.state.settings
     policy = RateLimitPolicy(
-        "course-photo-upload",
+        name,
         settings.photo_upload_rate_limit_capacity,
         settings.photo_upload_rate_limit_refill_per_second,
     )
@@ -313,12 +309,36 @@ async def photo_upload_rate_limit(
         )
         apply_rate_limit(response, decision)
     quota = await request.app.state.rate_limiter.daily_quota(
-        name="course-photo-upload",
+        name=name,
         limit=settings.photo_upload_daily_quota,
         identity_type="user",
         identity=user.provider_subject,
     )
     apply_rate_limit(response, quota)
+
+
+async def photo_upload_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    """Governs requesting a presigned upload URL and discarding an unconfirmed
+    one -- the "staging" side of a photo upload."""
+    await _photo_rate_limit("course-photo-upload", request, response, user)
+
+
+async def photo_confirm_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    """Governs confirming a staged upload -- deliberately a separate bucket
+    from photo_upload_rate_limit (same capacity/refill/quota shape, different
+    identity) so uploading one photo, which costs one call against each,
+    doesn't spend two units of a single shared budget. Sharing one bucket
+    meant a user could exhaust it roughly halfway through the app's own
+    5-photos-per-round limit."""
+    await _photo_rate_limit("course-photo-confirm", request, response, user)
 
 
 async def ai_planner_rate_limit(

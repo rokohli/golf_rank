@@ -98,9 +98,7 @@ def _state(
                 "note": note.body if note else None,
                 "favorite_hole": round_.favorite_hole,
                 "visibility": round_.visibility,
-                # This is always the caller's own round ("me/course-ratings"),
-                # so their own PENDING/REJECTED uploads are visible too.
-                "photos": round_image_data(session, round_.id, include_unapproved=True),
+                "photos": round_image_data(session, round_.id),
             }
             if round_ is not None
             else None

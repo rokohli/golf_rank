@@ -172,12 +172,9 @@ def test_confirm_rejects_unknown_fields() -> None:
     assert response.status_code == 422
 
 
-def test_confirmed_upload_is_not_public_while_pending() -> None:
-    """A PENDING upload must not be reachable through the unauthenticated
-    course endpoint -- neither as the hero image (resolve_hero_image ignores
-    it) nor in the public gallery (domain.course_image_data filters to
-    APPROVED only, see docs/product/next-features-handoff.md "Start with
-    private photos")."""
+def test_confirmed_upload_appears_in_gallery_but_not_as_hero_while_pending() -> None:
+    """Moderation gates hero-image eligibility only -- a PENDING upload shows in
+    the course's photo gallery immediately, but resolve_hero_image ignores it."""
     storage = FakeObjectStorage()
     client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
     course_id = _pebble_id(client)
@@ -190,7 +187,7 @@ def test_confirmed_upload_is_not_public_while_pending() -> None:
     image_id = confirm.json()["id"]
 
     detail = client.get(f"/api/v1/courses/{course_id}")
-    assert all(image["id"] != image_id for image in detail.json()["images"])
+    assert any(image["id"] == image_id for image in detail.json()["images"])
     assert detail.json()["hero_image"]["type"] != "USER"
 
 
@@ -225,11 +222,10 @@ def test_confirm_links_round_id_and_appears_on_feed_regardless_of_moderation() -
     state = client.get(f"/api/v1/me/course-ratings/{course_id}", headers=HEADERS).json()
     assert [photo["id"] for photo in state["round"]["photos"]] == [body["id"]]
 
-    # The pending photo is visible on the round's own feed posting (an
-    # authorized, owner-scoped path) but must not leak into the public,
-    # unauthenticated course gallery until it's approved.
+    # Moderation gates hero eligibility only -- the pending photo is still
+    # visible in the course's own gallery.
     detail = client.get(f"/api/v1/courses/{course_id}")
-    assert all(image["id"] != body["id"] for image in detail.json()["images"])
+    assert any(image["id"] == body["id"] for image in detail.json()["images"])
 
 
 def test_confirm_rejects_round_id_belonging_to_another_user() -> None:

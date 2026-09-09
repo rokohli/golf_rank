@@ -193,6 +193,22 @@ def upgrade() -> None:
         )
 
         if existing_harding_image is None and fleming_hero is not None:
+            # Shift any existing Harding rows out of position 0 first, mirroring
+            # the Presidio section above -- Harding may already have a row there
+            # (e.g. a Wikimedia fallback the app cached before this migration
+            # ran), and inserting at a taken position would violate
+            # uq_course_image_position and abort the whole upgrade. +100, not
+            # +1: uq_course_image_position is checked per-row as a bulk UPDATE
+            # is applied (not deferred to end of statement), so shifting by a
+            # small, overlapping amount can itself collide against a
+            # not-yet-updated row. There's no later compaction step needed
+            # here (unlike Presidio's), since position only has to be unique
+            # and sort correctly, not be contiguous.
+            connection.execute(
+                course_images.update()
+                .where(course_images.c.course_id == harding_id)
+                .values(position=course_images.c.position + 100)
+            )
             connection.execute(
                 course_images.insert().values(
                     course_id=harding_id,

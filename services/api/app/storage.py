@@ -18,6 +18,32 @@ only be checked after the fact via head_object at confirm time. See
 delete_object: the confirm endpoint uses it to clean up an object that fails
 that after-the-fact size/type check, since nothing stopped an oversized file
 from reaching R2 in the first place.
+
+KNOWN LIMITATION -- unconfirmed uploads are not size-bounded. Because R2
+can't reject an oversized PUT before it lands, a client can request a
+presigned URL, upload an arbitrarily large object straight to R2, and simply
+never call /photos/confirm. No CourseImage row is ever created, so nothing
+in the app (discard, round/account deletion) ever learns the object exists
+to clean it up -- it can sit in the bucket indefinitely. The existing
+photo_upload_rate_limit only bounds how many presigned URLs a user can
+request per day; it does not bound the size of what they then PUT with one.
+Two ways to actually close this (not just delay it -- a background reaper
+that deletes old orphaned objects only bounds how long an oversized object
+survives, not whether the PUT itself succeeds, since by the time anything in
+this app can see the object, its bytes are already fully stored):
+  1. Stop using direct-to-R2 presigned PUT for this upload path; route it
+     through the API instead, so the server can reject on Content-Length (or
+     abort a stream) before the bytes reach R2. This gives up the "file
+     bytes never pass through our API process" property above -- it adds a
+     hop and moves the transfer through a single-region API host instead of
+     R2's edge.
+  2. Put a size-checking gate in front of the bucket, e.g. a Cloudflare
+     Worker bound to it that inspects Content-Length and rejects an
+     oversized PUT before R2 accepts it. Keeps the direct-upload
+     architecture, but is new infrastructure this repo doesn't have today
+     (no wrangler/Workers setup) -- a separate deployable to write, deploy,
+     and maintain.
+Neither has been implemented; this is an accepted risk for now.
 """
 
 from dataclasses import dataclass

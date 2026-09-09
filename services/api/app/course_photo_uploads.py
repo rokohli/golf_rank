@@ -6,12 +6,12 @@ pieces; this module only orchestrates auth, validation, and persistence.
 
 Uploaded rows always land as CourseImageSource.USER / CourseImageModeration.PENDING
 -- moderation (approving/rejecting/featuring) is a separate, not-yet-built slice
-that governs both hero-image eligibility (resolve_hero_image, via
-CourseImageRepository.approved_images, ignores non-APPROVED rows) and the
-course's public gallery (domain.course_image_data, same filter). A pending
-upload is visible only to its own uploader, on that round's feed posting
-(domain.round_image_data, served exclusively through authorized
-feed/round-detail paths) -- never through an unauthenticated course endpoint.
+that governs ONLY hero-image eligibility (resolve_hero_image, via
+CourseImageRepository.approved_images, ignores non-APPROVED rows). A pending
+upload is immediately visible in the course's photo gallery (course_image_data
+does not filter on moderation_status) and, when uploaded with a round_id, on
+that round's feed posting too (domain.round_image_data) -- moderation never
+gates plain visibility, only whether a photo can become the course's hero image.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
-from .core.rate_limit import photo_upload_rate_limit
+from .core.rate_limit import photo_confirm_rate_limit, photo_upload_rate_limit
 from .course_images.repository import CourseImageRepository
 from .db import get_session
 from .domain import require_course, require_user, storage_image_url, uploader_username
@@ -104,7 +104,11 @@ def create_upload_url(
     "/api/v1/courses/{course_id}/photos/confirm",
     response_model=CourseImageOut,
     status_code=201,
-    dependencies=[Depends(photo_upload_rate_limit)],
+    # Deliberately a separate rate-limit bucket from upload-url/discard --
+    # see photo_confirm_rate_limit's docstring: uploading one photo costs one
+    # call against each endpoint, so sharing a bucket meant each photo spent
+    # two units of a budget sized for one.
+    dependencies=[Depends(photo_confirm_rate_limit)],
 )
 def confirm_upload(
     course_id: int,

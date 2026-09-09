@@ -72,12 +72,11 @@ def _rate_course(client: TestClient, headers: dict[str, str], course_id: int, *,
     return response.json()
 
 
-def test_feed_hides_unmoderated_round_photos_from_friends_but_owner_still_sees_them() -> None:
-    """A PENDING/REJECTED photo must stay owner-only: round_image_data's
-    include_unapproved must be False for anyone viewing a round they don't
-    own, including through a friends/public feed entry (see domain.py's
-    round_image_data and course_ratings.py's own-round state, which is the
-    one legitimate include_unapproved=True caller)."""
+def test_feed_shows_round_photos_regardless_of_moderation_status() -> None:
+    """Moderation gates hero-image eligibility only (see domain.py's
+    round_image_data and course_image_data) -- it never hides a round's own
+    photos from a feed viewer who is otherwise allowed to see the round at
+    all (mutual friend, here)."""
     app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
     client = TestClient(app)
     alice = _profile(client, "dev:feed-photo-alice", "Alice", "alice")
@@ -95,7 +94,7 @@ def test_feed_hides_unmoderated_round_photos_from_friends_but_owner_still_sees_t
         session.commit()
 
     item = client.get("/api/v1/feed", headers=alice).json()["items"][0]
-    assert item["data"]["photos"] == []
+    assert len(item["data"]["photos"]) == 1
 
     own_state = client.get("/api/v1/me/course-ratings/1", headers=bob).json()
     assert len(own_state["round"]["photos"]) == 1

@@ -131,6 +131,57 @@ def test_0024_migration_shares_fleming_storage_key_with_harding(monkeypatch: pyt
         engine.dispose()
 
 
+def test_0024_migration_shifts_hardings_existing_row_out_of_position_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test: if Harding already has a row at position 0 (e.g. a
+    Wikimedia fallback the app cached before this migration ran), inserting
+    the shared Fleming hero at a hardcoded position=0 violates
+    uq_course_image_position and aborts the whole upgrade. The fix shifts
+    Harding's existing rows out of the way first, mirroring the Presidio
+    section earlier in the same migration."""
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+
+        command.upgrade(config, "0023_course_image_round_link")
+
+        engine = make_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO courses (id, name, region, source, source_course_id, latitude, longitude) VALUES "
+                "(1, 'Tpc Harding Park Fleming Course', 'SF', 'seed', "
+                "'61fb03c8-74fc-4fc8-87d0-0491190e2d54', 37.7, -122.5), "
+                "(2, 'Tpc Harding Park Harding Course', 'SF', 'seed', "
+                "'21922834-62d3-4603-b624-b44867b60eb4', 37.7, -122.5)"
+            ))
+            conn.execute(text(
+                "INSERT INTO course_images (course_id, storage_key, alt_text, source_name, source_url, "
+                "position, is_hero, source_type, moderation_status) VALUES "
+                "(1, 'courses/1/hero.jpg', 'Fleming hero', 'GolfRank photographer', "
+                "'https://golfrank.example/photos/fleming', 0, 1, 'official', 'approved')"
+            ))
+            # Harding already has a row at position 0, pre-migration --
+            # exactly the collision the fix must avoid.
+            conn.execute(text(
+                "INSERT INTO course_images (course_id, external_url, position, is_hero, source_type, "
+                "moderation_status) VALUES "
+                "(2, 'https://wikimedia.example/harding.jpg', 0, 1, 'wikimedia', 'approved')"
+            ))
+        engine.dispose()
+
+        # Must not raise -- this is where the hardcoded position=0 used to
+        # collide with Harding's pre-existing row and abort the upgrade.
+        command.upgrade(config, "0024_fix_course_photos")
+
+        engine = make_engine(db_url)
+        with engine.connect() as conn:
+            harding_positions = [row[0] for row in conn.execute(text(
+                "SELECT position FROM course_images WHERE course_id = 2 ORDER BY position"
+            )).all()]
+            assert len(harding_positions) == len(set(harding_positions)), "duplicate positions"
+            assert harding_positions[0] == 0
+        engine.dispose()
+
+
 def test_0025_storage_key_uniqueness_is_partial_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """uq_course_image_user_storage_key must only constrain USER rows -- two
     OFFICIAL rows sharing one storage_key (migration 0024's Fleming/Harding

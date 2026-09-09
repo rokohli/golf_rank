@@ -107,6 +107,34 @@ def test_candidate_submission_checks_user_ip_and_daily_quota() -> None:
     assert limiter.quota_calls[0]["identity"] == "dev:missing-user"
 
 
+def test_photo_upload_and_confirm_use_separate_rate_limit_buckets() -> None:
+    """Regression test: uploading one photo makes one call each to upload-url
+    and confirm. If both endpoints shared a single bucket/quota name, one
+    photo would spend two units of one budget -- halving the effective
+    capacity the app advertises (5 photos per round) and exhausting the
+    daily quota after half as many photos as intended. They must use
+    distinct policy/quota names so each budget is spent independently."""
+    app = create_app(ENABLED_SETTINGS)
+    limiter = RecordingLimiter()
+    app.state.rate_limiter = limiter
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:photo-rate-limit"}
+
+    client.post(
+        "/api/v1/courses/999999/photos/upload-url",
+        headers=headers, json={"content_type": "image/jpeg"},
+    )
+    client.post(
+        "/api/v1/courses/999999/photos/confirm",
+        headers=headers, json={"storage_key": "course-photos/999999/x.jpg"},
+    )
+
+    upload_bucket_names = {call["policy"].name for call in limiter.token_calls}
+    confirm_quota_names = {call["name"] for call in limiter.quota_calls}
+    assert len(upload_bucket_names) == 2
+    assert len(confirm_quota_names) == 2
+
+
 def test_ai_planner_checks_user_ip_and_fail_closed_daily_quota() -> None:
     settings = ENABLED_SETTINGS.model_copy(update={
         "ai_planner_enabled": True,
