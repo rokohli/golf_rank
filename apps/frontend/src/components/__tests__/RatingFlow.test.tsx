@@ -308,6 +308,31 @@ describe('RatingFlow', () => {
     expect(await screen.findByText('Your round was saved, but one or more photos could not be attached. You can try again.')).toBeOnTheScreen()
   })
 
+  it('keeps a photo staged for retry when confirmation fails with a server error', async () => {
+    // A 5xx means the server (or an R2 transport failure inside it) broke
+    // handling the request -- unlike a 4xx validation rejection, nothing in
+    // confirm_upload's error paths for that case deletes the object, so the
+    // photo should stay retryable rather than be dropped as permanently gone.
+    const inputProps = props({
+      initialRating: { ...existingRating, companions: [] },
+      confirmPhotoUpload: jest.fn().mockRejectedValue(new ApiResponseError('Internal server error', 500)),
+    })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Your round was saved, but one or more photos could not be attached. You can try again.')).toBeOnTheScreen()
+  })
+
   it('discards staged uploads on unmount even if the flow was dismissed without the close controls', async () => {
     const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
     mockLaunchImageLibraryAsync.mockResolvedValue({

@@ -530,17 +530,19 @@ function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback
 }
 
-// A confirm failure is worth retrying only when the object might still
-// exist: a network-level failure (no response at all -- not an
-// ApiResponseError) or a 429 (rate limited, nothing about the request was
-// rejected). Every other server response from /photos/confirm means the
-// server processed the request and rejected it -- for the validation
-// failures (bad type/size, round mismatch, cap exceeded) it also already
-// deleted the R2 object, so retrying the same storage_key can only fail the
-// same way forever.
+// A confirm failure is worth retrying whenever the object might still exist:
+// a network-level failure (no response at all -- not an ApiResponseError),
+// a 429 (rate limited, nothing about the request was rejected), or a 5xx
+// (a server-side failure -- an R2 transport error inside head_object, a
+// transient database error, storage briefly unavailable -- none of which
+// confirm_upload's own validation-rejection paths raise; those are always
+// 4xx and delete the object before responding). Only a definitive 4xx
+// rejection (bad type/size, round mismatch, cap exceeded, wrong owner) means
+// the server actually processed the request and deleted the object -- that,
+// and only that, can never succeed by retrying the same storage_key.
 function isRetryableConfirmFailure(reason: unknown): boolean {
   if (!(reason instanceof ApiResponseError)) return true
-  return reason.status === 429
+  return reason.status === 429 || reason.status >= 500
 }
 
 function isValidDate(value: string) {

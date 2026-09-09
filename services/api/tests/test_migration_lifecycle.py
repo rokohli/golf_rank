@@ -182,6 +182,51 @@ def test_0024_migration_shifts_hardings_existing_row_out_of_position_zero(monkey
         engine.dispose()
 
 
+def test_0024_migration_skips_sharing_when_flemings_hero_is_a_wikimedia_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test: Fleming's is_hero row can be a live-fetched Wikimedia
+    cache row (external_url set, storage_key NULL) rather than a curated
+    photo. Selecting it as fleming_hero and copying only storage_key would
+    insert a Harding row with neither locator set, violating
+    ck_course_image_one_locator and aborting the upgrade. The fix restricts
+    the selected hero to a storage_key-backed row, so with only a Wikimedia
+    hero present, no Harding row is inserted at all."""
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+
+        command.upgrade(config, "0023_course_image_round_link")
+
+        engine = make_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO courses (id, name, region, source, source_course_id, latitude, longitude) VALUES "
+                "(1, 'Tpc Harding Park Fleming Course', 'SF', 'seed', "
+                "'61fb03c8-74fc-4fc8-87d0-0491190e2d54', 37.7, -122.5), "
+                "(2, 'Tpc Harding Park Harding Course', 'SF', 'seed', "
+                "'21922834-62d3-4603-b624-b44867b60eb4', 37.7, -122.5)"
+            ))
+            # Fleming's only is_hero row is a Wikimedia cache result, not a
+            # curated photo -- no storage_key.
+            conn.execute(text(
+                "INSERT INTO course_images (course_id, external_url, position, is_hero, source_type, "
+                "moderation_status) VALUES "
+                "(1, 'https://wikimedia.example/fleming.jpg', 0, 1, 'wikimedia', 'approved')"
+            ))
+        engine.dispose()
+
+        # Must not raise -- this is where copying a null storage_key used to
+        # violate ck_course_image_one_locator.
+        command.upgrade(config, "0024_fix_course_photos")
+
+        engine = make_engine(db_url)
+        with engine.connect() as conn:
+            harding_count = conn.execute(text(
+                "SELECT COUNT(*) FROM course_images WHERE course_id = 2"
+            )).scalar()
+            assert harding_count == 0
+        engine.dispose()
+
+
 def test_0025_storage_key_uniqueness_is_partial_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """uq_course_image_user_storage_key must only constrain USER rows -- two
     OFFICIAL rows sharing one storage_key (migration 0024's Fleming/Harding

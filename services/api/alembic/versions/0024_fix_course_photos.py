@@ -168,10 +168,17 @@ def upgrade() -> None:
         fleming_id = fleming["id"]
         harding_id = harding["id"]
 
+        # Restricted to a real curated (storage_key-backed) hero: Fleming's
+        # is_hero row could instead be a live-fetched Wikimedia cache row
+        # (external_url, storage_key NULL) -- copying that here would either
+        # violate ck_course_image_one_locator (Harding gets neither locator)
+        # or mislabel an ephemeral Wikimedia fetch as Harding's "official"
+        # curated photo, which the insert below always marks it as.
         fleming_hero = connection.execute(
             sa.select(course_images).where(
                 course_images.c.course_id == fleming_id,
                 course_images.c.is_hero.is_(True),
+                course_images.c.storage_key.isnot(None),
             )
         ).mappings().first()
 
