@@ -79,7 +79,7 @@ class ObjectStorage(Protocol):
 
     def head_object(self, storage_key: str) -> ObjectMeta | None: ...
 
-    def delete_object(self, storage_key: str) -> None: ...
+    def delete_object(self, storage_key: str) -> bool: ...
 
     def promote_object(self, pending_key: str, permanent_key: str) -> None: ...
 
@@ -161,18 +161,23 @@ class R2ObjectStorage:
             content_length=int(response.get("ContentLength", 0)),
         )
 
-    def delete_object(self, storage_key: str) -> None:
-        # Best-effort: callers use this for cleanup after their own primary
+    def delete_object(self, storage_key: str) -> bool:
+        # Never raises: callers use this for cleanup after their own primary
         # operation (a DB commit, a rejected upload) has already succeeded --
         # a storage failure here must never propagate and abort that already-
         # -completed work. Catches BotoCoreError too, not just ClientError:
         # a transport failure (e.g. R2 unreachable) raises BotoCoreError
         # subclasses like EndpointConnectionError, which ClientError alone
-        # would let escape.
+        # would let escape. Returns whether it actually succeeded, though --
+        # unlike a pending-prefixed key (which the lifecycle rule reclaims
+        # regardless), a permanent key has no other backstop, so a caller
+        # deleting one (round/account deletion) needs to know to record the
+        # failure for retry rather than silently losing it forever.
         try:
             self._client.delete_object(Bucket=self._bucket, Key=storage_key)
+            return True
         except (ClientError, BotoCoreError):
-            pass
+            return False
 
     def promote_object(self, pending_key: str, permanent_key: str) -> None:
         # Not best-effort: confirm_upload only creates the CourseImage row

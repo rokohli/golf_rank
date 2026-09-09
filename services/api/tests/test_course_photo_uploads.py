@@ -24,9 +24,10 @@ class FakeObjectStorage(ObjectStorage):
     def head_object(self, storage_key: str) -> ObjectMeta | None:
         return self.objects.get(storage_key)
 
-    def delete_object(self, storage_key: str) -> None:
+    def delete_object(self, storage_key: str) -> bool:
         self.objects.pop(storage_key, None)
         self.deleted.append(storage_key)
+        return True
 
     def promote_object(self, pending_key: str, permanent_key: str) -> None:
         # Mirrors R2ObjectStorage.promote_object: copies, leaves the pending

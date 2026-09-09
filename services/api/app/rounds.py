@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, delete_permanent_objects, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
     Comparison,
@@ -499,8 +499,7 @@ def delete_round(
     session.commit()
     storage = getattr(request.app.state, "object_storage", None)
     if storage is not None:
-        for storage_key in photo_storage_keys:
-            storage.delete_object(storage_key)
+        delete_permanent_objects(session, storage, photo_storage_keys, context="round_delete")
     return Response(status_code=204)
 
 

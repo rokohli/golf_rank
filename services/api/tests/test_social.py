@@ -100,6 +100,55 @@ def test_feed_shows_round_photos_regardless_of_moderation_status() -> None:
     assert len(own_state["round"]["photos"]) == 1
 
 
+def test_feed_batches_round_photo_queries_across_the_whole_page() -> None:
+    """Regression test: _activity_data() previously called round_image_data()
+    once per event, adding an N+1 series of CourseImage (and profile)
+    queries on top of the feed page's own event load. One CourseImage query
+    (batched via round_image_data_bulk) must cover every round-backed event
+    in the page, regardless of how many of them have photos."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    client = TestClient(app)
+    alice = _profile(client, "dev:feed-batch-alice", "Alice", "alice")
+    friends = [_profile(client, f"dev:feed-batch-friend-{i}", f"Friend{i}", f"friend{i}") for i in range(3)]
+    for i, friend in enumerate(friends):
+        _mutual_friend(client, alice, friend, f"friend{i}")
+
+    with app.state.session_factory() as session:
+        for i, friend in enumerate(friends):
+            rated = _rate_course(client, friend, 1, visibility="friends")
+            round_id = rated["round"]["id"]
+            friend_id = session.scalar(select(User.id).where(User.provider_subject == f"dev:feed-batch-friend-{i}"))
+            session.add(CourseImage(
+                course_id=1, storage_key=f"course-photos/1/friend-{i}.jpg", position=i, source_type="user",
+                moderation_status="approved", uploaded_by_user_id=friend_id, round_id=round_id,
+            ))
+        session.commit()
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(app.state.engine, "before_cursor_execute", capture_select)
+    try:
+        response = client.get("/api/v1/feed", headers=alice)
+    finally:
+        event.remove(app.state.engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert sum(len(item["data"].get("photos", [])) for item in items) == 3
+
+    # Scoped to the round_id-filtered query specifically (round_image_data_bulk)
+    # -- course.images selectin-loading for course_data()'s own gallery is a
+    # separate, unrelated course_id-filtered query (its SELECT list happens
+    # to mention the round_id column too, so matching on WHERE, not mere
+    # presence, is what distinguishes the two).
+    round_photo_statements = [s for s in statements if "where course_images.round_id in" in s.lower()]
+    assert len(round_photo_statements) == 1
+
+
 def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared_memories() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-alice", "Alice", "alice")

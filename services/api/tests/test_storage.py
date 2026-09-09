@@ -10,18 +10,35 @@ class _RaisingClient:
         raise EndpointConnectionError(endpoint_url="https://r2.example/unreachable")
 
 
-def test_delete_object_swallows_transport_failures() -> None:
-    """delete_object is used as best-effort cleanup after the caller's own
-    primary operation (a round/account deletion commit, a rejected upload)
-    has already succeeded -- a network-level failure reaching R2 (raised as
-    BotoCoreError, e.g. EndpointConnectionError, not ClientError) must not
-    propagate and interrupt that caller."""
+def test_delete_object_swallows_transport_failures_but_reports_them() -> None:
+    """delete_object never raises -- it's used as best-effort cleanup after
+    the caller's own primary operation (a round/account deletion commit, a
+    rejected upload) has already succeeded, and a network-level failure
+    reaching R2 (raised as BotoCoreError, e.g. EndpointConnectionError, not
+    ClientError) must not propagate and interrupt that caller. It must
+    still return False, though: a caller deleting a permanent (not
+    pending-prefixed) key needs to know to record the failure for retry
+    rather than silently losing it forever."""
     storage = R2ObjectStorage(
         account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
     )
     storage._client = _RaisingClient()
 
-    storage.delete_object("course-photos/1/photo.jpg")
+    assert storage.delete_object("course-photos/1/photo.jpg") is False
+
+
+class _SucceedingDeleteClient:
+    def delete_object(self, **kwargs):
+        return {}
+
+
+def test_delete_object_returns_true_on_success() -> None:
+    storage = R2ObjectStorage(
+        account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
+    )
+    storage._client = _SucceedingDeleteClient()
+
+    assert storage.delete_object("course-photos/1/photo.jpg") is True
 
 
 class _HeadObjectErrorClient:

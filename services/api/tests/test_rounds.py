@@ -6,6 +6,7 @@ from app.models import (
     ActivityEvent,
     Comparison,
     CourseImage,
+    FailedObjectDeletion,
     RankingConfidence,
     RankingSnapshot,
     Round,
@@ -287,9 +288,10 @@ class _FakeObjectStorage(ObjectStorage):
     def head_object(self, storage_key: str) -> ObjectMeta | None:
         return self.objects.get(storage_key)
 
-    def delete_object(self, storage_key: str) -> None:
+    def delete_object(self, storage_key: str) -> bool:
         self.objects.pop(storage_key, None)
         self.deleted.append(storage_key)
+        return True
 
 
 def test_deleting_round_removes_its_photos_row_and_r2_object() -> None:
@@ -324,6 +326,46 @@ def test_deleting_round_removes_its_photos_row_and_r2_object() -> None:
     with app.state.session_factory() as session:
         assert session.get(CourseImage, image_id) is None
     assert storage_key in storage.deleted
+
+
+class _FailingDeleteObjectStorage(_FakeObjectStorage):
+    def delete_object(self, storage_key: str) -> bool:
+        self.deleted.append(storage_key)
+        return False
+
+
+def test_deleting_round_records_a_failed_object_deletion_for_retry() -> None:
+    """A permanent (already-promoted) storage_key isn't covered by the R2
+    lifecycle rule, and once the round row is gone there's no CourseImage
+    row left to retry deleting it from -- a delete_object failure here must
+    be durably recorded (FailedObjectDeletion), not silently dropped."""
+    app = create_app()
+    storage = _FailingDeleteObjectStorage()
+    app.state.object_storage = storage
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/rounds", headers=ALICE, json={"course_id": 1, "played_on": "2026-07-01"},
+    )
+    round_id = created.json()["id"]
+    storage_key = "course-photos/1/round-photo.jpg"
+
+    with app.state.session_factory() as session:
+        session.add(CourseImage(
+            course_id=1, storage_key=storage_key, position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=session.scalar(
+                select(User.id).where(User.provider_subject == "dev:round-alice")
+            ),
+            round_id=round_id,
+        ))
+        session.commit()
+
+    deleted = client.delete(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    assert deleted.status_code == 204
+
+    with app.state.session_factory() as session:
+        failure = session.scalar(select(FailedObjectDeletion).where(FailedObjectDeletion.storage_key == storage_key))
+        assert failure is not None
+        assert failure.context == "round_delete"
 
 
 def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() -> None:

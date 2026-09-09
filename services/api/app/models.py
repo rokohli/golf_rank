@@ -588,3 +588,22 @@ class PlanGeneration(Base):
     fallback_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     generated_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FailedObjectDeletion(Base):
+    """A permanent (non-pending-prefixed) R2 object whose delete_object call
+    failed during round/account deletion. Unlike a course-photos/pending/
+    object, a promoted one isn't covered by the R2 lifecycle rule and has no
+    CourseImage row to retry from once the deleting transaction commits --
+    without this, a transient storage failure at delete time would silently
+    leave that object reachable forever. scripts/retry_failed_object_deletions.py
+    is the retry path; a row is removed once its deletion finally succeeds."""
+
+    __tablename__ = "failed_object_deletions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), index=True)
+    context: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

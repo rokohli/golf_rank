@@ -30,6 +30,7 @@ from .domain import (
     canonical_courses_only,
     course_data,
     course_identity_ids,
+    delete_permanent_objects,
     lock_identity_transaction,
     require_course,
     require_user,
@@ -377,8 +378,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session.commit()
         storage = getattr(request.app.state, "object_storage", None)
         if storage is not None:
-            for storage_key in photo_storage_keys:
-                storage.delete_object(storage_key)
+            delete_permanent_objects(session, storage, photo_storage_keys, context="account_delete")
         try:
             delete_clerk_user(user.provider_subject, settings)
         except HTTPException as error:

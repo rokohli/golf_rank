@@ -15,6 +15,7 @@ from .models import (
     CourseImageSource,
     CourseReconciliation,
     DeletedIdentity,
+    FailedObjectDeletion,
     Profile,
     User,
 )
@@ -297,44 +298,82 @@ def course_image_data(course: Course) -> list[dict]:
     return output
 
 
+def delete_permanent_objects(session: Session, storage, storage_keys, *, context: str) -> None:
+    """Deletes each already-promoted (non-pending-prefixed) storage_key via
+    storage, durably recording a FailedObjectDeletion row for any that
+    fails. Only for permanent keys: a pending-prefixed one has the R2
+    lifecycle rule as a backstop and doesn't need this, but a permanent
+    object has no other recovery path once its CourseImage row is gone --
+    silently dropping a delete_object failure here would leave it publicly
+    reachable forever. Runs its own commit, separate from whatever
+    transaction already deleted the owning round/account."""
+    failed = False
+    for storage_key in storage_keys:
+        if not storage.delete_object(storage_key):
+            session.add(FailedObjectDeletion(storage_key=storage_key, context=context))
+            failed = True
+    if failed:
+        session.commit()
+
+
 def storage_image_url(base_url: str | None, storage_key: str | None) -> str | None:
     if not base_url or not storage_key:
         return None
     return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"
 
 
+def _round_image_dict(image: CourseImage, image_base_url: str | None, usernames: dict[int, str | None]) -> dict | None:
+    url = image.external_url or storage_image_url(image_base_url, image.storage_key)
+    if url is None:
+        return None
+    return {
+        "id": image.id,
+        "url": url,
+        "alt_text": image.alt_text,
+        "source_name": image.source_name,
+        "source_url": image.source_url,
+        "license_name": image.license_name,
+        "license_url": image.license_url,
+        "position": image.position,
+        "is_hero": image.is_hero,
+        "source_type": image.source_type,
+        "quality_score": image.quality_score,
+        "width": image.width,
+        "height": image.height,
+        "created_at": image.created_at.isoformat() if image.created_at else None,
+        "uploaded_by_username": usernames.get(image.uploaded_by_user_id) if image.uploaded_by_user_id is not None else None,
+        "round_id": image.round_id,
+    }
+
+
 def round_image_data(session: Session, round_id: int) -> list[dict]:
     """Photos submitted with a specific round, regardless of moderation_status --
     moderation only gates hero-image/course-gallery eligibility (course_image_data
     above), never a user's own round posting."""
+    return round_image_data_bulk(session, {round_id}).get(round_id, [])
+
+
+def round_image_data_bulk(session: Session, round_ids: set[int]) -> dict[int, list[dict]]:
+    """Same as round_image_data, but for many rounds in one pass -- e.g. one
+    feed page covering many round-backed events. One CourseImage query for
+    every round_id and one profile query for every distinct uploader across
+    all of them, instead of round_image_data's own pair of queries repeated
+    once per round: the feed serialization loop previously called
+    round_image_data() once per event, adding an N+1 series of CourseImage
+    (and, for rounds with photos, profile) queries on top of the event page
+    load itself."""
+    if not round_ids:
+        return {}
     image_base_url = session.info.get("course_image_base_url")
     images = session.scalars(
-        select(CourseImage).where(CourseImage.round_id == round_id).order_by(CourseImage.position)
+        select(CourseImage).where(CourseImage.round_id.in_(round_ids)).order_by(CourseImage.round_id, CourseImage.position)
     ).all()
     usernames = _batch_uploader_usernames(
         session, {image.uploaded_by_user_id for image in images if image.uploaded_by_user_id is not None}
     )
-    output = []
+    grouped: dict[int, list[dict]] = {round_id: [] for round_id in round_ids}
     for image in images:
-        url = image.external_url or storage_image_url(image_base_url, image.storage_key)
-        if url is None:
-            continue
-        output.append({
-            "id": image.id,
-            "url": url,
-            "alt_text": image.alt_text,
-            "source_name": image.source_name,
-            "source_url": image.source_url,
-            "license_name": image.license_name,
-            "license_url": image.license_url,
-            "position": image.position,
-            "is_hero": image.is_hero,
-            "source_type": image.source_type,
-            "quality_score": image.quality_score,
-            "width": image.width,
-            "height": image.height,
-            "created_at": image.created_at.isoformat() if image.created_at else None,
-            "uploaded_by_username": usernames.get(image.uploaded_by_user_id) if image.uploaded_by_user_id is not None else None,
-            "round_id": image.round_id,
-        })
-    return output
+        entry = _round_image_dict(image, image_base_url, usernames)
+        if entry is not None:
+            grouped[image.round_id].append(entry)
+    return grouped
