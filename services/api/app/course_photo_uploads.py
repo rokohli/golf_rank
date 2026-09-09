@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
-from .core.rate_limit import photo_confirm_rate_limit, photo_upload_rate_limit
+from .core.rate_limit import photo_confirm_rate_limit, photo_discard_rate_limit, photo_upload_rate_limit
 from .course_images.repository import CourseImageRepository
 from .db import get_session
 from .domain import require_course, require_user, storage_image_url, uploader_username
@@ -178,7 +178,12 @@ def confirm_upload(
 @router.post(
     "/api/v1/courses/{course_id}/photos/discard",
     status_code=204,
-    dependencies=[Depends(photo_upload_rate_limit)],
+    # Deliberately a separate rate-limit bucket from upload-url -- see
+    # photo_discard_rate_limit's docstring: discard is best-effort cleanup
+    # the client never retries on failure, so sharing upload-url's bucket
+    # meant it could be denied by the very requests it exists to clean up
+    # after.
+    dependencies=[Depends(photo_discard_rate_limit)],
 )
 def discard_upload(
     course_id: int,

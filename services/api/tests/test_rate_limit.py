@@ -107,13 +107,17 @@ def test_candidate_submission_checks_user_ip_and_daily_quota() -> None:
     assert limiter.quota_calls[0]["identity"] == "dev:missing-user"
 
 
-def test_photo_upload_and_confirm_use_separate_rate_limit_buckets() -> None:
-    """Regression test: uploading one photo makes one call each to upload-url
-    and confirm. If both endpoints shared a single bucket/quota name, one
-    photo would spend two units of one budget -- halving the effective
-    capacity the app advertises (5 photos per round) and exhausting the
-    daily quota after half as many photos as intended. They must use
-    distinct policy/quota names so each budget is spent independently."""
+def test_photo_upload_confirm_and_discard_use_separate_rate_limit_buckets() -> None:
+    """Regression test: uploading and discarding one photo makes one call
+    each to upload-url, confirm, and discard. If any two of these shared a
+    bucket/quota name, one photo would spend two units of one budget --
+    halving the effective capacity the app advertises (5 photos per round)
+    and exhausting the daily quota after half as many photos as intended.
+    Discard in particular is best-effort cleanup the client never retries on
+    failure (see coursePhotoUpload.ts), so sharing upload-url's bucket meant
+    it could be denied by the very requests it exists to clean up after.
+    They must use distinct policy/quota names so each budget is spent
+    independently."""
     app = create_app(ENABLED_SETTINGS)
     limiter = RecordingLimiter()
     app.state.rate_limiter = limiter
@@ -128,11 +132,15 @@ def test_photo_upload_and_confirm_use_separate_rate_limit_buckets() -> None:
         "/api/v1/courses/999999/photos/confirm",
         headers=headers, json={"storage_key": "course-photos/999999/x.jpg"},
     )
+    client.post(
+        "/api/v1/courses/999999/photos/discard",
+        headers=headers, json={"storage_key": "course-photos/999999/x.jpg"},
+    )
 
     upload_bucket_names = {call["policy"].name for call in limiter.token_calls}
-    confirm_quota_names = {call["name"] for call in limiter.quota_calls}
-    assert len(upload_bucket_names) == 2
-    assert len(confirm_quota_names) == 2
+    quota_names = {call["name"] for call in limiter.quota_calls}
+    assert len(upload_bucket_names) == 3
+    assert len(quota_names) == 3
 
 
 def test_ai_planner_checks_user_ip_and_fail_closed_daily_quota() -> None:

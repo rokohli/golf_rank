@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
@@ -27,7 +27,7 @@ import {
   RatingDetailsInput,
   RatingTier,
 } from '../types'
-import { CoursePhotoContentType } from '../api/client'
+import { ApiResponseError, CoursePhotoContentType } from '../api/client'
 import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
 import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
@@ -172,21 +172,36 @@ export function RatingFlow({
     const outcomes = await Promise.all(ready.map((photo) =>
       confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions)
         .then(() => ({ id: photo.id, ok: true as const }))
-        .catch(() => ({ id: photo.id, ok: false as const }))
+        .catch((reason) => ({ id: photo.id, ok: false as const, retryable: isRetryableConfirmFailure(reason) }))
     ))
     // Confirmation is idempotent per storage_key (server-side), so a photo
-    // that failed to confirm stays staged -- the next Continue retries it
-    // instead of silently abandoning its already-uploaded R2 object.
-    const failedIds = new Set(outcomes.filter((outcome) => !outcome.ok).map((outcome) => outcome.id))
-    setStagedPhotos((current) => current.filter((photo) => failedIds.has(photo.id)))
-    if (failedIds.size) setGuestMessage('Your round was saved, but one or more photos could not be attached. You can try again.')
+    // that failed to confirm for a transient reason (rate limiting, a
+    // network error) stays staged -- the next Continue retries it instead
+    // of silently abandoning its already-uploaded R2 object. A photo the
+    // server rejected (bad type/size, round mismatch, cap exceeded) is
+    // different: confirm_upload deletes that R2 object before responding,
+    // so its storage_key is already gone and retrying can only ever fail
+    // the same way -- drop it instead of retrying forever.
+    const failures = outcomes.filter((outcome): outcome is Extract<typeof outcome, { ok: false }> => !outcome.ok)
+    const retryableIds = new Set(failures.filter((failure) => failure.retryable).map((failure) => failure.id))
+    const rejectedCount = failures.length - retryableIds.size
+    setStagedPhotos((current) => current.filter((photo) => retryableIds.has(photo.id)))
+    if (rejectedCount && retryableIds.size) {
+      setGuestMessage('Your round was saved. Some photos could not be attached and were removed; others can be retried.')
+    } else if (rejectedCount) {
+      setGuestMessage('Your round was saved, but one or more photos could not be attached.')
+    } else if (retryableIds.size) {
+      setGuestMessage('Your round was saved, but one or more photos could not be attached. You can try again.')
+    }
   }
 
   // Cleans up any staged-but-unconfirmed uploads so leaving the flow without
   // finishing doesn't strand permanent R2 objects (e.g. closing after
-  // picking photos but before Continue saves the round).
-  function discardStagedPhotos() {
-    stagedPhotos.forEach((photo) => {
+  // picking photos but before Continue saves the round). Takes an explicit
+  // list rather than reading `stagedPhotos` from closure so the unmount
+  // effect below can pass a ref value instead of a stale snapshot.
+  function discardStagedPhotos(photos: StagedPhoto[]) {
+    photos.forEach((photo) => {
       if (photo.status === 'uploading') {
         removedWhileUploadingRef.current.add(photo.id)
       } else if (photo.storageKey) {
@@ -195,8 +210,24 @@ export function RatingFlow({
     })
   }
 
+  // handleClose covers the flow's own close/back controls, but the screen
+  // can also be dismissed without either running -- Android system back, a
+  // native swipe/navigation gesture, a parent navigation change -- which
+  // unmounts this component directly. Effect cleanup is the one place that
+  // still runs in that case. stagedPhotosRef mirrors state into a ref so the
+  // cleanup (registered once, on mount) reads the latest staged photos
+  // instead of the empty array from its first render's closure. Re-running
+  // this after handleClose already discarded the same photos is harmless --
+  // discardPhotoUpload is a best-effort, fire-and-forget call the client
+  // never inspects the result of.
+  const stagedPhotosRef = useRef<StagedPhoto[]>(stagedPhotos)
+  useEffect(() => {
+    stagedPhotosRef.current = stagedPhotos
+  }, [stagedPhotos])
+  useEffect(() => () => discardStagedPhotos(stagedPhotosRef.current), [])
+
   function handleClose() {
-    discardStagedPhotos()
+    discardStagedPhotos(stagedPhotos)
     onClose()
   }
 
@@ -497,6 +528,19 @@ function detailsPayload(note: string, favoriteHole: string, friendIds: number[],
 
 function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback
+}
+
+// A confirm failure is worth retrying only when the object might still
+// exist: a network-level failure (no response at all -- not an
+// ApiResponseError) or a 429 (rate limited, nothing about the request was
+// rejected). Every other server response from /photos/confirm means the
+// server processed the request and rejected it -- for the validation
+// failures (bad type/size, round mismatch, cap exceeded) it also already
+// deleted the R2 object, so retrying the same storage_key can only fail the
+// same way forever.
+function isRetryableConfirmFailure(reason: unknown): boolean {
+  if (!(reason instanceof ApiResponseError)) return true
+  return reason.status === 429
 }
 
 function isValidDate(value: string) {

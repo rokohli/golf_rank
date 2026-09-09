@@ -322,8 +322,8 @@ async def photo_upload_rate_limit(
     response: Response,
     user: CurrentUser = Depends(current_user),
 ) -> None:
-    """Governs requesting a presigned upload URL and discarding an unconfirmed
-    one -- the "staging" side of a photo upload."""
+    """Governs requesting a presigned upload URL -- the "staging" side of a
+    photo upload."""
     await _photo_rate_limit("course-photo-upload", request, response, user)
 
 
@@ -339,6 +339,21 @@ async def photo_confirm_rate_limit(
     meant a user could exhaust it roughly halfway through the app's own
     5-photos-per-round limit."""
     await _photo_rate_limit("course-photo-confirm", request, response, user)
+
+
+async def photo_discard_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    """Governs discarding an unconfirmed staged upload -- deliberately a
+    separate bucket from photo_upload_rate_limit. Discard is best-effort
+    cleanup the client fires and ignores the response of (see
+    coursePhotoUpload.ts), so if it shared upload-url's bucket, requesting
+    N upload URLs could exhaust the bucket and then have every one of the N
+    discard-on-close calls denied with 429 -- silently leaving every one of
+    those objects orphaned in R2 instead of cleaned up."""
+    await _photo_rate_limit("course-photo-discard", request, response, user)
 
 
 async def ai_planner_rate_limit(

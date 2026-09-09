@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
+import { ApiResponseError } from '../../api/client'
 import { RatingFlow, RatingFlowProps } from '../RatingFlow'
 import { CourseRatingState } from '../../types'
 
@@ -259,6 +260,69 @@ describe('RatingFlow', () => {
     await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledWith(
       'course-photos/1/staged.jpg', 4, { width: 1600, height: 1200 },
     ))
+  })
+
+  it('drops a photo the server rejected instead of offering to retry it', async () => {
+    // confirm_upload deletes the R2 object before responding to a validation
+    // rejection (bad type/size, round mismatch, cap exceeded) -- retrying
+    // the same storage_key can only ever fail the same way again.
+    const inputProps = props({
+      initialRating: { ...existingRating, companions: [] },
+      confirmPhotoUpload: jest.fn().mockRejectedValue(new ApiResponseError('Unsupported content type', 422)),
+    })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Your round was saved, but one or more photos could not be attached.')).toBeOnTheScreen()
+    expect(screen.queryByText(/you can try again/i)).not.toBeOnTheScreen()
+  })
+
+  it('keeps a photo staged for retry when confirmation fails for a transient reason', async () => {
+    const inputProps = props({
+      initialRating: { ...existingRating, companions: [] },
+      confirmPhotoUpload: jest.fn().mockRejectedValue(new ApiResponseError('Too many requests', 429)),
+    })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Your round was saved, but one or more photos could not be attached. You can try again.')).toBeOnTheScreen()
+  })
+
+  it('discards staged uploads on unmount even if the flow was dismissed without the close controls', async () => {
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    const view = render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    view.unmount()
+
+    await waitFor(() => expect(inputProps.discardPhotoUpload).toHaveBeenCalledWith('course-photos/1/staged.jpg'))
   })
 
   it('lets the user remove a staged photo before it is confirmed', async () => {
