@@ -1,0 +1,309 @@
+import { Feather } from '@expo/vector-icons'
+import { Image } from 'expo-image'
+import { Stack, useRouter } from 'expo-router'
+import { useCallback, useEffect, useState } from 'react'
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
+
+import {
+  approveCoursePhoto,
+  deleteCoursePhoto,
+  getAdminCoursePhotos,
+  rejectCoursePhoto,
+  setCoursePhotoFeatured,
+} from '../../src/api/client'
+import { useAdminAccess } from '../../src/auth/useAdminAccess'
+import { useAuthHeaders } from '../../src/auth/useAuthToken'
+import { ProductScreen, ScreenHeader } from '../../src/components/ProductUI'
+import { AdminCoursePhoto } from '../../src/types'
+import { colors, radii } from '../../src/ui/theme'
+
+const STATUSES = ['pending', 'approved', 'rejected'] as const
+type Status = typeof STATUSES[number]
+
+/**
+ * The course-photo moderation queue.
+ *
+ * Moderation governs hero-image eligibility, not visibility: approving lets a
+ * photo win the USER tier (and, since this catalog has few OFFICIAL photos,
+ * usually become the course hero outright), while rejecting only makes it
+ * permanently ineligible. Neither hides the photo from the course gallery --
+ * only Delete removes it, along with its stored object.
+ */
+export default function AdminPhotos() {
+  const router = useRouter()
+  const { getAuthHeaders } = useAuthHeaders()
+  const { isAdmin, loading: checkingAccess } = useAdminAccess()
+
+  const [status, setStatus] = useState<Status>('pending')
+  const [photos, setPhotos] = useState<AdminCoursePhoto[]>([])
+  const [cursor, setCursor] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (nextStatus: Status) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const page = await getAdminCoursePhotos(nextStatus, null, await getAuthHeaders())
+      setPhotos(page.items)
+      setCursor(page.next_cursor)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to load the moderation queue.')
+    } finally {
+      setLoading(false)
+    }
+  }, [getAuthHeaders])
+
+  useEffect(() => {
+    if (isAdmin) void load(status)
+  }, [isAdmin, load, status])
+
+  const loadMore = useCallback(async () => {
+    if (cursor === null || loading) return
+    try {
+      const page = await getAdminCoursePhotos(status, cursor, await getAuthHeaders())
+      setPhotos((current) => [...current, ...page.items])
+      setCursor(page.next_cursor)
+    } catch {
+      // A failed page-append leaves what is already shown intact.
+    }
+  }, [cursor, getAuthHeaders, loading, status])
+
+  // Every action returns the updated row, so apply it in place. A photo that no
+  // longer matches the active filter drops out of the list.
+  const applyResult = useCallback((updated: AdminCoursePhoto) => {
+    setPhotos((current) => (
+      updated.moderation_status === status
+        ? current.map((photo) => (photo.image.id === updated.image.id ? updated : photo))
+        : current.filter((photo) => photo.image.id !== updated.image.id)
+    ))
+  }, [status])
+
+  const run = useCallback(async (
+    imageId: number,
+    action: (headers: Awaited<ReturnType<typeof getAuthHeaders>>) => Promise<AdminCoursePhoto | void>,
+  ) => {
+    setBusyId(imageId)
+    setError(null)
+    try {
+      const updated = await action(await getAuthHeaders())
+      if (updated) applyResult(updated)
+      else setPhotos((current) => current.filter((photo) => photo.image.id !== imageId))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'That action did not go through.')
+    } finally {
+      setBusyId(null)
+    }
+  }, [applyResult, getAuthHeaders])
+
+  const confirmDelete = (photo: AdminCoursePhoto) => {
+    Alert.alert(
+      'Delete this photo?',
+      `This permanently removes the photo from ${photo.course_name} and deletes the stored file. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => { void run(photo.image.id, (headers) => deleteCoursePhoto(photo.image.id, headers)) },
+        },
+      ],
+    )
+  }
+
+  const confirmReject = (photo: AdminCoursePhoto) => {
+    Alert.alert(
+      'Reject this photo?',
+      'It stays visible in the course gallery but can never become the course hero.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reject',
+          style: 'destructive',
+          onPress: () => { void run(photo.image.id, (headers) => rejectCoursePhoto(photo.image.id, null, headers)) },
+        },
+      ],
+    )
+  }
+
+  if (checkingAccess) {
+    return <>
+      <Stack.Screen options={{ headerShown: false }} />
+      <ProductScreen>
+        <ScreenHeader onBack={() => router.back()} title="Photo moderation" />
+        <ActivityIndicator accessibilityLabel="Checking access" color={colors.pine} />
+      </ProductScreen>
+    </>
+  }
+
+  if (!isAdmin) {
+    return <>
+      <Stack.Screen options={{ headerShown: false }} />
+      <ProductScreen>
+        <ScreenHeader onBack={() => router.back()} title="Photo moderation" />
+        <Text style={styles.empty}>This area isn&apos;t available.</Text>
+      </ProductScreen>
+    </>
+  }
+
+  return <>
+    <Stack.Screen options={{ headerShown: false }} />
+    <ProductScreen>
+      <ScreenHeader onBack={() => router.back()} title="Photo moderation" />
+
+      <View style={styles.filters}>
+        {STATUSES.map((value) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: status === value }}
+            key={value}
+            onPress={() => setStatus(value)}
+            style={({ pressed }) => [styles.filter, status === value && styles.filterActive, pressed && styles.pressed]}
+          >
+            <Text style={[styles.filterText, status === value && styles.filterTextActive]}>
+              {value.charAt(0).toUpperCase() + value.slice(1)}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+      {loading ? <ActivityIndicator accessibilityLabel="Loading photos" color={colors.pine} /> : null}
+      {!loading && photos.length === 0 ? <Text style={styles.empty}>No {status} photos.</Text> : null}
+
+      <FlatList
+        data={photos}
+        keyExtractor={(photo) => String(photo.image.id)}
+        onEndReached={() => { void loadMore() }}
+        onEndReachedThreshold={0.4}
+        renderItem={({ item }) => (
+          <PhotoCard
+            busy={busyId === item.image.id}
+            onApprove={() => { void run(item.image.id, (headers) => approveCoursePhoto(item.image.id, headers)) }}
+            onDelete={() => confirmDelete(item)}
+            onFeature={() => {
+              void run(item.image.id, (headers) => setCoursePhotoFeatured(item.image.id, !item.image.is_hero, headers))
+            }}
+            onOpenCourse={() => router.push(`/course/${item.course_id}` as never)}
+            onReject={() => confirmReject(item)}
+            photo={item}
+          />
+        )}
+        scrollEnabled={false}
+      />
+    </ProductScreen>
+  </>
+}
+
+function PhotoCard({ busy, onApprove, onDelete, onFeature, onOpenCourse, onReject, photo }: {
+  busy: boolean
+  onApprove: () => void
+  onDelete: () => void
+  onFeature: () => void
+  onOpenCourse: () => void
+  onReject: () => void
+  photo: AdminCoursePhoto
+}) {
+  return (
+    <View style={styles.card}>
+      {photo.image.url ? (
+        <Image accessibilityLabel={photo.image.alt_text ?? 'Course photo'} contentFit="cover" source={{ uri: photo.image.url }} style={styles.photo} />
+      ) : <View style={[styles.photo, styles.photoMissing]}><Text style={styles.meta}>No image URL</Text></View>}
+
+      <Pressable accessibilityRole="button" onPress={onOpenCourse}>
+        <Text style={styles.courseName}>{photo.course_name}</Text>
+      </Pressable>
+
+      <Text style={styles.meta}>
+        {photo.image.uploaded_by_username ? `@${photo.image.uploaded_by_username}` : 'Unknown uploader'}
+        {photo.image.created_at ? ` · ${new Date(photo.image.created_at).toLocaleDateString()}` : ''}
+      </Text>
+
+      <View style={styles.pills}>
+        <Text style={styles.pill}>{photo.moderation_status}</Text>
+        {photo.image.is_hero ? <Text style={[styles.pill, styles.pillFeatured]}>Featured</Text> : null}
+      </View>
+
+      <ScoreSummary photo={photo} />
+
+      {photo.moderated_by_username || photo.moderation_reason ? (
+        <Text style={styles.meta}>
+          {photo.moderated_by_username ? `Reviewed by @${photo.moderated_by_username}` : 'Reviewed automatically'}
+          {photo.moderation_reason ? ` · ${photo.moderation_reason}` : ''}
+        </Text>
+      ) : null}
+
+      <View style={styles.actions}>
+        {busy ? <ActivityIndicator accessibilityLabel="Applying" color={colors.pine} size="small" /> : <>
+          <Action icon="check" label="Approve" onPress={onApprove} />
+          <Action icon="x" label="Reject" onPress={onReject} />
+          <Action icon="star" label={photo.image.is_hero ? 'Unfeature' : 'Feature'} onPress={onFeature} />
+          <Action destructive icon="trash-2" label="Delete" onPress={onDelete} />
+        </>}
+      </View>
+    </View>
+  )
+}
+
+/**
+ * Why a photo scored what it did -- the reason the audit columns exist. Also
+ * distinguishes "not scored yet" from "deliberately not scored", so the
+ * hero-locked skip doesn't read as a bug.
+ */
+function ScoreSummary({ photo }: { photo: AdminCoursePhoto }) {
+  const score = photo.image.quality_score
+  if (score === null || score === undefined) {
+    if (photo.course_hero_locked) return <Text style={styles.meta}>Not scored — this course already has a featured hero.</Text>
+    if (photo.scored_at) return <Text style={styles.meta}>Scoring failed after {photo.scoring_attempts ?? 0} attempt(s).</Text>
+    return <Text style={styles.meta}>Not scored yet.</Text>
+  }
+  return (
+    <View style={styles.score}>
+      <Text style={styles.scoreValue}>{score.toFixed(0)}/10</Text>
+      {(photo.quality_score_reasons ?? []).map((reason, index) => (
+        <Text key={index} style={styles.reason}>• {reason}</Text>
+      ))}
+    </View>
+  )
+}
+
+function Action({ destructive, icon, label, onPress }: {
+  destructive?: boolean
+  icon: keyof typeof Feather.glyphMap
+  label: string
+  onPress: () => void
+}) {
+  return (
+    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
+      <Feather color={destructive ? colors.error : colors.pine} name={icon} size={15} />
+      <Text style={[styles.actionText, destructive && styles.actionTextDestructive]}>{label}</Text>
+    </Pressable>
+  )
+}
+
+const styles = StyleSheet.create({
+  filters: { flexDirection: 'row', gap: 8 },
+  filter: { borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
+  filterActive: { backgroundColor: colors.pine, borderColor: colors.pine },
+  filterText: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  filterTextActive: { color: colors.card },
+  card: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, gap: 8, marginBottom: 12, padding: 12 },
+  photo: { borderRadius: radii.small, height: 180, width: '100%' },
+  photoMissing: { alignItems: 'center', backgroundColor: colors.line, justifyContent: 'center' },
+  courseName: { color: colors.ink, fontFamily: 'Georgia', fontSize: 15 },
+  meta: { color: colors.muted, fontSize: 11 },
+  pills: { flexDirection: 'row', gap: 6 },
+  pill: { backgroundColor: colors.line, borderRadius: radii.small, color: colors.ink, fontSize: 10, fontWeight: '700', overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 3 },
+  pillFeatured: { backgroundColor: colors.pine, color: colors.card },
+  score: { gap: 2 },
+  scoreValue: { color: colors.ink, fontSize: 13, fontWeight: '800' },
+  reason: { color: colors.muted, fontSize: 11, lineHeight: 15 },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: 14, minHeight: 32 },
+  action: { alignItems: 'center', flexDirection: 'row', gap: 5, minHeight: 32 },
+  actionText: { color: colors.pine, fontSize: 12, fontWeight: '700' },
+  actionTextDestructive: { color: colors.error },
+  empty: { color: colors.muted, fontSize: 12, textAlign: 'center' },
+  error: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  pressed: { opacity: 0.65 },
+})

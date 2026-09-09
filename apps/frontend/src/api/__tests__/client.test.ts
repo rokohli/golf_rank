@@ -1,12 +1,16 @@
 import {
+  approveCoursePhoto,
   createSavedList,
   createPlan,
   createRound,
   deleteAccount,
+  deleteCoursePhoto,
   deleteLinkedContacts,
   deleteRound,
   deletePlan,
   generateAIItinerary,
+  getAdminAccess,
+  getAdminCoursePhotos,
   getCourse,
   getCourseRegions,
   getFeed,
@@ -33,7 +37,9 @@ import {
   savePreferences,
   savePlan,
   saveRatingDetails,
+  rejectCoursePhoto,
   saveTierPlacements,
+  setCoursePhotoFeatured,
   searchUsers,
   searchCourses,
   setActivityReaction,
@@ -418,5 +424,95 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://localhost:8000/api/v1/users/42', { headers })
     expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://localhost:8000/api/v1/course-regions')
     expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://localhost:8000/api/v1/feed/7/reactions/like', { method: 'PUT', headers })
+  })
+
+  describe('admin course photo moderation', () => {
+    const headers = { Authorization: 'Bearer test' }
+
+    it('reads the admin capability probe', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ is_admin: true }),
+      } as Response)
+
+      await expect(getAdminAccess(headers)).resolves.toBe(true)
+      expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/v1/me/admin', { headers })
+    })
+
+    it('treats a missing is_admin flag as not-admin', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({}),
+      } as Response)
+
+      await expect(getAdminAccess(headers)).resolves.toBe(false)
+    })
+
+    it('requests the queue with status and cursor', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ items: [], next_cursor: null }),
+      } as Response)
+
+      await getAdminCoursePhotos('rejected', 42, headers)
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos?status=rejected&cursor=42',
+        { headers },
+      )
+    })
+
+    it('omits the cursor on the first page', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ items: [], next_cursor: null }),
+      } as Response)
+
+      await getAdminCoursePhotos('pending', null, headers)
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos?status=pending',
+        { headers },
+      )
+    })
+
+    it('posts approve, reject, and feature with the right bodies', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({}),
+      } as Response)
+
+      await approveCoursePhoto(5, headers)
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos/5/approve',
+        { method: 'POST', headers },
+      )
+
+      await rejectCoursePhoto(5, 'people in frame', headers)
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos/5/reject',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: 'people in frame' }) }),
+      )
+
+      await setCoursePhotoFeatured(5, true, headers)
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos/5/feature',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ featured: true }) }),
+      )
+    })
+
+    it('deletes a photo', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true } as Response)
+
+      await deleteCoursePhoto(5, headers)
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/api/v1/admin/course-photos/5',
+        { method: 'DELETE', headers },
+      )
+    })
+
+    it('surfaces the API detail when an action is refused', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false, status: 404, json: async () => ({ detail: 'Not found' }),
+      } as Response)
+
+      await expect(approveCoursePhoto(5, headers)).rejects.toThrow('Not found')
+    })
   })
 })

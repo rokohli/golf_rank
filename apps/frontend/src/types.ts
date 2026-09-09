@@ -25,6 +25,27 @@ export type OnboardingPreferences = {
   }
 }
 
+export type AdminCoursePhoto = {
+  image: CourseImage
+  course_id: number
+  course_name: string
+  moderation_status: 'pending' | 'approved' | 'rejected' | string
+  moderated_at?: string | null
+  moderated_by_username?: string | null
+  moderation_reason?: string | null
+  quality_score_reasons?: string[] | null
+  scored_at?: string | null
+  scoring_attempts?: number
+  // The course already has a human-featured hero, so the scorer deliberately
+  // skipped this photo -- distinct from "not scored yet".
+  course_hero_locked?: boolean
+}
+
+export type AdminCoursePhotoPage = {
+  items: AdminCoursePhoto[]
+  next_cursor: number | null
+}
+
 export type CourseImage = {
   id: number
   url: string | null
