@@ -4,6 +4,7 @@ import {
   Activity,
   AppNotification,
   Course,
+  CourseImage,
   CourseRegion,
   CourseSearchFilters,
   CourseRatingInput,
@@ -133,6 +134,87 @@ export async function getCourse(courseId: number): Promise<Course> {
   const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}`)
   if (!response.ok) throw await responseError(response, 'Unable to load this course. Please try again.')
   return response.json()
+}
+
+export type CoursePhotoContentType = 'image/jpeg' | 'image/png' | 'image/webp'
+
+export type CoursePhotoUploadUrl = {
+  upload_url: string
+  storage_key: string
+  content_type: CoursePhotoContentType
+  expires_in_seconds: number
+}
+
+export async function getCoursePhotoUploadUrl(
+  courseId: number,
+  contentType: CoursePhotoContentType,
+  headers: ApiHeaders,
+): Promise<CoursePhotoUploadUrl> {
+  const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}/photos/upload-url`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content_type: contentType }),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to start photo upload.')
+  return response.json()
+}
+
+// Uploads directly to R2 via the presigned PUT URL -- this is not a call to
+// our API (no Authorization header, raw bytes instead of JSON).
+export async function uploadCoursePhotoToStorage(
+  uploadUrl: string,
+  contentType: CoursePhotoContentType,
+  fileUri: string,
+): Promise<void> {
+  const fileResponse = await fetch(fileUri)
+  const blob = await fileResponse.blob()
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body: blob,
+  })
+  if (!response.ok) throw new Error('Photo upload to storage failed.')
+}
+
+export async function confirmCoursePhotoUpload(
+  courseId: number,
+  storageKey: string,
+  headers: ApiHeaders,
+  dimensions?: { width: number; height: number },
+  roundId?: number,
+): Promise<CourseImage> {
+  const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}/photos/confirm`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      storage_key: storageKey,
+      width: dimensions?.width,
+      height: dimensions?.height,
+      round_id: roundId,
+    }),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to submit photo.')
+  return response.json()
+}
+
+// Best-effort cleanup for a staged photo the user removed before Continue
+// confirmed it -- deletes the orphaned R2 object. Never throws: callers
+// treat this as fire-and-forget, since a failure here just leaves an unused
+// object in storage rather than breaking anything the user can see.
+export async function discardCoursePhotoUpload(
+  courseId: number,
+  storageKey: string,
+  headers: ApiHeaders,
+): Promise<void> {
+  try {
+    await fetch(`${baseUrl}/api/v1/courses/${courseId}/photos/discard`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ storage_key: storageKey }),
+    })
+  } catch {
+    // best-effort; see doc comment above
+  }
 }
 
 export async function getFriendsCourseThoughts(courseId: number, headers: ApiHeaders): Promise<FriendsCourseThoughts> {

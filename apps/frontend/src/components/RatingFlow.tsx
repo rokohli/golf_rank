@@ -1,7 +1,8 @@
 import { Feather } from '@expo/vector-icons'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Image,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
@@ -18,6 +19,7 @@ import {
 import {
   ComparisonResult,
   Course,
+  CourseImage,
   CourseRatingInput,
   CourseRatingState,
   FriendSummary,
@@ -25,12 +27,22 @@ import {
   RatingDetailsInput,
   RatingTier,
 } from '../types'
+import { CoursePhotoContentType } from '../api/client'
+import { MAX_PHOTOS_PER_ROUND, isRetryableConfirmFailure, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
 import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
 
 type Guest = { name: string; phone: string | null }
 type Stage = 'tier' | 'round' | 'comparison' | 'reveal'
 type RoundEditor = 'played' | 'score' | 'notes' | 'favorite' | 'people' | null
+type StagedPhoto = {
+  id: string
+  imageUri: string
+  contentType: CoursePhotoContentType
+  dimensions?: { width: number; height: number }
+  status: 'uploading' | 'ready' | 'error'
+  storageKey?: string
+}
 
 export type RatingFlowProps = {
   course: Course
@@ -39,6 +51,9 @@ export type RatingFlowProps = {
   getCandidate: (tier: RatingTier) => Promise<RatingCandidate>
   saveRating: (input: CourseRatingInput) => Promise<CourseRatingState>
   saveDetails: (input: RatingDetailsInput) => Promise<CourseRatingState>
+  startPhotoUpload: (imageUri: string, contentType: CoursePhotoContentType) => Promise<{ storageKey: string }>
+  confirmPhotoUpload: (storageKey: string, roundId: number, dimensions?: { width: number; height: number }) => Promise<CourseImage>
+  discardPhotoUpload: (storageKey: string) => Promise<void>
   onClose: () => void
   today?: string
 }
@@ -64,6 +79,9 @@ export function RatingFlow({
   getCandidate,
   saveRating,
   saveDetails,
+  startPhotoUpload,
+  confirmPhotoUpload,
+  discardPhotoUpload,
   onClose,
   today = localToday(),
 }: RatingFlowProps) {
@@ -74,7 +92,7 @@ export function RatingFlow({
     initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
     initialFriendIds,
     initialGuests,
-    initialRating.round?.visibility === 'friends',
+    initialRating.round ? initialRating.round.visibility === 'friends' : true,
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -94,12 +112,133 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
-  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round?.visibility === 'friends')
+  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round ? initialRating.round.visibility === 'friends' : true)
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guestMessage, setGuestMessage] = useState<string | null>(null)
+  const [existingPhotos, setExistingPhotos] = useState<CourseImage[]>(initialRating.round?.photos ?? [])
+  const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
   const savingRef = useRef(false)
+  const totalPhotoCount = existingPhotos.length + stagedPhotos.length
+  const photoUploadInFlight = stagedPhotos.some((photo) => photo.status === 'uploading')
+
+  // The upload to R2 doesn't need a round_id -- only confirming it does, and a
+  // brand-new round doesn't exist until Continue saves it. So the slow part
+  // (the file transfer) starts immediately in the background here; the fast
+  // confirm call is deferred to finalizePhotos, once a round_id is known.
+  // Ids removed by the user while their upload was still in flight -- the
+  // upload's success handler checks this before adding the photo to state,
+  // so a photo removed mid-upload gets discarded (not silently kept) once
+  // the storage key becomes known.
+  const removedWhileUploadingRef = useRef<Set<string>>(new Set())
+
+  async function pickAndUploadPhoto() {
+    if (totalPhotoCount >= MAX_PHOTOS_PER_ROUND) return
+    const picked = await pickCoursePhotoAsset()
+    if (!picked) return
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setStagedPhotos((current) => [...current, { id, imageUri: picked.uri, contentType: picked.contentType, dimensions: picked.dimensions, status: 'uploading' }])
+    setGuestMessage(null)
+    try {
+      const { storageKey } = await startPhotoUpload(picked.uri, picked.contentType)
+      if (removedWhileUploadingRef.current.delete(id)) {
+        void discardPhotoUpload(storageKey)
+        return
+      }
+      setStagedPhotos((current) => current.map((photo) => (photo.id === id ? { ...photo, status: 'ready', storageKey } : photo)))
+    } catch (reason) {
+      removedWhileUploadingRef.current.delete(id)
+      setStagedPhotos((current) => current.map((photo) => (photo.id === id ? { ...photo, status: 'error' } : photo)))
+      setGuestMessage(errorMessage(reason, 'Unable to upload photo. Please try again.'))
+    }
+  }
+
+  function removeStagedPhoto(id: string) {
+    const photo = stagedPhotos.find((item) => item.id === id)
+    if (photo?.status === 'uploading') {
+      // storageKey isn't known yet -- flag it so the upload's own completion
+      // handler discards the object once it lands, instead of staging it.
+      removedWhileUploadingRef.current.add(id)
+    } else if (photo?.storageKey) {
+      void discardPhotoUpload(photo.storageKey)
+    }
+    setStagedPhotos((current) => current.filter((item) => item.id !== id))
+  }
+
+  async function finalizePhotos(roundId: number) {
+    const ready = stagedPhotos.filter((photo) => photo.status === 'ready' && photo.storageKey)
+    if (!ready.length) return
+    const outcomes = await Promise.all(ready.map((photo) =>
+      confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions)
+        .then((image) => ({ id: photo.id, ok: true as const, image }))
+        .catch((reason) => ({ id: photo.id, ok: false as const, retryable: isRetryableConfirmFailure(reason) }))
+    ))
+    // Confirmation is idempotent per storage_key (server-side), so a photo
+    // that failed to confirm for a transient reason (rate limiting, a
+    // network error) stays staged -- the next Continue retries it instead
+    // of silently abandoning its already-uploaded R2 object. A photo the
+    // server rejected (bad type/size, round mismatch, cap exceeded) is
+    // different: confirm_upload deletes that R2 object before responding,
+    // so its storage_key is already gone and retrying can only ever fail
+    // the same way -- drop it instead of retrying forever.
+    const failures = outcomes.filter((outcome): outcome is Extract<typeof outcome, { ok: false }> => !outcome.ok)
+    const retryableIds = new Set(failures.filter((failure) => failure.retryable).map((failure) => failure.id))
+    const rejectedCount = failures.length - retryableIds.size
+    // existingPhotos was previously frozen from the initial rating -- a
+    // successfully confirmed photo has to be added to it, not just dropped
+    // from stagedPhotos, so totalPhotoCount and the round preview stay
+    // correct if the user navigates back to this stage from reveal (the
+    // header back button allows that) instead of finishing the flow.
+    const confirmedImages = outcomes
+      .filter((outcome): outcome is Extract<typeof outcome, { ok: true }> => outcome.ok)
+      .map((outcome) => outcome.image)
+    if (confirmedImages.length) setExistingPhotos((current) => [...current, ...confirmedImages])
+    setStagedPhotos((current) => current.filter((photo) => retryableIds.has(photo.id)))
+    if (rejectedCount && retryableIds.size) {
+      setGuestMessage('Your round was saved. Some photos could not be attached and were removed; others can be retried.')
+    } else if (rejectedCount) {
+      setGuestMessage('Your round was saved, but one or more photos could not be attached.')
+    } else if (retryableIds.size) {
+      setGuestMessage('Your round was saved, but one or more photos could not be attached. You can try again.')
+    }
+  }
+
+  // Cleans up any staged-but-unconfirmed uploads so leaving the flow without
+  // finishing doesn't strand permanent R2 objects (e.g. closing after
+  // picking photos but before Continue saves the round). Takes an explicit
+  // list rather than reading `stagedPhotos` from closure so the unmount
+  // effect below can pass a ref value instead of a stale snapshot.
+  function discardStagedPhotos(photos: StagedPhoto[]) {
+    photos.forEach((photo) => {
+      if (photo.status === 'uploading') {
+        removedWhileUploadingRef.current.add(photo.id)
+      } else if (photo.storageKey) {
+        void discardPhotoUpload(photo.storageKey)
+      }
+    })
+  }
+
+  // handleClose covers the flow's own close/back controls, but the screen
+  // can also be dismissed without either running -- Android system back, a
+  // native swipe/navigation gesture, a parent navigation change -- which
+  // unmounts this component directly. Effect cleanup is the one place that
+  // still runs in that case. stagedPhotosRef mirrors state into a ref so the
+  // cleanup (registered once, on mount) reads the latest staged photos
+  // instead of the empty array from its first render's closure. Re-running
+  // this after handleClose already discarded the same photos is harmless --
+  // discardPhotoUpload is a best-effort, fire-and-forget call the client
+  // never inspects the result of.
+  const stagedPhotosRef = useRef<StagedPhoto[]>(stagedPhotos)
+  useEffect(() => {
+    stagedPhotosRef.current = stagedPhotos
+  }, [stagedPhotos])
+  useEffect(() => () => discardStagedPhotos(stagedPhotosRef.current), [])
+
+  function handleClose() {
+    discardStagedPhotos(stagedPhotos)
+    onClose()
+  }
 
   const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
   const visibleFriends = useMemo(() => {
@@ -114,9 +253,9 @@ export function RatingFlow({
     && coreBaseline.playedOn === playedOn
     && coreBaseline.score === score.trim()
   const scoreNumber = score.trim() ? Number(score) : null
-  const roundValid = playedOn !== null
-    && playedOn <= today
-    && (scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 40 && scoreNumber <= 250))
+  const dateValid = playedOn !== null && playedOn <= today
+  const scoreValid = scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 20 && scoreNumber <= 200)
+  const roundValid = dateValid && scoreValid
   const favoriteHoleValid = currentDetails.favorite_hole === null
     || (Number.isInteger(currentDetails.favorite_hole) && currentDetails.favorite_hole >= 1 && currentDetails.favorite_hole <= 18)
 
@@ -124,15 +263,18 @@ export function RatingFlow({
     if (!tier || !playedOn || !roundValid || !favoriteHoleValid) return
     setError(null)
     if (coreUnchanged && ratingState.personal_rating != null) {
-      if (!detailsChanged) {
+      if (!detailsChanged && !stagedPhotos.length) {
         setStage('reveal')
         return
       }
       setBusy(true)
       try {
-        const saved = await saveDetails(currentDetails)
-        setRatingState(saved)
-        setDetailsBaseline(currentDetails)
+        if (detailsChanged) {
+          const saved = await saveDetails(currentDetails)
+          setRatingState(saved)
+          setDetailsBaseline(currentDetails)
+        }
+        if (ratingState.round?.id) await finalizePhotos(ratingState.round.id)
         setStage('reveal')
       } catch (reason) {
         setError(errorMessage(reason, 'Unable to save your round details. Your answers are still here.'))
@@ -192,6 +334,7 @@ export function RatingFlow({
         return
       }
     }
+    if (saved.round?.id) await finalizePhotos(saved.round.id)
     setStage('reveal')
     savingRef.current = false
     setBusy(false)
@@ -206,7 +349,7 @@ export function RatingFlow({
 
   function goBack() {
     setError(null)
-    if (stage === 'tier') onClose()
+    if (stage === 'tier') handleClose()
     else if (stage === 'round') setStage('tier')
     else if (stage === 'comparison') setStage('round')
     else setStage('round')
@@ -231,7 +374,7 @@ export function RatingFlow({
             <Feather name="arrow-left" size={21} color={colors.ink} />
           </Pressable>
           <Text numberOfLines={1} style={styles.courseName}>{course.name}</Text>
-          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.iconButton}>
+          <Pressable accessibilityLabel="Close rating" accessibilityRole="button" hitSlop={8} onPress={handleClose} style={styles.iconButton}>
             <Feather name="x" size={21} color={colors.ink} />
           </Pressable>
         </View>
@@ -286,11 +429,39 @@ export function RatingFlow({
                   })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
                   <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with friends</Text><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
                 </View> : null}
-                <RoundRow icon="camera" label="Photos" onPress={() => setGuestMessage('Photo upload is coming soon.')} />
+                <RoundRow
+                  disabled={photoUploadInFlight || totalPhotoCount >= MAX_PHOTOS_PER_ROUND}
+                  icon="camera"
+                  label="Photos"
+                  onPress={() => void pickAndUploadPhoto()}
+                  value={photoUploadInFlight ? 'Uploading…' : totalPhotoCount > 0 ? `${totalPhotoCount} photo${totalPhotoCount === 1 ? '' : 's'} added` : undefined}
+                />
+                {totalPhotoCount > 0 ? (
+                  <ScrollView contentContainerStyle={styles.photoStrip} horizontal showsHorizontalScrollIndicator={false}>
+                    {existingPhotos.map((photo) => (
+                      photo.url ? <Image key={`existing-${photo.id}`} accessibilityLabel="Photo already added" source={{ uri: photo.url }} style={styles.photoThumb} /> : null
+                    ))}
+                    {stagedPhotos.map((photo) => (
+                      <View key={photo.id} style={styles.photoThumbWrap}>
+                        <Image accessibilityLabel="Staged photo" source={{ uri: photo.imageUri }} style={[styles.photoThumb, photo.status !== 'ready' && styles.photoThumbFaded]} />
+                        {photo.status === 'uploading' ? <ActivityIndicator color={colors.pine} style={styles.photoThumbSpinner} /> : null}
+                        {photo.status === 'error' ? <View style={styles.photoThumbErrorBadge}><Feather color="#FFFFFF" name="alert-circle" size={12} /></View> : null}
+                        {/* Disabled while busy (Continue -> finalizePhotos may be confirming this
+                            exact photo right now): removing it here can't stop a confirmation
+                            already in flight, and there's no way to un-publish a photo that lands
+                            in existingPhotos after the "removal" already appeared to succeed. */}
+                        <Pressable accessibilityLabel="Remove photo" accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} hitSlop={6} onPress={() => removeStagedPhoto(photo.id)} style={styles.photoRemoveButton}>
+                          <Feather color="#FFFFFF" name="x" size={12} />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : null}
               </View>
-              {!roundValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a valid date in MM/DD/YYYY (not in the future) and a score from 40 to 250.</Text> : null}
+              {!dateValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a valid date in MM/DD/YYYY (not in the future).</Text> : null}
+              {!scoreValid ? <Text accessibilityRole="alert" style={styles.error}>Enter a score from 20 to 200.</Text> : null}
               {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.error}>Favorite hole must be between 1 and 18.</Text> : null}
-              <ActionButton disabled={!roundValid || !favoriteHoleValid || busy} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
+              <ActionButton disabled={!roundValid || !favoriteHoleValid || busy || photoUploadInFlight} label={busy ? 'Saving...' : error ? 'Retry' : 'Continue'} onPress={continueFromRound} />
             </View>
           ) : null}
 
@@ -311,7 +482,7 @@ export function RatingFlow({
               <View style={styles.goldRule} />
               <Text style={styles.revealMeta}>{tierName(ratingState.tier)}  ·  Your course rating</Text>
               <View style={styles.revealSpacer} />
-              <ActionButton label="Done" onPress={onClose} />
+              <ActionButton label="Done" onPress={handleClose} />
             </View>
           ) : null}
 
@@ -324,8 +495,8 @@ export function RatingFlow({
   )
 }
 
-function RoundRow({ expanded = false, icon, label, value, onPress }: { expanded?: boolean; icon: keyof typeof Feather.glyphMap; label: string; value?: string; onPress: () => void }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded }} onPress={onPress} style={({ pressed }) => [styles.roundRow, pressed && styles.pressed]}>
+function RoundRow({ disabled = false, expanded = false, icon, label, value, onPress }: { disabled?: boolean; expanded?: boolean; icon: keyof typeof Feather.glyphMap; label: string; value?: string; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, expanded }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.roundRow, pressed && styles.pressed]}>
     <Feather name={icon} size={21} color={colors.pineDark} />
     <Text style={styles.roundLabel}>{label}</Text>
     {value ? <Text numberOfLines={1} style={styles.roundValue}>{value}</Text> : null}
@@ -371,6 +542,7 @@ function detailsPayload(note: string, favoriteHole: string, friendIds: number[],
 function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback
 }
+
 
 function isValidDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -433,6 +605,13 @@ const styles = StyleSheet.create({
   roundRow: { alignItems: 'center', borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 16, minHeight: 70, paddingHorizontal: 14 },
   roundLabel: { color: colors.pineDark, flex: 1, fontSize: 15, fontWeight: '600' },
   roundValue: { color: colors.muted, fontSize: 13, maxWidth: 118 },
+  photoStrip: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  photoThumbWrap: { position: 'relative' },
+  photoThumb: { backgroundColor: colors.pineSoft, borderRadius: 6, height: 64, width: 64 },
+  photoThumbFaded: { opacity: 0.5 },
+  photoThumbSpinner: { alignSelf: 'center', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
+  photoThumbErrorBadge: { alignItems: 'center', backgroundColor: colors.error, borderRadius: 9, bottom: 4, height: 18, justifyContent: 'center', position: 'absolute', right: 4, width: 18 },
+  photoRemoveButton: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 9, height: 18, justifyContent: 'center', position: 'absolute', right: -5, top: -5, width: 18 },
   inlineFieldWrap: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, padding: 12 },
   inlineField: { backgroundColor: '#FFFFFF', borderColor: '#D8D3C7', borderRadius: 4, borderWidth: StyleSheet.hairlineWidth, color: colors.ink, fontSize: 15, minHeight: 46, paddingHorizontal: 13, paddingVertical: 11 },
   multiline: { minHeight: 92, textAlignVertical: 'top' },

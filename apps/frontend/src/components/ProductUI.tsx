@@ -16,9 +16,9 @@ import { colors, radii } from '../ui/theme'
 // the bottom edge; `compact` shortens the label for narrow row thumbnails
 // that can't fit the full attribution text on one line.
 function CardAttribution({ heroImage, compact = false }: { heroImage?: HeroImage | null; compact?: boolean }) {
-  if (!heroImage || heroImage.type !== 'WIKIMEDIA' && heroImage.type !== 'SATELLITE') return null
-  const fullLabel = heroImage.type === 'SATELLITE' ? 'Satellite imagery © Mapbox' : `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
-  const label = compact ? (heroImage.type === 'SATELLITE' ? '© Mapbox' : heroImage.attribution ?? 'Wikimedia') : fullLabel
+  if (!heroImage || heroImage.type !== 'WIKIMEDIA') return null
+  const fullLabel = `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
+  const label = compact ? heroImage.attribution ?? 'Wikimedia' : fullLabel
   return (
     <View accessibilityLabel={`Image attribution: ${fullLabel}`} style={[styles.cardAttribution, compact && styles.cardAttributionCompact]}>
       <Text numberOfLines={1} style={[styles.cardAttributionText, compact && styles.cardAttributionTextCompact]}>{label}</Text>

@@ -3,6 +3,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir "."
 COPY app ./app
+COPY scripts ./scripts
 COPY alembic.ini ./
 COPY alembic ./alembic
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 5 --timeout-graceful-shutdown 20 --limit-concurrency 100"]

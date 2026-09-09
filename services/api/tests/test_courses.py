@@ -1,8 +1,9 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, CourseImageModeration, CourseReconciliation
+from app.models import Course, CourseImage, CourseImageModeration, CourseImageSource, CourseReconciliation, Profile, User
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -97,6 +98,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
                 license_url="https://creativecommons.org/licenses/by-sa/4.0/",
                 position=0,
                 is_hero=True,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
@@ -105,6 +107,7 @@ def test_course_detail_resolves_a_course_by_id() -> None:
                 source_name="GolfRank photographer",
                 source_url="https://golfrank.example/photos/pebble-green",
                 position=1,
+                source_type=CourseImageSource.OFFICIAL,
             ),
         ])
         session.commit()
@@ -127,10 +130,12 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
             "position": 0,
             "is_hero": True,
-            "source_type": "wikimedia",
+            "source_type": "official",
             "quality_score": None,
             "width": None,
             "height": None,
+            "uploaded_by_username": None,
+            "round_id": None,
         },
         {
             "id": 2,
@@ -142,10 +147,12 @@ def test_course_detail_resolves_a_course_by_id() -> None:
             "license_url": None,
             "position": 1,
             "is_hero": False,
-            "source_type": "wikimedia",
+            "source_type": "official",
             "quality_score": None,
             "width": None,
             "height": None,
+            "uploaded_by_username": None,
+            "round_id": None,
         },
     ]
 
@@ -165,7 +172,10 @@ def test_course_detail_resolves_a_course_by_id() -> None:
     assert _without_created_at(pebble_response.json()["images"]) == expected_images
 
 
-def test_course_detail_hides_non_approved_images() -> None:
+def test_course_gallery_includes_images_regardless_of_moderation_status() -> None:
+    """Moderation gates hero-image eligibility only (see resolve_hero_image /
+    CourseImageRepository.approved_images) -- it never hides a photo from the
+    course's own gallery, at any moderation_status."""
     app = create_app(Settings())
     with app.state.session_factory() as session:
         pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
@@ -176,18 +186,21 @@ def test_course_detail_hides_non_approved_images() -> None:
                 position=0,
                 is_hero=True,
                 moderation_status=CourseImageModeration.APPROVED,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
                 external_url="https://images.example/pending.jpg",
                 position=1,
                 moderation_status=CourseImageModeration.PENDING,
+                source_type=CourseImageSource.OFFICIAL,
             ),
             CourseImage(
                 course_id=pebble.id,
                 external_url="https://images.example/rejected.jpg",
                 position=2,
                 moderation_status=CourseImageModeration.REJECTED,
+                source_type=CourseImageSource.OFFICIAL,
             ),
         ])
         session.commit()
@@ -195,8 +208,87 @@ def test_course_detail_hides_non_approved_images() -> None:
 
     listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
 
-    urls = [image["url"] for image in listed_pebble["images"]]
-    assert urls == ["https://images.example/approved.jpg"]
+    urls = {image["url"] for image in listed_pebble["images"]}
+    assert urls == {
+        "https://images.example/approved.jpg",
+        "https://images.example/pending.jpg",
+        "https://images.example/rejected.jpg",
+    }
+
+
+def test_course_gallery_resolves_many_uploader_usernames_in_one_query() -> None:
+    """Regression test: uploader_username() previously ran one session.get()
+    per image, adding an N+1 series of profile lookups to a course page with
+    photos from many distinct uploaders. course_image_data() must resolve
+    every distinct uploader's username with a single batched query."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        uploader_ids = []
+        for index in range(5):
+            user = User(provider_subject=f"dev:gallery-uploader-{index}")
+            session.add(user)
+            session.flush()
+            session.add(Profile(user_id=user.id, home_region="Monterey, CA", username=f"golfer{index}"))
+            uploader_ids.append(user.id)
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id, storage_key=f"course-photos/{pebble.id}/{index}.jpg",
+                position=index, source_type=CourseImageSource.USER,
+                moderation_status=CourseImageModeration.APPROVED, uploaded_by_user_id=user_id,
+            )
+            for index, user_id in enumerate(uploader_ids)
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(app.state.engine, "before_cursor_execute", capture_select)
+    try:
+        response = client.get(f"/api/v1/courses/{pebble.id}")
+    finally:
+        event.remove(app.state.engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 200
+    usernames = {image["uploaded_by_username"] for image in response.json()["images"]}
+    assert usernames == {"golfer0", "golfer1", "golfer2", "golfer3", "golfer4"}
+    profile_lookup_statements = [s for s in statements if "profiles" in s.lower()]
+    assert len(profile_lookup_statements) == 1
+
+
+def test_course_gallery_excludes_wikimedia_images() -> None:
+    """Wikimedia only ever serves as a hero-image fallback (CourseImageService
+    ._resolve) -- it must never surface as a gallery photo."""
+    app = create_app(Settings())
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/official.jpg",
+                position=0,
+                is_hero=True,
+                source_type=CourseImageSource.OFFICIAL,
+            ),
+            CourseImage(
+                course_id=pebble.id,
+                external_url="https://images.example/wikimedia.jpg",
+                position=1,
+                source_type=CourseImageSource.WIKIMEDIA,
+            ),
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    listed_pebble = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]
+
+    urls = {image["url"] for image in listed_pebble["images"]}
+    assert urls == {"https://images.example/official.jpg"}
 
 
 def test_course_detail_returns_not_found_for_unknown_id() -> None:

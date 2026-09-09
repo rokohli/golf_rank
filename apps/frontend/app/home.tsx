@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
@@ -10,7 +10,7 @@ import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitl
 import { openUserProfile } from '../src/navigation/openUserProfile'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreToPar } from '../src/scorePresentation'
-import { Activity, Course } from '../src/types'
+import { Activity, Course, CourseImage } from '../src/types'
 import { colors } from '../src/ui/theme'
 
 export default function Home() {
@@ -137,8 +137,24 @@ function ActivityMetric({ activity, light = false }: { activity: Activity; light
 function ActivityDetails({ activity }: { activity: Activity }) {
   const note = typeof activity.data.note === 'string' && activity.data.note.trim() ? activity.data.note.trim() : null
   const favoriteHole = typeof activity.data.favorite_hole === 'number' ? activity.data.favorite_hole : null
-  if (!note && favoriteHole === null) return null
-  return <View style={styles.activityDetails}>{note ? <Text ellipsizeMode="tail" numberOfLines={3} style={styles.activityNote}>{note}</Text> : null}{favoriteHole !== null ? <View style={styles.favoriteHole}><Feather name="flag" size={11} color={colors.pine} /><Text style={styles.favoriteHoleText}>Favorite hole {favoriteHole}</Text></View> : null}</View>
+  const photos = activityPhotos(activity)
+  if (!note && favoriteHole === null && !photos.length) return null
+  return <View style={styles.activityDetails}>
+    {note ? <Text ellipsizeMode="tail" numberOfLines={3} style={styles.activityNote}>{note}</Text> : null}
+    {favoriteHole !== null ? <View style={styles.favoriteHole}><Feather name="flag" size={11} color={colors.pine} /><Text style={styles.favoriteHoleText}>Favorite hole {favoriteHole}</Text></View> : null}
+    {photos.length ? <ScrollView contentContainerStyle={styles.activityPhotoStrip} horizontal showsHorizontalScrollIndicator={false}>
+      {photos.map((photo) => photo.url ? <Image key={photo.id} accessibilityLabel="Round photo" source={{ uri: photo.url }} style={styles.activityPhoto} /> : null)}
+    </ScrollView> : null}
+  </View>
+}
+
+// A round's own photos are always present in feed data regardless of
+// moderation_status -- hero-image moderation is a separate concern from a
+// user's right to see their own round posting's photos (see
+// domain.round_image_data on the backend).
+function activityPhotos(activity: Activity): CourseImage[] {
+  const value = activity.data.photos
+  return Array.isArray(value) ? value.filter((item): item is CourseImage => Boolean(item) && typeof item === 'object') : []
 }
 
 function eventPresentation(activity: Activity) {
@@ -165,6 +181,6 @@ const styles = StyleSheet.create({
   planner: { alignItems: 'center', backgroundColor: colors.pineSoft, borderRadius: 13, flexDirection: 'row', gap: 11, padding: 13 }, plannerIcon: { alignItems: 'center', backgroundColor: colors.card, borderRadius: 20, height: 40, justifyContent: 'center', width: 40 }, plannerTitle: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 16, marginBottom: 3 },
   storyScrim: { backgroundColor: 'rgba(5, 21, 13, 0.62)', bottom: 0, height: 92, left: 0, position: 'absolute', right: 0 }, storyContent: { alignItems: 'center', bottom: 13, flexDirection: 'row', left: 13, position: 'absolute', right: 13 }, storyIdentity: { alignItems: 'center', flexDirection: 'row', flex: 1, gap: 9 }, storyKicker: { color: '#DCE5DE', fontSize: 9 }, storyTitle: { color: '#FFF', fontFamily: 'Georgia', fontSize: 18, marginTop: 2 }, storyMeta: { color: '#E4E9E5', fontSize: 10, marginTop: 2 },
   socialProof: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingBottom: 13 }, footerReaction: { alignItems: 'center', flexDirection: 'row', gap: 5 }, muted: { color: colors.muted, fontSize: 10, lineHeight: 15 },
-  activityRow: { alignItems: 'stretch', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 12 }, lastRow: { borderBottomWidth: 0 }, activityBody: { flex: 1 }, activityCopy: { flex: 1 }, activityPerson: { color: colors.muted, fontSize: 10 }, activityCourse: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14, marginTop: 3 }, activityDetails: { gap: 6, marginTop: 8 }, activityNote: { color: colors.ink, fontSize: 11, lineHeight: 16 }, favoriteHole: { alignItems: 'center', alignSelf: 'flex-start', backgroundColor: colors.pineSoft, borderRadius: 10, flexDirection: 'row', gap: 4, paddingHorizontal: 7, paddingVertical: 3 }, favoriteHoleText: { color: colors.pineDark, fontSize: 9, fontWeight: '700' }, activityFooter: { marginTop: 9 }, activitySide: { alignItems: 'flex-end', justifyContent: 'space-between', minWidth: 62 }, activitySideTop: { alignItems: 'flex-end', gap: 7 }, scoreMetric: { alignItems: 'center', flexDirection: 'row', gap: 5 }, scoreValue: { color: colors.pine, fontFamily: 'Georgia', fontSize: 22, fontWeight: '400', letterSpacing: -0.5 }, scoreValueLight: { color: '#FFF' }, scoreDifference: { alignItems: 'center', borderColor: colors.muted, borderRadius: 13, borderWidth: 1, height: 26, justifyContent: 'center', minWidth: 26, paddingHorizontal: 4 }, scoreDifferenceLight: { borderColor: 'rgba(255,255,255,0.78)' }, scoreDifferenceText: { color: colors.muted, fontSize: 9, fontWeight: '700' }, scoreDifferenceTextLight: { color: '#FFF' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 20, fontWeight: '400', letterSpacing: -0.3 }, ratingValueLight: { color: '#FFF' }, muteButton: { marginRight: -2 }, likeCount: { color: colors.muted, fontSize: 9 },
+  activityRow: { alignItems: 'stretch', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, paddingVertical: 12 }, lastRow: { borderBottomWidth: 0 }, activityBody: { flex: 1 }, activityCopy: { flex: 1 }, activityPerson: { color: colors.muted, fontSize: 10 }, activityCourse: { color: colors.ink, fontFamily: 'Georgia', fontSize: 14, marginTop: 3 }, activityDetails: { gap: 6, marginTop: 8 }, activityNote: { color: colors.ink, fontSize: 11, lineHeight: 16 }, favoriteHole: { alignItems: 'center', alignSelf: 'flex-start', backgroundColor: colors.pineSoft, borderRadius: 10, flexDirection: 'row', gap: 4, paddingHorizontal: 7, paddingVertical: 3 }, favoriteHoleText: { color: colors.pineDark, fontSize: 9, fontWeight: '700' }, activityPhotoStrip: { gap: 6 }, activityPhoto: { backgroundColor: colors.pineSoft, borderRadius: 6, height: 56, width: 56 }, activityFooter: { marginTop: 9 }, activitySide: { alignItems: 'flex-end', justifyContent: 'space-between', minWidth: 62 }, activitySideTop: { alignItems: 'flex-end', gap: 7 }, scoreMetric: { alignItems: 'center', flexDirection: 'row', gap: 5 }, scoreValue: { color: colors.pine, fontFamily: 'Georgia', fontSize: 22, fontWeight: '400', letterSpacing: -0.5 }, scoreValueLight: { color: '#FFF' }, scoreDifference: { alignItems: 'center', borderColor: colors.muted, borderRadius: 13, borderWidth: 1, height: 26, justifyContent: 'center', minWidth: 26, paddingHorizontal: 4 }, scoreDifferenceLight: { borderColor: 'rgba(255,255,255,0.78)' }, scoreDifferenceText: { color: colors.muted, fontSize: 9, fontWeight: '700' }, scoreDifferenceTextLight: { color: '#FFF' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 20, fontWeight: '400', letterSpacing: -0.3 }, ratingValueLight: { color: '#FFF' }, muteButton: { marginRight: -2 }, likeCount: { color: colors.muted, fontSize: 9 },
   state: { alignItems: 'center', gap: 10, paddingHorizontal: 24, paddingVertical: 42 }, error: { color: colors.error, fontSize: 12, lineHeight: 18, textAlign: 'center' }, emptyTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 }, retry: { backgroundColor: colors.pine, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 9 }, retryText: { color: '#FFF', fontSize: 11, fontWeight: '800' }, loadMore: { alignItems: 'center', padding: 14 }, loadMoreText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })

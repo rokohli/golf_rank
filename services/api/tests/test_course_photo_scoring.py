@@ -92,7 +92,7 @@ def test_score_course_photo_raises_on_provider_refusal() -> None:
 def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> None:
     from app.core.config import Settings
     from app.db import make_engine, make_session_factory
-    from app.models import Base, Course, CourseImage
+    from app.models import Base, Course, CourseImage, CourseImageSource
     import scripts.score_course_photos as script
 
     settings = Settings()
@@ -118,6 +118,7 @@ def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> N
             external_url="https://example.com/ref.jpg",
             is_hero=True,
             position=0,
+            source_type=CourseImageSource.OFFICIAL,
         )
         target_course = Course(
             id=999,
@@ -210,7 +211,7 @@ def test_score_course_photo_retries_transient_5xx_server_errors(monkeypatch) -> 
 def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monkeypatch) -> None:
     from app.core.config import Settings
     from app.db import make_engine, make_session_factory
-    from app.models import Base, Course, CourseImage
+    from app.models import Base, Course, CourseImage, CourseImageSource
     import scripts.score_course_photos as script
 
     settings = Settings()
@@ -236,6 +237,7 @@ def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monke
             external_url="https://example.com/ref.jpg",
             is_hero=True,
             position=0,
+            source_type=CourseImageSource.OFFICIAL,
         )
         target_course = Course(
             id=9999,
@@ -298,7 +300,7 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
     from app.core.config import Settings
     from app.course_photo_scoring import PhotoScoringError
     from app.db import make_engine, make_session_factory
-    from app.models import Base, Course, CourseImage
+    from app.models import Base, Course, CourseImage, CourseImageSource
     import scripts.score_course_photos as script
 
     settings = Settings()
@@ -324,6 +326,7 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
             external_url="https://example.com/ref.jpg",
             is_hero=True,
             position=0,
+            source_type=CourseImageSource.OFFICIAL,
         )
         target_course = Course(
             id=777,

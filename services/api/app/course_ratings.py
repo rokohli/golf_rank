@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, course_identity_ids, require_course, require_user, stored_user
+from .domain import course_data, course_identity_ids, require_course, require_user, round_image_data, stored_user
 from .models import (
     ActivityEvent,
     Comparison,
@@ -98,6 +98,7 @@ def _state(
                 "note": note.body if note else None,
                 "favorite_hole": round_.favorite_hole,
                 "visibility": round_.visibility,
+                "photos": round_image_data(session, round_.id),
             }
             if round_ is not None
             else None

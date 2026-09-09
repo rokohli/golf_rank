@@ -1,12 +1,12 @@
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-CourseImageType = Literal["OFFICIAL", "USER", "WIKIMEDIA", "SATELLITE", "NONE"]
+CourseImageType = Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
 
 # Highest-priority first. The resolver in service.py walks this order and stops
 # at the first source that produces a usable image -- it never falls back to a
 # lower-priority source once a higher one has resolved.
-PRIORITY_ORDER: tuple[CourseImageType, ...] = ("OFFICIAL", "USER", "WIKIMEDIA", "SATELLITE", "NONE")
+PRIORITY_ORDER: tuple[CourseImageType, ...] = ("OFFICIAL", "USER", "WIKIMEDIA", "NONE")
 
 
 @dataclass(frozen=True)

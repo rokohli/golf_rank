@@ -1,16 +1,20 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Image, Linking, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
-import { useAuthHeaders } from '../../src/auth/useAuthToken'
+import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset, uploadCoursePhoto } from '../../src/api/coursePhotoUpload'
+import { ApiHeaders, useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
+import { PhotoViewer } from '../../src/components/PhotoViewer'
 import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
-import { Course, CourseRatingState, FriendsCourseThoughts, HeroImage, RoundPatch, SavedList } from '../../src/types'
+import { Course, CourseImage, CourseRatingState, FriendsCourseThoughts, HeroImage, RoundPatch, SavedList } from '../../src/types'
 import { colors } from '../../src/ui/theme'
+
+const PHOTO_INLINE_PREVIEW_COUNT = 6
 
 export default function CourseDetail() {
   const router = useRouter()
@@ -18,6 +22,7 @@ export default function CourseDetail() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const { getAuthHeaders } = useAuthHeaders()
   const mounted = useRef(true)
+  const isInitialFocus = useRef(true)
   const ratingRequestVersion = useRef(0)
   const savedRequestVersion = useRef(0)
   const friendsRequestVersion = useRef(0)
@@ -38,6 +43,7 @@ export default function CourseDetail() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [utilityError, setUtilityError] = useState<string | null>(null)
   const [openDetails, setOpenDetails] = useState<'personal' | 'friends' | null>(null)
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null)
 
   useEffect(() => {
     mounted.current = true
@@ -75,6 +81,7 @@ export default function CourseDetail() {
   }, [numericCourseId])
 
   useEffect(() => {
+    isInitialFocus.current = true
     void loadCourse()
   }, [loadCourse])
 
@@ -115,6 +122,24 @@ export default function CourseDetail() {
       if (mounted.current && requestVersion === ratingRequestVersion.current) setRatingLoading(false)
     }
   }, [getAuthHeaders, numericCourseId])
+
+  // Lighter-weight than loadCourse(): updates the gallery/hero data a newly
+  // attached photo affects without resetting course/courseLoading, which
+  // would flash the whole header through a loading skeleton just to pick up
+  // one photo.
+  const refreshPublicCourse = useCallback(async () => {
+    if (!numericCourseId) return
+    try {
+      const nextCourse = await getCourse(numericCourseId)
+      if (!mounted.current) return
+      setPublicCourse(nextCourse)
+      setCourse(toCoursePresentation(nextCourse))
+    } catch {
+      // Best-effort refresh -- the existing gallery data just stays stale
+      // until the next successful load; loadCourse's own retry affordance
+      // covers a genuinely broken fetch.
+    }
+  }, [numericCourseId])
 
   const refreshSavedState = useCallback(async () => {
     const requestVersion = ++savedRequestVersion.current
@@ -159,6 +184,10 @@ export default function CourseDetail() {
       if (mounted.current && requestVersion === friendsRequestVersion.current) setFriendsThoughtsLoading(false)
     }
   }, [getAuthHeaders, numericCourseId])
+
+  const refreshAfterPhotoChange = useCallback(async () => {
+    await Promise.all([refreshRating(), refreshPublicCourse()])
+  }, [refreshPublicCourse, refreshRating])
 
   const updatePersonalDetail = useCallback(async (field: EditableDetail, value: number | string | null) => {
     const roundId = rating?.round?.id
@@ -227,12 +256,20 @@ export default function CourseDetail() {
     void refreshRating()
     void refreshSavedState()
     void refreshFriendsThoughts()
+    // loadCourse's own effect already covers the very first load (with its
+    // own dedicated loading/error/retry state) -- only re-fetch here on a
+    // genuine return to focus, so this doesn't race or double-fetch with it.
+    if (isInitialFocus.current) {
+      isInitialFocus.current = false
+    } else {
+      void refreshPublicCourse()
+    }
     return () => {
       ratingRequestVersion.current += 1
       savedRequestVersion.current += 1
       friendsRequestVersion.current += 1
     }
-  }, [refreshFriendsThoughts, refreshRating, refreshSavedState]))
+  }, [refreshFriendsThoughts, refreshPublicCourse, refreshRating, refreshSavedState]))
 
   if (!course) {
     return <>
@@ -296,30 +333,72 @@ export default function CourseDetail() {
       {saveError ? <Text accessibilityRole="alert" style={styles.saveError}>{saveError}</Text> : null}
       <Pressable accessibilityRole="button" onPress={() => void viewTeeTimes()} style={({ pressed }) => [styles.teeTimes, pressed && styles.pressed]}><Feather name="calendar" size={18} color={colors.pineDark} /><Text style={styles.teeTimesText}>View tee times</Text></Pressable>
       {utilityError ? <Text accessibilityRole="alert" style={styles.saveError}>{utilityError}</Text> : null}
-      <View style={styles.photoSection}><View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Course photos</Text></View>{photos.length ? <View style={styles.photoRow}>{photos.slice(0, 3).map((image, index) => <View key={image.id} style={styles.photoItem}><Image accessibilityLabel={image.alt_text ?? `${course.name} course photo`} source={{ uri: image.url! }} style={styles.photo} /><View style={styles.photoAttribution}>{image.source_url ? <Pressable accessibilityLabel={`Open source for photo ${index + 1}`} accessibilityRole="link" onPress={() => void Linking.openURL(image.source_url!)}><Text numberOfLines={1} style={styles.photoCredit}>{image.source_name}</Text></Pressable> : <Text numberOfLines={1} style={styles.photoCredit}>{image.source_name}</Text>}{image.license_name ? image.license_url ? <Pressable accessibilityLabel={`Open license for photo ${index + 1}`} accessibilityRole="link" onPress={() => void Linking.openURL(image.license_url!)}><Text numberOfLines={1} style={styles.photoLicense}>{image.license_name}</Text></Pressable> : <Text numberOfLines={1} style={styles.photoLicense}>{image.license_name}</Text> : null}</View></View>)}</View> : <View style={styles.emptyPhotos}><Feather name="camera" size={20} color={colors.muted} /><Text style={styles.emptyText}>No course photos yet.</Text></View>}</View>
+      <View style={styles.photoSection}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Course photos</Text>
+          {photos.length > PHOTO_INLINE_PREVIEW_COUNT ? (
+            <Pressable accessibilityRole="button" onPress={() => router.push(`/course/${numericCourseId}/photos` as never)}>
+              <Text style={styles.viewAllText}>View all</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {photos.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.photoRow}>
+              {photos.slice(0, PHOTO_INLINE_PREVIEW_COUNT).map((image, index) => (
+                <Pressable accessibilityLabel={`View photo ${index + 1} of ${photos.length}`} accessibilityRole="button" key={image.id} onPress={() => setViewerIndex(index)}>
+                  <CoursePhotoItem courseName={course.name} image={image} index={index} />
+                </Pressable>
+              ))}
+            </View>
+          </ScrollView>
+        ) : <View style={styles.emptyPhotos}><Feather name="camera" size={20} color={colors.muted} /><Text style={styles.emptyText}>No course photos yet.</Text></View>}
+      </View>
       <View style={styles.disclosures}>
         <DisclosureRow expanded={openDetails === 'personal'} icon="edit-3" label="Your thoughts & details" onPress={() => setOpenDetails((current) => current === 'personal' ? null : 'personal')} />
-        {openDetails === 'personal' ? <PersonalDetails onSave={updatePersonalDetail} rating={rating} /> : null}
+        {openDetails === 'personal' ? <PersonalDetails courseId={numericCourseId} courseName={course.name} getAuthHeaders={getAuthHeaders} onPhotosChanged={refreshAfterPhotoChange} onSave={updatePersonalDetail} rating={rating} /> : null}
         <DisclosureRow expanded={openDetails === 'friends'} icon="users" label="Friends’ thoughts & details" onPress={() => setOpenDetails((current) => current === 'friends' ? null : 'friends')} />
         {openDetails === 'friends' ? <FriendsThoughts error={friendsThoughtsError} loading={friendsThoughtsLoading} onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as never)} onOpenProfile={(userId) => openUserProfile(router, userId)} onRetry={refreshFriendsThoughts} thoughts={friendsThoughts} /> : null}
       </View>
     </ProductScreen>
+    {/* Rendered outside ProductScreen's ScrollView -- mounted inside it, the
+        overlay's absolute-fill positions relative to its scrolled-content
+        parent instead of the viewport, so opening it after scrolling down
+        could leave it partly or fully off-screen. */}
+    {viewerIndex !== null ? <PhotoViewer courseName={course.name} onClose={() => setViewerIndex(null)} photos={photos} startIndex={viewerIndex} /> : null}
   </>
+}
+
+// Shared between the course-detail preview strip and the "view all" gallery
+// screen. User uploads no longer show a credit line here -- the uploader's
+// identity is shown when the photo is opened full-screen instead. Official
+// photos still show source/license attribution when present.
+export function CoursePhotoItem({ courseName, image, index }: { courseName: string; image: CourseImage; index: number }) {
+  return (
+    <View style={styles.photoItem}>
+      <Image accessibilityLabel={image.alt_text ?? `${courseName} course photo`} source={{ uri: image.url! }} style={styles.photo} />
+      {image.source_type !== 'user' ? (
+        <View style={styles.photoAttribution}>
+          {image.source_url
+            ? <Pressable accessibilityLabel={`Open source for photo ${index + 1}`} accessibilityRole="link" onPress={() => void Linking.openURL(image.source_url!)}><Text numberOfLines={1} style={styles.photoCredit}>{image.source_name}</Text></Pressable>
+            : <Text numberOfLines={1} style={styles.photoCredit}>{image.source_name}</Text>}
+          {image.license_name
+            ? image.license_url
+              ? <Pressable accessibilityLabel={`Open license for photo ${index + 1}`} accessibilityRole="link" onPress={() => void Linking.openURL(image.license_url!)}><Text numberOfLines={1} style={styles.photoLicense}>{image.license_name}</Text></Pressable>
+              : <Text numberOfLines={1} style={styles.photoLicense}>{image.license_name}</Text>
+            : null}
+        </View>
+      ) : null}
+    </View>
+  )
 }
 
 function HeroButton({ disabled = false, icon, label, onPress }: { disabled?: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.heroButton, disabled && styles.actionDisabled]}><Feather name={icon} size={19} color="#FFF" /></Pressable> }
 
-// Wikimedia and Mapbox both require visible attribution when their imagery
-// is shown; OFFICIAL/USER/NONE need none.
+// Wikimedia requires visible attribution when its imagery is shown;
+// OFFICIAL/USER/NONE need none.
 function HeroAttribution({ heroImage }: { heroImage?: HeroImage | null }) {
-  if (!heroImage || heroImage.type !== 'WIKIMEDIA' && heroImage.type !== 'SATELLITE') return null
-  if (heroImage.type === 'SATELLITE') {
-    return (
-      <View accessibilityLabel="Image attribution: Satellite imagery © Mapbox" style={styles.heroAttribution}>
-        <Text numberOfLines={1} style={styles.heroAttributionText}>Satellite imagery © Mapbox</Text>
-      </View>
-    )
-  }
+  if (!heroImage || heroImage.type !== 'WIKIMEDIA') return null
   const credit = `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
   const onPressCredit = heroImage.source_url ? () => void Linking.openURL(heroImage.source_url!) : undefined
   const onPressLicense = heroImage.license_url ? () => void Linking.openURL(heroImage.license_url!) : undefined
@@ -353,13 +432,15 @@ function FriendsThoughts({ error, loading, onOpenActivity, onOpenProfile, onRetr
 }
 type EditableDetail = 'score' | 'note' | 'favorite_hole'
 
-function PersonalDetails({ onSave, rating }: { onSave: (field: EditableDetail, value: number | string | null) => Promise<void>; rating: CourseRatingState | null }) {
+function PersonalDetails({ courseId, courseName, getAuthHeaders, onPhotosChanged, onSave, rating }: { courseId: number | null; courseName: string; getAuthHeaders: () => Promise<ApiHeaders>; onPhotosChanged: () => Promise<void>; onSave: (field: EditableDetail, value: number | string | null) => Promise<void>; rating: CourseRatingState | null }) {
   const [expanded, setExpanded] = useState<'score' | 'notes' | 'favoriteHole' | null>(null)
   const [scoreInput, setScoreInput] = useState('')
   const [noteInput, setNoteInput] = useState('')
   const [favoriteHoleInput, setFavoriteHoleInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  const [photoUploadState, setPhotoUploadState] = useState<'idle' | 'uploading' | 'error'>('idle')
+  const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
   useEffect(() => {
     setScoreInput(rating?.round?.score == null ? '' : String(rating.round.score))
     setNoteInput(rating?.round?.note ?? '')
@@ -387,12 +468,35 @@ function PersonalDetails({ onSave, rating }: { onSave: (field: EditableDetail, v
   }
   const saveNumber = (field: 'score' | 'favorite_hole', rawValue: string) => {
     const value = rawValue.trim() ? Number(rawValue) : null
-    const valid = value === null || Number.isInteger(value) && (field === 'score' ? value >= 40 && value <= 250 : value >= 1 && value <= 18)
+    const valid = value === null || Number.isInteger(value) && (field === 'score' ? value >= 20 && value <= 200 : value >= 1 && value <= 18)
     if (!valid) {
-      setEditError(field === 'score' ? 'Enter a score from 40 to 250.' : 'Enter a hole from 1 to 18.')
+      setEditError(field === 'score' ? 'Enter a score from 20 to 200.' : 'Enter a hole from 1 to 18.')
       return
     }
     void persist(field, value)
+  }
+  const roundPhotos = rating.round?.photos ?? []
+  const photoCapReached = roundPhotos.length >= MAX_PHOTOS_PER_ROUND
+  const pickAndUploadPhoto = async () => {
+    if (!courseId || !rating.round) return
+    const picked = await pickCoursePhotoAsset()
+    if (!picked) return
+    setPhotoUploadState('uploading')
+    setPhotoUploadError(null)
+    try {
+      await uploadCoursePhoto(courseId, picked.uri, picked.contentType, await getAuthHeaders(), picked.dimensions, rating.round.id)
+      setPhotoUploadState('idle')
+    } catch (reason) {
+      setPhotoUploadState('error')
+      setPhotoUploadError(errorMessage(reason, 'Unable to submit photo. Please try again.'))
+    } finally {
+      // Refresh regardless of outcome: an apparent failure can still mean
+      // confirm actually committed server-side and only the response was
+      // lost (see uploadCoursePhoto/isRetryableConfirmFailure) -- without
+      // this, that case would leave the gallery permanently stale even
+      // though the photo really is attached.
+      await onPhotosChanged()
+    }
   }
   return <View style={styles.personalDetails}>
     <DetailDisclosureRow disabled={!rating.round} expanded={expanded === 'score'} label="Score" onPress={() => toggle('score')} value={score == null ? 'Not recorded' : String(score)} />
@@ -402,7 +506,30 @@ function PersonalDetails({ onSave, rating }: { onSave: (field: EditableDetail, v
     <DetailDisclosureRow disabled={!rating.round} expanded={expanded === 'favoriteHole'} label="Favorite hole" onPress={() => toggle('favoriteHole')} value={favoriteHole == null ? 'Not added' : `Hole ${favoriteHole}`} />
     {expanded === 'favoriteHole' ? <View style={styles.detailDropdown}><TextInput accessibilityLabel="Edit favorite hole" keyboardType="number-pad" maxLength={2} onChangeText={setFavoriteHoleInput} placeholder="1–18" style={styles.detailInput} value={favoriteHoleInput} /><SaveDetailButton label="Save favorite hole" loading={saving} onPress={() => saveNumber('favorite_hole', favoriteHoleInput)} /></View> : null}
     {editError ? <Text accessibilityRole="alert" style={styles.detailError}>{editError}</Text> : null}
-    <View accessibilityLabel="Add photos, coming soon" style={styles.detailDisabledRow}><Feather name="camera" size={17} color={colors.muted} /><Text style={styles.detailRowLabel}>Add photos</Text><Text style={styles.detailDisabledValue}>Coming soon</Text></View>
+    {courseId && rating.round ? (
+      <Pressable
+        accessibilityLabel="Add photos"
+        accessibilityRole="button"
+        accessibilityState={{ disabled: photoUploadState === 'uploading' || photoCapReached }}
+        disabled={photoUploadState === 'uploading' || photoCapReached}
+        onPress={() => void pickAndUploadPhoto()}
+        style={[styles.detailDisclosureRow, photoCapReached && styles.actionDisabled]}
+      >
+        <Feather name="camera" size={17} color={colors.pineDark} />
+        <Text style={styles.detailRowLabel}>Add photos</Text>
+        {photoUploadState === 'uploading'
+          ? <ActivityIndicator color={colors.pineDark} size="small" />
+          : <Text style={styles.detailRowValue}>{roundPhotos.length > 0 ? `${roundPhotos.length} photo${roundPhotos.length === 1 ? '' : 's'}` : 'Not added'}</Text>}
+      </Pressable>
+    ) : null}
+    {photoUploadError ? <Text accessibilityRole="alert" style={styles.detailError}>{photoUploadError}</Text> : null}
+    {roundPhotos.length ? (
+      <ScrollView contentContainerStyle={styles.roundPhotoStrip} horizontal showsHorizontalScrollIndicator={false}>
+        {roundPhotos.map((photo) => (
+          photo.url ? <Image key={photo.id} accessibilityLabel={photo.alt_text ?? `${courseName} round photo`} source={{ uri: photo.url }} style={styles.roundPhotoThumb} /> : null
+        ))}
+      </ScrollView>
+    ) : null}
   </View>
 }
 function DetailDisclosureRow({ disabled = false, expanded, label, onPress, value }: { disabled?: boolean; expanded: boolean; label: string; onPress: () => void; value: string }) { return <Pressable accessibilityLabel={`${label}, ${value}`} accessibilityRole="button" accessibilityState={{ disabled, expanded }} disabled={disabled} onPress={onPress} style={[styles.detailDisclosureRow, disabled && styles.actionDisabled]}><Text style={styles.detailRowLabel}>{label}</Text><Text style={styles.detailRowValue}>{value}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={17} color={colors.pineDark} /></Pressable> }
@@ -416,8 +543,8 @@ const styles = StyleSheet.create({
   ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 },
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 7, minWidth: 70 }, actionIcon: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 24, borderWidth: 1, height: 48, justifyContent: 'center', width: 48 }, actionIconPressed: { backgroundColor: colors.pine, borderColor: colors.pine }, actionLabel: { color: colors.ink, fontSize: 10 }, actionLabelPressed: { color: colors.pine, fontWeight: '700' }, actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },
   teeTimes: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 46 }, teeTimesText: { color: colors.pineDark, fontSize: 13, fontWeight: '700' }, pressed: { opacity: 0.7 },
-  photoSection: { gap: 12 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, photoRow: { flexDirection: 'row', gap: 8 }, photoItem: { flex: 1, gap: 5 }, photo: { aspectRatio: 1.25, borderRadius: 7, width: '100%' }, photoAttribution: { gap: 2 }, photoCredit: { color: colors.muted, fontSize: 9, textDecorationLine: 'underline' }, photoLicense: { color: colors.muted, fontSize: 8, textDecorationLine: 'underline' }, emptyPhotos: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, minHeight: 58 }, emptyText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
-  disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailDisabledRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 52, opacity: 0.65, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDisabledValue: { color: colors.muted, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  photoSection: { gap: 12 }, sectionHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, viewAllText: { color: colors.pine, fontSize: 11, fontWeight: '800' }, photoRow: { flexDirection: 'row', gap: 8 }, photoItem: { gap: 5, width: 150 }, photo: { aspectRatio: 1.25, borderRadius: 7, width: '100%' }, photoAttribution: { gap: 2 }, photoCredit: { color: colors.muted, fontSize: 9, textDecorationLine: 'underline' }, photoLicense: { color: colors.muted, fontSize: 8, textDecorationLine: 'underline' }, emptyPhotos: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 9, minHeight: 58 }, emptyText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
+  disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 }, roundPhotoStrip: { gap: 8, paddingHorizontal: 14, paddingVertical: 12 }, roundPhotoThumb: { borderRadius: 7, height: 64, width: 64 },
   friendsThoughts: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, friendAggregate: { alignItems: 'center', backgroundColor: '#F1EEE5', paddingVertical: 16 }, friendAggregateValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 28 }, friendAggregateLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.7, marginTop: 5, textTransform: 'uppercase' }, friendThought: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, gap: 6, paddingHorizontal: 14, paddingVertical: 13 }, friendThoughtHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, friendName: { color: colors.ink, flex: 1, fontFamily: 'Georgia', fontSize: 15 }, friendRating: { color: colors.pineDark, fontSize: 10, fontWeight: '800' }, friendNote: { color: colors.ink, fontSize: 12, lineHeight: 18 }, friendHole: { color: colors.muted, fontSize: 10, fontWeight: '700' },
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
 })

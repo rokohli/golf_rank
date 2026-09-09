@@ -12,6 +12,7 @@ from app.models import (
     ActivityEvent,
     AppNotification,
     Course,
+    CourseImage,
     CourseReconciliation,
     Follow,
     LinkedContact,
@@ -71,6 +72,83 @@ def _rate_course(client: TestClient, headers: dict[str, str], course_id: int, *,
     return response.json()
 
 
+def test_feed_shows_round_photos_regardless_of_moderation_status() -> None:
+    """Moderation gates hero-image eligibility only (see domain.py's
+    round_image_data and course_image_data) -- it never hides a round's own
+    photos from a feed viewer who is otherwise allowed to see the round at
+    all (mutual friend, here)."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    client = TestClient(app)
+    alice = _profile(client, "dev:feed-photo-alice", "Alice", "alice")
+    bob = _profile(client, "dev:feed-photo-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+
+    rated = _rate_course(client, bob, 1, visibility="friends")
+    round_id = rated["round"]["id"]
+    with app.state.session_factory() as session:
+        bob_id = session.scalar(select(User.id).where(User.provider_subject == "dev:feed-photo-bob"))
+        session.add(CourseImage(
+            course_id=1, storage_key="course-photos/1/pending.jpg", position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=bob_id, round_id=round_id,
+        ))
+        session.commit()
+
+    item = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert len(item["data"]["photos"]) == 1
+
+    own_state = client.get("/api/v1/me/course-ratings/1", headers=bob).json()
+    assert len(own_state["round"]["photos"]) == 1
+
+
+def test_feed_batches_round_photo_queries_across_the_whole_page() -> None:
+    """Regression test: _activity_data() previously called round_image_data()
+    once per event, adding an N+1 series of CourseImage (and profile)
+    queries on top of the feed page's own event load. One CourseImage query
+    (batched via round_image_data_bulk) must cover every round-backed event
+    in the page, regardless of how many of them have photos."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    client = TestClient(app)
+    alice = _profile(client, "dev:feed-batch-alice", "Alice", "alice")
+    friends = [_profile(client, f"dev:feed-batch-friend-{i}", f"Friend{i}", f"friend{i}") for i in range(3)]
+    for i, friend in enumerate(friends):
+        _mutual_friend(client, alice, friend, f"friend{i}")
+
+    with app.state.session_factory() as session:
+        for i, friend in enumerate(friends):
+            rated = _rate_course(client, friend, 1, visibility="friends")
+            round_id = rated["round"]["id"]
+            friend_id = session.scalar(select(User.id).where(User.provider_subject == f"dev:feed-batch-friend-{i}"))
+            session.add(CourseImage(
+                course_id=1, storage_key=f"course-photos/1/friend-{i}.jpg", position=i, source_type="user",
+                moderation_status="approved", uploaded_by_user_id=friend_id, round_id=round_id,
+            ))
+        session.commit()
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(app.state.engine, "before_cursor_execute", capture_select)
+    try:
+        response = client.get("/api/v1/feed", headers=alice)
+    finally:
+        event.remove(app.state.engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert sum(len(item["data"].get("photos", [])) for item in items) == 3
+
+    # Scoped to the round_id-filtered query specifically (round_image_data_bulk)
+    # -- course.images selectin-loading for course_data()'s own gallery is a
+    # separate, unrelated course_id-filtered query (its SELECT list happens
+    # to mention the round_id column too, so matching on WHERE, not mere
+    # presence, is what distinguishes the two).
+    round_photo_statements = [s for s in statements if "where course_images.round_id in" in s.lower()]
+    assert len(round_photo_statements) == 1
+
+
 def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared_memories() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:thoughts-alice", "Alice", "alice")
@@ -128,6 +206,7 @@ def test_feed_includes_shared_round_note_and_favorite_hole() -> None:
         "favorite_hole": 7,
         "rating": 9.2,
         "tier": "green",
+        "photos": [],
     }
 
     # Older events did not persist these optional fields. The feed must still

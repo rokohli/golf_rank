@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -127,6 +128,22 @@ class CourseImage(Base):
             name="ck_course_image_one_locator",
         ),
         UniqueConstraint("course_id", "position", name="uq_course_image_position"),
+        # Scoped to USER uploads only (partial index) -- curated OFFICIAL rows
+        # may legitimately share one storage_key (e.g. two courses sharing a
+        # hero image, see migration 0024), but a user's confirm_upload call
+        # must be idempotent per storage_key to stop a replayed request from
+        # creating a duplicate gallery entry / consuming another round slot.
+        Index(
+            "uq_course_image_user_storage_key",
+            "storage_key",
+            unique=True,
+            postgresql_where=text("source_type = 'user'"),
+            # Without this, SQLite ignores postgresql_where and the index
+            # becomes a global unique constraint on storage_key -- breaking
+            # migration 0024's Fleming/Harding OFFICIAL rows, which
+            # deliberately share one storage_key.
+            sqlite_where=text("source_type = 'user'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -149,8 +166,21 @@ class CourseImage(Base):
     moderation_status: Mapped[str] = mapped_column(
         String(20), default=CourseImageModeration.APPROVED, server_default=CourseImageModeration.APPROVED, index=True
     )
+    # CASCADE, not SET NULL: a user-submitted photo is that user's content --
+    # deleting the account must remove it (row + R2 object; see main.py's
+    # delete_account, which deletes the R2 objects before the row cascade
+    # commits), never leave it stranded ownerless in a course's gallery.
     uploaded_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # Set only for USER-sourced photos submitted from the rating flow's "About the
+    # round" step -- lets the feed show a round's own photos regardless of
+    # moderation_status (hero-image moderation is a separate concern from a
+    # user's right to see their own round posting's photos). CASCADE: deleting
+    # the round follows an explicit retention policy -- its photos go with it
+    # (row + R2 object; see rounds.py's delete_round).
+    round_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rounds.id", ondelete="CASCADE"), nullable=True, index=True
     )
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -558,3 +588,22 @@ class PlanGeneration(Base):
     fallback_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     generated_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FailedObjectDeletion(Base):
+    """A permanent (non-pending-prefixed) R2 object whose delete_object call
+    failed during round/account deletion. Unlike a course-photos/pending/
+    object, a promoted one isn't covered by the R2 lifecycle rule and has no
+    CourseImage row to retry from once the deleting transaction commits --
+    without this, a transient storage failure at delete time would silently
+    leave that object reachable forever. scripts/retry_failed_object_deletions.py
+    is the retry path; a row is removed once its deletion finally succeeds."""
+
+    __tablename__ = "failed_object_deletions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), index=True)
+    context: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

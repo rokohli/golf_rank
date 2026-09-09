@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Lock
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text
@@ -22,14 +22,15 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
-from .course_images.providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider
 from .course_images.service import CourseImageService
+from .course_photo_uploads import router as course_photo_uploads_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
     canonical_courses_only,
     course_data,
     course_identity_ids,
+    delete_permanent_objects,
     lock_identity_transaction,
     require_course,
     require_user,
@@ -37,6 +38,7 @@ from .domain import (
 from .models import (
     Base,
     Course,
+    CourseImage,
     CourseReconciliation,
     ActivityEvent,
     ActivityReaction,
@@ -75,6 +77,7 @@ from .saves import router as saves_router
 from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut, normalize_username
 from .seed import seed_test_courses
 from .social import notify_linked_contacts, router as social_router
+from .storage import build_object_storage
 
 
 logger = logging.getLogger("golfrank.catalog")
@@ -120,16 +123,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = rate_limiter
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
     app.state.course_image_service = CourseImageService(settings=settings)
+    app.state.object_storage = build_object_storage(settings)
     app.state.session_factory = make_session_factory(
         engine,
         course_image_base_url=settings.course_image_base_url,
-        satellite_provider=MapboxSatelliteImageProvider(access_token=settings.mapbox_access_token),
-        satellite_options=MapboxOptions(
-            width=settings.mapbox_static_image_width,
-            height=settings.mapbox_static_image_height,
-            zoom=settings.mapbox_static_image_zoom,
-            pixel_ratio=settings.mapbox_static_image_pixel_ratio,
-        ),
         wikimedia_cache_positive_ttl_seconds=settings.wikimedia_cache_positive_ttl_seconds,
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
@@ -139,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(course_state_router, dependencies=authenticated_dependencies)
     app.include_router(social_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
+    app.include_router(course_photo_uploads_router)
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
 
@@ -340,6 +338,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "course_candidates": rows(CourseCandidate, CourseCandidate.submitted_by_user_id == stored_user.id),
             "saved_lists": [_row_data(saved_list) for saved_list in saved_lists],
             "saved_courses": rows(SavedCourse, SavedCourse.list_id.in_(saved_list_ids)) if saved_list_ids else [],
+            "course_photos": rows(CourseImage, CourseImage.uploaded_by_user_id == stored_user.id),
             "plans": [_row_data(plan) for plan in plans],
             "plan_constraints": rows(PlanConstraint, PlanConstraint.plan_id.in_(plan_ids)) if plan_ids else [],
             "plan_candidates": rows(PlanCandidate, PlanCandidate.plan_id.in_(plan_ids)) if plan_ids else [],
@@ -353,6 +352,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/v1/me")
     def delete_account(
+        request: Request,
         _rate_limit: None = Depends(authenticated_rate_limit),
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
@@ -361,11 +361,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stored_user = session.scalar(select(User).where(User.provider_subject == user.provider_subject))
         if session.get(DeletedIdentity, user.provider_subject) is None:
             session.add(DeletedIdentity(provider_subject=user.provider_subject))
+        # Collected before the user row (and its cascading CourseImage rows,
+        # ON DELETE CASCADE) is deleted -- R2 objects are only removed once the
+        # DB delete has actually committed, below.
+        photo_storage_keys: list[str] = []
         if stored_user is not None:
+            photo_storage_keys = list(session.scalars(
+                select(CourseImage.storage_key).where(
+                    CourseImage.uploaded_by_user_id == stored_user.id,
+                    CourseImage.storage_key.isnot(None),
+                )
+            ).all())
             # Deleting the user row cascades to every table that references it
             # (profiles, rounds, rankings, follows, saved lists, plans, ...).
             session.delete(stored_user)
         session.commit()
+        storage = getattr(request.app.state, "object_storage", None)
+        delete_permanent_objects(session, storage, photo_storage_keys, context="account_delete")
         try:
             delete_clerk_user(user.provider_subject, settings)
         except HTTPException as error:

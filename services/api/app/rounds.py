@@ -1,18 +1,19 @@
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, delete_permanent_objects, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
     Comparison,
     Course,
+    CourseImage,
     Follow,
     OnboardingPreference,
     RankingConfidence,
@@ -36,7 +37,7 @@ class RoundIn(BaseModel):
 
     course_id: int = Field(gt=0)
     played_on: date
-    score: int | None = Field(default=None, ge=40, le=250)
+    score: int | None = Field(default=None, ge=20, le=200)
     note: str | None = Field(default=None, max_length=5000)
     favorite_hole: int | None = Field(default=None, ge=1, le=18)
     friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
@@ -64,7 +65,7 @@ class RoundPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     played_on: date | None = None
-    score: int | None = Field(default=None, ge=40, le=250)
+    score: int | None = Field(default=None, ge=20, le=200)
     note: str | None = Field(default=None, max_length=5000)
     favorite_hole: int | None = Field(default=None, ge=1, le=18)
     friend_user_ids: list[int] | None = Field(default=None, max_length=40)
@@ -460,6 +461,7 @@ def update_round(
 @router.delete("/{round_id}", status_code=204)
 def delete_round(
     round_id: int,
+    request: Request,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> Response:
@@ -476,6 +478,22 @@ def delete_round(
         from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 
         _lock_user_for_ranking_update(session, user.id)
+    # Locks the round row before snapshotting its photos, matching
+    # confirm_upload's own with_for_update() lock on the same row. Without
+    # this, a confirm racing this delete could insert a new CourseImage
+    # between the snapshot below and the cascade-delete further down: the
+    # row still gets cascade-deleted, but its permanent key was never in
+    # photo_storage_keys, so neither R2 deletion nor the retry queue would
+    # ever see it.
+    session.execute(select(Round).where(Round.id == round_.id).with_for_update())
+    # Collected before the round row (and its cascading CourseImage rows,
+    # ON DELETE CASCADE) is deleted -- R2 objects are only removed once the
+    # DB delete has actually committed, below.
+    photo_storage_keys = list(session.scalars(
+        select(CourseImage.storage_key).where(
+            CourseImage.round_id == round_.id, CourseImage.storage_key.isnot(None)
+        )
+    ).all())
     _delete_round_activity_event(session, user.id, round_.id)
     session.execute(delete(RoundNote).where(RoundNote.round_id == round_.id))
     session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_.id))
@@ -487,6 +505,8 @@ def delete_round(
     if is_rating_round:
         _stage_snapshot(session, user.id)
     session.commit()
+    storage = getattr(request.app.state, "object_storage", None)
+    delete_permanent_objects(session, storage, photo_storage_keys, context="round_delete")
     return Response(status_code=204)
 
 

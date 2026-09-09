@@ -55,7 +55,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     return [...selected, ...friends].filter((friend, index, items) => items.findIndex((item) => item.id === friend.id) === index).slice(0, 4)
   }, [friendIds, friendQuery, friends])
   const courseDateValid = Boolean(course && parsedDate && parsedDate <= localToday())
-  const scoreValid = scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 40 && scoreNumber <= 250)
+  const scoreValid = scoreNumber === null || (Number.isInteger(scoreNumber) && scoreNumber >= 20 && scoreNumber <= 200)
   const favoriteHoleValid = favoriteHoleNumber === null || (Number.isInteger(favoriteHoleNumber) && favoriteHoleNumber >= 1 && favoriteHoleNumber <= 18)
   const valid = courseDateValid && scoreValid && favoriteHoleValid
   const peopleCount = friendIds.length + guests.length
@@ -175,7 +175,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
     </View>
 
     {!courseDateValid ? <Text style={styles.requirement}>Course and a past date are required.</Text> : <Text style={styles.requirement}>Course and date are required.</Text>}
-    {!scoreValid ? <Text accessibilityRole="alert" style={styles.validation}>Score must be between 40 and 250.</Text> : null}
+    {!scoreValid ? <Text accessibilityRole="alert" style={styles.validation}>Score must be between 20 and 200.</Text> : null}
     {!favoriteHoleValid ? <Text accessibilityRole="alert" style={styles.validation}>Favorite hole must be between 1 and 18.</Text> : null}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => void submit()} style={[styles.submit, (!valid || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitText}>{submitLabel}</Text>}</Pressable>

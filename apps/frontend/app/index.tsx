@@ -13,7 +13,7 @@ type ProfileState = 'checking' | 'needs-onboarding' | 'error'
 
 export default function Index() {
   const router = useRouter()
-  const { returnToGetStarted, signOut, updateUserProfile } = useAuthGate()
+  const { returnToGetStarted, signOut, updateUserProfile, updateProfileImage } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
   const [profileState, setProfileState] = useState<ProfileState>('checking')
 
@@ -99,6 +99,7 @@ export default function Index() {
             checkUsername={checkUsername}
             submit={submitOnboarding}
             saveProfile={updateUserProfile}
+            updatePhoto={updateProfileImage}
             onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}
           />

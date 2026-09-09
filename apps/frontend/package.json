@@ -6,7 +6,9 @@
     "start": "expo start --localhost",
     "start:lan": "expo start --lan",
     "start:ios": "expo start --localhost --ios",
-    "test": "jest"
+    "test": "jest",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@clerk/expo": "^3.6.2",
@@ -16,6 +18,7 @@
     "expo-auth-session": "~6.2.1",
     "expo-constants": "~17.1.3",
     "expo-contacts": "~14.2.6",
+    "expo-crypto": "~14.1.5",
     "expo-dev-client": "~5.2.4",
     "expo-file-system": "~18.1.11",
     "expo-font": "~13.3.2",
@@ -47,9 +50,12 @@
   },
   "overrides": {
     "postcss": "8.5.22",
-    "browserslist": "4.28.8"
+    "browserslist": "4.28.8",
+    "@xmldom/xmldom": "0.9.12",
+    "js-yaml": "3.15.2"
   },
   "jest": {
     "preset": "jest-expo"
-  }
+  },
+  "version": "1.0.0"
 }

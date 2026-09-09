@@ -15,22 +15,22 @@ class Settings(BaseSettings):
     clerk_audience: str | None = None
     clerk_secret_key: str | None = None
     course_image_base_url: str | None = None
-    # Mapbox Static Images API -- the final photographic fallback, below Wikimedia.
-    # This should be a public (pk.*) token with URL restrictions configured in the
-    # Mapbox account, per Mapbox's guidance for tokens embedded in client-visible
-    # image URLs; never put a secret (sk.*) token here.
-    mapbox_access_token: str | None = None
-    mapbox_static_image_width: int = 1280
-    mapbox_static_image_height: int = 640
-    mapbox_static_image_zoom: float = 15.5
-    mapbox_static_image_pixel_ratio: int = 1
-    mapbox_lookup_timeout_seconds: float = 4.0
+    r2_account_id: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket_name: str | None = None
+    course_photo_min_bytes: int = 1024
+    course_photo_max_bytes: int = 10 * 1024 * 1024
+    course_photo_upload_url_ttl_seconds: int = 120
+    photo_upload_rate_limit_capacity: int = 5
+    photo_upload_rate_limit_refill_per_second: float = 1 / 300
+    photo_upload_daily_quota: int = 10
     # On by default: a course-detail request performs a live Commons search
     # when no OFFICIAL/USER/WIKIMEDIA image is on file yet. The resolver
-    # fails open (falls through to Mapbox/NONE) on any Wikimedia error or
-    # timeout, so this never breaks the course page -- it only adds request
-    # latency and outbound-call volume on a cache miss. Set to false to rely
-    # solely on the offline backfill/refresh scripts for enrichment instead.
+    # fails open (falls through to NONE) on any Wikimedia error or timeout,
+    # so this never breaks the course page -- it only adds request latency
+    # and outbound-call volume on a cache miss. Set to false to rely solely
+    # on the offline backfill/refresh scripts for enrichment instead.
     wikimedia_live_lookup_enabled: bool = True
     wikimedia_lookup_timeout_seconds: float = 5.0
     # Bounds how many live Commons lookups can be in flight across the whole
@@ -181,15 +181,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS outside development"
                 )
-        if self.mapbox_access_token and self.mapbox_access_token.startswith("sk."):
-            raise ValueError(
-                "MAPBOX_ACCESS_TOKEN must be a public (pk.*) token -- it is embedded in "
-                "client-visible image URLs, and a secret token would leak"
-            )
-        if self.mapbox_static_image_pixel_ratio not in (1, 2):
-            raise ValueError("MAPBOX_STATIC_IMAGE_PIXEL_RATIO must be 1 or 2")
-        if not 0 <= self.mapbox_static_image_zoom <= 22:
-            raise ValueError("MAPBOX_STATIC_IMAGE_ZOOM must be between 0 and 22")
         if not 0 <= self.wikimedia_confidence_threshold <= 1:
             raise ValueError("WIKIMEDIA_CONFIDENCE_THRESHOLD must be between 0 and 1")
 

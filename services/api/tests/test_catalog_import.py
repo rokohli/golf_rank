@@ -148,3 +148,32 @@ def test_catalog_import_removes_stripped_trademark_artifacts_from_course_names()
     assert normalize_course_name("Spyglass Hilltm Golf Course") == "Spyglass Hill Golf Course"
     assert normalize_course_name("The Haytm") == "The Hay"
     assert normalize_course_name("Timber Creek Golf Club") == "Timber Creek Golf Club"
+
+
+def test_catalog_import_applies_record_overrides_for_known_inaccurate_upstream_data() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    # Forebay Golf Course has inaccurate upstream coordinates and city (Burlingame)
+    records = [{
+        "id": "53d70641-7dc2-4205-ba6e-a5c43a57c3c3",
+        "name": "Forebay Golf Course",
+        "course_name": "Forebay Golf Course",
+        "latitude": 37.557475,
+        "longitude": -122.3816219,
+        "state": "CA",
+        "city": "Burlingame",
+        "type": "Public",
+        "holes": 9,
+        "par": 36,
+    }]
+    with session_factory() as session:
+        report = import_courses(session, records, state="CA")
+        assert report.inserted == 1
+        stored = session.scalar(select(Course).where(Course.source_course_id == "53d70641-7dc2-4205-ba6e-a5c43a57c3c3"))
+        assert stored is not None
+        assert stored.city == "Santa Nella"
+        assert stored.region == "Santa Nella, CA"
+        assert stored.latitude == 37.1017405
+        assert stored.longitude == -121.0158768
+

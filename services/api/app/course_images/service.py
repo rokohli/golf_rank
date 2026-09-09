@@ -1,14 +1,13 @@
 """Central course-image resolver.
 
-Priority order (do not reorder without updating the module docstring in
-providers/mapbox.py and the tests in tests/test_course_image_service.py):
+Priority order (do not reorder without updating the tests in
+tests/test_course_image_service.py):
 
     1. Approved OFFICIAL image
     2. Approved USER image
     3. Approved WIKIMEDIA image already on file (this *is* the Wikimedia cache)
     4. Live Wikimedia Commons search
-    5. Mapbox Satellite (URL only, no network call)
-    6. NONE
+    5. NONE
 
 This is the only place that encodes that ordering. Controllers/endpoints call
 `resolve_hero_image` and render whatever normalized CourseImageResult comes
@@ -26,7 +25,6 @@ from sqlalchemy.orm import Session
 from ..core.config import Settings
 from ..domain import is_wikimedia_stale, storage_image_url
 from ..models import CourseImage, CourseImageSource
-from .providers.mapbox import MapboxOptions, MapboxSatelliteImageProvider, SatelliteImageProvider
 from .providers.wikimedia import WikimediaImageProvider
 from .repository import CourseImageRepository
 from .types import CourseImageResult, no_image_result
@@ -60,8 +58,6 @@ class CourseImageMetrics:
         self.wikimedia_failures = 0
         self.wikimedia_concurrency_limited = 0
         self.wikimedia_lock_contended = 0
-        self.satellite_requests = 0
-        self.satellite_skipped_invalid_coordinates = 0
 
     def record_resolution(self, image_type: str, latency_seconds: float) -> None:
         with self._lock:
@@ -86,8 +82,6 @@ class CourseImageMetrics:
                 "wikimedia_failures": self.wikimedia_failures,
                 "wikimedia_concurrency_limited": self.wikimedia_concurrency_limited,
                 "wikimedia_lock_contended": self.wikimedia_lock_contended,
-                "satellite_requests": self.satellite_requests,
-                "satellite_skipped_invalid_coordinates": self.satellite_skipped_invalid_coordinates,
             }
 
 
@@ -117,7 +111,6 @@ class CourseImageService:
         settings: Settings,
         repository: CourseImageRepository | None = None,
         wikimedia_provider: WikimediaImageProvider | None = None,
-        satellite_provider: SatelliteImageProvider | None = None,
         metrics: CourseImageMetrics | None = None,
     ):
         self._settings = settings
@@ -125,9 +118,6 @@ class CourseImageService:
         self._wikimedia_provider = wikimedia_provider or WikimediaImageProvider(
             timeout_seconds=settings.wikimedia_lookup_timeout_seconds,
             confidence_threshold=settings.wikimedia_confidence_threshold,
-        )
-        self._satellite_provider = satellite_provider or MapboxSatelliteImageProvider(
-            access_token=settings.mapbox_access_token,
         )
         self.metrics = metrics or CourseImageMetrics()
         # Per-process request coalescing: many concurrent viewers of a course
@@ -173,10 +163,6 @@ class CourseImageService:
         wikimedia_result = self._resolve_wikimedia(session, course)
         if wikimedia_result is not None:
             return wikimedia_result
-
-        satellite = self._resolve_satellite(course)
-        if satellite is not None:
-            return satellite
 
         return no_image_result(course.name)
 
@@ -345,20 +331,3 @@ class CourseImageService:
             return lookup.result
         finally:
             lock.release()
-
-    def _resolve_satellite(self, course: HasCourse) -> CourseImageResult | None:
-        if course.latitude is None or course.longitude is None:
-            self.metrics.increment("satellite_skipped_invalid_coordinates")
-            return None
-        self.metrics.increment("satellite_requests")
-        options = MapboxOptions(
-            width=self._settings.mapbox_static_image_width,
-            height=self._settings.mapbox_static_image_height,
-            zoom=self._settings.mapbox_static_image_zoom,
-            pixel_ratio=self._settings.mapbox_static_image_pixel_ratio,
-        )
-        try:
-            return self._satellite_provider.get_course_image(course, options)
-        except Exception:
-            logger.warning("course_image_satellite_failed course_id=%s", course.id, exc_info=True)
-            return None

@@ -1,7 +1,8 @@
 import * as SecureStore from 'expo-secure-store'
 import { Feather, Ionicons } from '@expo/vector-icons'
+import * as ImagePicker from 'expo-image-picker'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Animated, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
 import { Course, OnboardingPreferences } from '../types'
 
@@ -58,6 +59,7 @@ type OnboardingFormProps = {
   onComplete: (destination: 'home' | 'profile') => void
   onExit?: () => void
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
+  updatePhoto?: (file: string) => Promise<void>
 }
 
 const DRAFT_KEY = 'golfrank_onboarding_draft'
@@ -245,7 +247,7 @@ function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, qu
   return { results, searching, searchError }
 }
 
-export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile }: OnboardingFormProps) {
+export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
   const [courseQuery, setCourseQuery] = useState('')
@@ -437,7 +439,7 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
 
       <Animated.View style={[styles.card, { opacity, transform: [{ translateX }] }]}>
         {step === 'profile' ? (
-          <ProfileStep draft={draft} onChange={patchDraft} onNext={next} saveProfile={saveProfile} checkUsername={checkUsername} />
+          <ProfileStep draft={draft} onChange={patchDraft} onNext={next} saveProfile={saveProfile} updatePhoto={updatePhoto} checkUsername={checkUsername} />
         ) : step === 'home' ? (
           <HomeCourseStep
             draft={draft}
@@ -520,16 +522,19 @@ function ProfileStep({
   onChange,
   onNext,
   saveProfile,
+  updatePhoto,
   checkUsername,
 }: {
   draft: OnboardingDraft
   onChange: (patch: Partial<OnboardingDraft>) => void
   onNext: () => void
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
+  updatePhoto?: (file: string) => Promise<void>
   checkUsername?: (username: string) => Promise<{ available: boolean; username: string }>
 }) {
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
+  const [pendingImageUri, setPendingImageUri] = useState<string | null>(null)
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle')
   const usernameRequest = useRef(0)
   const usernameTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -623,6 +628,14 @@ function ProfileStep({
         lastName: draft.lastName.trim(),
         username: normalizedUsername,
       })
+      if (pendingImageUri) {
+        try {
+          await updatePhoto?.(pendingImageUri)
+        } catch (reason) {
+          setProfileError(reason instanceof Error ? reason.message : 'Your profile was saved, but syncing your photo failed. Tap Continue to try again.')
+          return
+        }
+      }
       onNext()
     } catch (reason) {
       setProfileError(reason instanceof Error ? reason.message : 'Unable to save your profile. Please try again.')
@@ -631,16 +644,32 @@ function ProfileStep({
     }
   }
 
+  const choosePhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      mediaTypes: ['images'],
+      quality: 0.85,
+    })
+    if (!result.canceled && result.assets[0]?.uri) {
+      setPendingImageUri(result.assets[0].uri)
+      onChange({ profilePhotoAdded: true })
+    }
+  }
+
   return (
     <View style={styles.step}>
       <Heading title="Build Your Profile" subtitle="Add a few details to get started." />
       <View style={styles.previewCard}>
         <Pressable
+          accessibilityLabel="Choose profile photo"
           accessibilityRole="button"
-          onPress={() => onChange({ profilePhotoAdded: true })}
+          onPress={() => void choosePhoto()}
           style={styles.avatarLarge}
         >
-          <Text style={styles.avatarLargeText}>{draft.profilePhotoAdded ? initials(`${draft.firstName} ${draft.lastName}`) : '+'}</Text>
+          {pendingImageUri
+            ? <Image accessibilityLabel="Selected profile photo" source={{ uri: pendingImageUri }} style={styles.avatarLargeImage} />
+            : <Text style={styles.avatarLargeText}>{draft.profilePhotoAdded ? initials(`${draft.firstName} ${draft.lastName}`) : '+'}</Text>}
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.previewName}>{`${draft.firstName} ${draft.lastName}`.trim() || 'Your name'}</Text>
@@ -1357,6 +1386,11 @@ const styles = StyleSheet.create({
     borderRadius: 48,
     height: 92,
     justifyContent: 'center',
+    overflow: 'hidden',
+    width: 92,
+  },
+  avatarLargeImage: {
+    height: 92,
     width: 92,
   },
   avatarLargeText: {

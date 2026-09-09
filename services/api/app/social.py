@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
 from .core.config import Settings
 from .db import get_session
-from .domain import course_data, require_course, require_user, stored_user
+from .domain import course_data, require_course, require_user, round_image_data, round_image_data_bulk, stored_user
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -367,8 +367,12 @@ def _event_matches_current_round_visibility(session: Session, event: ActivityEve
     )
 
 
-def _activity_data(session: Session, event: ActivityEvent) -> dict:
-    """Return current, intentionally shared round details for an activity."""
+def _activity_data(session: Session, event: ActivityEvent, photos_by_round: dict[int, list[dict]] | None = None) -> dict:
+    """Return current, intentionally shared round details for an activity.
+    photos_by_round, when given, must already cover event's round (see
+    round_image_data_bulk) -- callers serializing many events in one page
+    (the feed) preload it once for the whole page instead of paying for a
+    round_image_data() query pair per event."""
     data = dict(event.event_data)
     if event.subject_type not in {"round", "rating_round"}:
         return data
@@ -384,6 +388,9 @@ def _activity_data(session: Session, event: ActivityEvent) -> dict:
         data["note"] = note.body
     if round_.favorite_hole is not None:
         data["favorite_hole"] = round_.favorite_hole
+    data["photos"] = (
+        photos_by_round.get(round_.id, []) if photos_by_round is not None else round_image_data(session, round_.id)
+    )
     return data
 
 
@@ -718,6 +725,13 @@ def activity_feed(
         if not events:
             break
         offset += len(events)
+        # One CourseImage (+ profile) query for every round-backed event in
+        # this whole page, instead of _activity_data() -> round_image_data()
+        # paying for that pair of queries again for every single event.
+        round_ids = {
+            event.subject_id for event in events if event.subject_type in ("round", "rating_round")
+        }
+        photos_by_round = round_image_data_bulk(session, round_ids)
         for event in events:
             if cursor_boundary and (
                 event.created_at > cursor_boundary[0]
@@ -733,7 +747,7 @@ def activity_feed(
             if actor is None:
                 continue
             course = None
-            data = _activity_data(session, event)
+            data = _activity_data(session, event, photos_by_round)
             course_id = data.get("course_id")
             if isinstance(course_id, int):
                 try:

@@ -65,6 +65,19 @@ def fetch_state_courses(state: str, *, client: httpx.Client | None = None) -> li
             client.close()
 
 
+# Known upstream corrections for provider catalog records where provider
+# location/coordinates are inaccurate.
+CATALOG_RECORD_OVERRIDES: dict[str, dict] = {
+    # Forebay Golf Course in Santa Nella / Gustine, CA is erroneously cataloged
+    # in Burlingame at Crystal Springs Golf Course coordinates by OpenGolfAPI.
+    "53d70641-7dc2-4205-ba6e-a5c43a57c3c3": {
+        "city": "Santa Nella",
+        "latitude": 37.1017405,
+        "longitude": -121.0158768,
+    },
+}
+
+
 def normalize_course_name(value: str) -> str:
     """Remove OpenGolfAPI's plain-text artifact for a stripped trademark mark."""
 
@@ -85,12 +98,17 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
     }
     for record in records:
         source_id = record.get("id")
-        name = normalize_course_name((record.get("course_name") or record.get("name") or "").strip())
-        city = (record.get("city") or "").strip() or None
-        latitude = record.get("latitude")
+        overrides = CATALOG_RECORD_OVERRIDES.get(source_id, {})
+        name = normalize_course_name((overrides.get("name") or record.get("course_name") or record.get("name") or "").strip())
+        city = (overrides.get("city") or record.get("city") or "").strip() or None
+        latitude = overrides.get("latitude")
+        if latitude is None:
+            latitude = record.get("latitude")
         if latitude is None:
             latitude = record.get("lat")
-        longitude = record.get("longitude")
+        longitude = overrides.get("longitude")
+        if longitude is None:
+            longitude = record.get("longitude")
         if longitude is None:
             longitude = record.get("lng")
         if not source_id or not name or latitude is None or longitude is None:

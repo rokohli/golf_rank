@@ -50,20 +50,7 @@ def test_course_detail_hero_image_prefers_official_photo() -> None:
     assert hero["url"] == "https://example.com/official-hero.jpg"
 
 
-def test_course_detail_hero_image_satellite_fallback_with_mapbox_token() -> None:
-    app = create_app(Settings(mapbox_access_token="pk.test", wikimedia_live_lookup_enabled=False))
-    client = TestClient(app)
-    pebble_id = client.get("/api/v1/courses", params={"q": "Pebble"}).json()[0]["id"]
-
-    response = client.get(f"/api/v1/courses/{pebble_id}")
-
-    hero = response.json()["hero_image"]
-    assert hero["type"] == "SATELLITE"
-    assert hero["url"].startswith("https://api.mapbox.com/")
-    assert hero["attribution"] == "Mapbox"
-
-
-def test_course_list_card_hero_respects_negative_cache_and_suppresses_gallery_siblings() -> None:
+def test_course_list_card_hero_respects_negative_cache_and_excludes_wikimedia_from_gallery() -> None:
     app = create_app(Settings(wikimedia_live_lookup_enabled=False))
     with app.state.session_factory() as session:
         from app.course_images.repository import CourseImageRepository
@@ -91,7 +78,9 @@ def test_course_list_card_hero_respects_negative_cache_and_suppresses_gallery_si
     assert hero is not None
     assert hero["type"] == "NONE"
     assert hero["url"] is None
-    assert any(img["url"] == "https://example.com/wiki-sibling.jpg" for img in course["images"])
+    # Wikimedia only ever serves as a hero-image fallback -- it must never
+    # surface as a gallery photo, even as a "sibling" of a suppressed hero.
+    assert not any(img["url"] == "https://example.com/wiki-sibling.jpg" for img in course["images"])
 
 
 def test_course_list_card_hero_prefers_curated_official_despite_negative_cache() -> None:
@@ -125,9 +114,8 @@ def test_course_list_card_hero_prefers_curated_official_despite_negative_cache()
 def test_course_list_card_hero_expires_stale_wikimedia_and_falls_through() -> None:
     from datetime import datetime, timedelta, timezone
 
-    # 1. Stale Wikimedia photo (>30 days old) with mapbox token configured -> falls through to SATELLITE
+    # 1. Stale Wikimedia photo (>30 days old) -> falls through to NONE (no lower tier left)
     app = create_app(Settings(
-        mapbox_access_token="pk.test",
         wikimedia_live_lookup_enabled=False,
         wikimedia_cache_positive_ttl_seconds=30 * 24 * 3600,
     ))
@@ -155,12 +143,11 @@ def test_course_list_card_hero_expires_stale_wikimedia_and_falls_through() -> No
     course = next(c for c in response.json() if c["id"] == pebble_id)
     hero = course["hero_image"]
     assert hero is not None
-    assert hero["type"] == "SATELLITE"
-    assert hero["url"].startswith("https://api.mapbox.com/")
+    assert hero["type"] == "NONE"
+    assert hero["url"] is None
 
     # 2. Fresh Wikimedia photo (<30 days old) -> returns WIKIMEDIA
     app_fresh = create_app(Settings(
-        mapbox_access_token="pk.test",
         wikimedia_live_lookup_enabled=False,
         wikimedia_cache_positive_ttl_seconds=30 * 24 * 3600,
     ))
