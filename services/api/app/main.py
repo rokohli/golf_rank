@@ -14,6 +14,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core.auth import CurrentUser, current_user, delete_clerk_user
 from .core.config import Settings
+from .core.distributed_lock import RedisLock
 from .core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from .core.rate_limit import (
     RateLimiter,
@@ -99,11 +100,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.validate_security()
     rate_limiter = RateLimiter(settings)
+    distributed_lock = RedisLock(settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
         await rate_limiter.close()
+        # Its own synchronous connection pool, separate from the limiter's.
+        distributed_lock.close()
 
     development = settings.app_env == "development"
     app = FastAPI(
@@ -122,7 +126,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = rate_limiter
     app.state.planner_narrative_provider = build_planner_narrative_provider(settings)
-    app.state.course_image_service = CourseImageService(settings=settings)
+    app.state.distributed_lock = distributed_lock
+    app.state.course_image_service = CourseImageService(
+        settings=settings, distributed_lock=distributed_lock
+    )
     app.state.object_storage = build_object_storage(settings)
     app.state.session_factory = make_session_factory(
         engine,
