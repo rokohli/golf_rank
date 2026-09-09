@@ -396,6 +396,34 @@ describe('RatingFlow', () => {
     await waitFor(() => expect(inputProps.confirmPhotoUpload).not.toHaveBeenCalled())
   })
 
+  it('disables Remove photo while a confirmation is in flight', async () => {
+    // Removing a 'ready' photo while finalizePhotos is confirming it can't
+    // actually stop that confirmation -- and if it succeeds, the photo
+    // lands in existingPhotos anyway (see finalizePhotos), silently undoing
+    // the user's removal. Disabling the control while busy prevents the
+    // race instead of letting it resolve unpredictably.
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    let resolveConfirm: (value: unknown) => void = () => {}
+    inputProps.confirmPhotoUpload = jest.fn().mockReturnValue(new Promise((resolve) => { resolveConfirm = resolve }))
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalled())
+
+    expect(screen.getByRole('button', { name: 'Remove photo' }).props.accessibilityState).toMatchObject({ disabled: true })
+
+    resolveConfirm({ id: 99, source_type: 'user' })
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledTimes(1))
+  })
+
   it('discards the upload once it lands if the photo was removed while still uploading', async () => {
     const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
     let resolveUpload: (value: { storageKey: string }) => void = () => {}

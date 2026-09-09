@@ -189,6 +189,38 @@ def test_delete_account_removes_uploaded_photos_row_and_r2_object() -> None:
     assert storage_key in storage.deleted
 
 
+def test_delete_account_records_failed_deletions_when_storage_is_unconfigured() -> None:
+    """A deletion that runs while object_storage is None (e.g. an R2
+    credential or COURSE_IMAGE_BASE_URL regression) must still durably
+    record every permanent key for retry -- not silently drop them just
+    because no storage client could be constructed right now."""
+    app = create_app()
+    app.state.object_storage = None
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:alice-no-storage"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={"home_region": "Monterey, CA", "max_green_fee": 250, "difficulty": "any", "access": "any"},
+    )
+    storage_key = "course-photos/1/alice-no-storage-photo.jpg"
+    with app.state.session_factory() as session:
+        user_id = session.scalar(select(User.id).where(User.provider_subject == "dev:alice-no-storage"))
+        session.add(CourseImage(
+            course_id=1, storage_key=storage_key, position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=user_id,
+        ))
+        session.commit()
+
+    response = client.delete("/api/v1/me", headers=headers)
+    assert response.status_code == 200
+
+    with app.state.session_factory() as session:
+        failure = session.scalar(select(FailedObjectDeletion).where(FailedObjectDeletion.storage_key == storage_key))
+        assert failure is not None
+        assert failure.context == "account_delete"
+
+
 class _FailingDeleteObjectStorage(_FakeObjectStorage):
     def delete_object(self, storage_key: str) -> bool:
         self.deleted.append(storage_key)

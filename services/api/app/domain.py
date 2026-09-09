@@ -306,10 +306,15 @@ def delete_permanent_objects(session: Session, storage, storage_keys, *, context
     object has no other recovery path once its CourseImage row is gone --
     silently dropping a delete_object failure here would leave it publicly
     reachable forever. Runs its own commit, separate from whatever
-    transaction already deleted the owning round/account."""
+    transaction already deleted the owning round/account.
+
+    storage may be None (object storage unconfigured, e.g. an R2 credential
+    or COURSE_IMAGE_BASE_URL regression) -- every key is then recorded for
+    retry directly, with no attempted deletion, rather than silently
+    dropped just because no client could be constructed right now."""
     failed = False
     for storage_key in storage_keys:
-        if not storage.delete_object(storage_key):
+        if storage is None or not storage.delete_object(storage_key):
             session.add(FailedObjectDeletion(storage_key=storage_key, context=context))
             failed = True
     if failed:

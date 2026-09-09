@@ -377,8 +377,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.delete(stored_user)
         session.commit()
         storage = getattr(request.app.state, "object_storage", None)
-        if storage is not None:
-            delete_permanent_objects(session, storage, photo_storage_keys, context="account_delete")
+        delete_permanent_objects(session, storage, photo_storage_keys, context="account_delete")
         try:
             delete_clerk_user(user.provider_subject, settings)
         except HTTPException as error:

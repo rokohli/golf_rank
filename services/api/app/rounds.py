@@ -478,6 +478,14 @@ def delete_round(
         from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 
         _lock_user_for_ranking_update(session, user.id)
+    # Locks the round row before snapshotting its photos, matching
+    # confirm_upload's own with_for_update() lock on the same row. Without
+    # this, a confirm racing this delete could insert a new CourseImage
+    # between the snapshot below and the cascade-delete further down: the
+    # row still gets cascade-deleted, but its permanent key was never in
+    # photo_storage_keys, so neither R2 deletion nor the retry queue would
+    # ever see it.
+    session.execute(select(Round).where(Round.id == round_.id).with_for_update())
     # Collected before the round row (and its cascading CourseImage rows,
     # ON DELETE CASCADE) is deleted -- R2 objects are only removed once the
     # DB delete has actually committed, below.
@@ -498,8 +506,7 @@ def delete_round(
         _stage_snapshot(session, user.id)
     session.commit()
     storage = getattr(request.app.state, "object_storage", None)
-    if storage is not None:
-        delete_permanent_objects(session, storage, photo_storage_keys, context="round_delete")
+    delete_permanent_objects(session, storage, photo_storage_keys, context="round_delete")
     return Response(status_code=204)
 
 

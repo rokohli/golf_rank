@@ -446,7 +446,11 @@ export function RatingFlow({
                         <Image accessibilityLabel="Staged photo" source={{ uri: photo.imageUri }} style={[styles.photoThumb, photo.status !== 'ready' && styles.photoThumbFaded]} />
                         {photo.status === 'uploading' ? <ActivityIndicator color={colors.pine} style={styles.photoThumbSpinner} /> : null}
                         {photo.status === 'error' ? <View style={styles.photoThumbErrorBadge}><Feather color="#FFFFFF" name="alert-circle" size={12} /></View> : null}
-                        <Pressable accessibilityLabel="Remove photo" accessibilityRole="button" hitSlop={6} onPress={() => removeStagedPhoto(photo.id)} style={styles.photoRemoveButton}>
+                        {/* Disabled while busy (Continue -> finalizePhotos may be confirming this
+                            exact photo right now): removing it here can't stop a confirmation
+                            already in flight, and there's no way to un-publish a photo that lands
+                            in existingPhotos after the "removal" already appeared to succeed. */}
+                        <Pressable accessibilityLabel="Remove photo" accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} hitSlop={6} onPress={() => removeStagedPhoto(photo.id)} style={styles.photoRemoveButton}>
                           <Feather color="#FFFFFF" name="x" size={12} />
                         </Pressable>
                       </View>

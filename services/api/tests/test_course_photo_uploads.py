@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -142,6 +143,35 @@ def test_confirm_promotes_object_to_its_permanent_key() -> None:
     assert not permanent_key.startswith("course-photos/pending/")
     assert response.json()["url"] == f"https://cdn.example/assets/{permanent_key}"
     assert permanent_key in storage.objects
+
+
+def test_confirm_cleans_up_the_promoted_object_when_persisting_the_row_fails(monkeypatch) -> None:
+    """If add_user_image fails after the object has already been promoted to
+    its permanent key (an exhausted retry, a DB outage), that object is
+    outside course-photos/pending/'s lifecycle rule -- nothing would ever
+    reclaim it unless confirm_upload cleans it up itself when persistence
+    fails."""
+    import app.course_photo_uploads as course_photo_uploads_module
+
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    def raise_error(*args, **kwargs):
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(course_photo_uploads_module._repository, "add_user_image", raise_error)
+
+    permanent_key = promote_storage_key(storage_key)
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+        )
+
+    assert permanent_key in storage.deleted
+    assert permanent_key not in storage.objects
 
 
 def test_confirm_rejects_missing_object() -> None:

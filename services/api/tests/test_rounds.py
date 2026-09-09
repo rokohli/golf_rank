@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from app.main import create_app
 from app.models import (
@@ -326,6 +326,82 @@ def test_deleting_round_removes_its_photos_row_and_r2_object() -> None:
     with app.state.session_factory() as session:
         assert session.get(CourseImage, image_id) is None
     assert storage_key in storage.deleted
+
+
+def test_deleting_round_locks_the_round_before_snapshotting_photo_keys() -> None:
+    """Regression test: delete_round must lock the round row (matching
+    confirm_upload's own with_for_update() lock on the same row) before
+    snapshotting photo_storage_keys -- otherwise a confirm racing this
+    delete could insert a new CourseImage between the snapshot and the
+    cascade-delete below; the row still gets cascade-deleted, but its
+    permanent key was never in photo_storage_keys, orphaning it with
+    nothing to reclaim it. The row-lock's actual effect is dialect-specific
+    (SQLite silently ignores FOR UPDATE; Postgres, the production dialect,
+    honors it) but the query ordering this asserts is what the fix changes
+    and is what matters for the lock to do anything at all."""
+    app = create_app()
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/rounds", headers=ALICE, json={"course_id": 1, "played_on": "2026-07-01"},
+    )
+    round_id = created.json()["id"]
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        upper = statement.lstrip().upper()
+        if upper.startswith("SELECT") and "FROM ROUNDS" in upper:
+            statements.append(upper)
+
+    event.listen(app.state.engine, "before_cursor_execute", capture_select)
+    try:
+        response = client.delete(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    finally:
+        event.remove(app.state.engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 204
+    # select(Round) always selects every column (including user_id), so
+    # "USER_ID" appears in every statement's column list regardless -- what
+    # distinguishes the lock query is its WHERE clause: `WHERE rounds.id = ?`
+    # only, no "AND" (the earlier ownership-check SELECT filters on both id
+    # and user_id, so its WHERE clause has one). Confirms the lock is
+    # actually being acquired, not just that some round query ran (which
+    # the ownership check alone would already satisfy).
+    lock_statements = [s for s in statements if "WHERE ROUNDS.ID = ?" in s and "AND" not in s]
+    assert len(lock_statements) == 1
+
+
+def test_deleting_round_records_failed_deletions_when_storage_is_unconfigured() -> None:
+    """A round/account deletion that runs while object_storage is None
+    (e.g. an R2 credential or COURSE_IMAGE_BASE_URL regression) must still
+    durably record every permanent key for retry -- not silently drop them
+    just because no storage client could be constructed right now."""
+    app = create_app()
+    app.state.object_storage = None
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/me/rounds", headers=ALICE, json={"course_id": 1, "played_on": "2026-07-01"},
+    )
+    round_id = created.json()["id"]
+    storage_key = "course-photos/1/no-storage-photo.jpg"
+
+    with app.state.session_factory() as session:
+        session.add(CourseImage(
+            course_id=1, storage_key=storage_key, position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=session.scalar(
+                select(User.id).where(User.provider_subject == "dev:round-alice")
+            ),
+            round_id=round_id,
+        ))
+        session.commit()
+
+    deleted = client.delete(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
+    assert deleted.status_code == 204
+
+    with app.state.session_factory() as session:
+        failure = session.scalar(select(FailedObjectDeletion).where(FailedObjectDeletion.storage_key == storage_key))
+        assert failure is not None
+        assert failure.context == "round_delete"
 
 
 class _FailingDeleteObjectStorage(_FakeObjectStorage):

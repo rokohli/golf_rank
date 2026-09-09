@@ -22,7 +22,7 @@ from .core.auth import CurrentUser, current_user
 from .core.rate_limit import photo_confirm_rate_limit, photo_discard_rate_limit, photo_upload_rate_limit
 from .course_images.repository import CourseImageRepository
 from .db import get_session
-from .domain import require_course, require_user, storage_image_url, uploader_username
+from .domain import delete_permanent_objects, require_course, require_user, storage_image_url, uploader_username
 from .models import CourseImage, Round
 from .schemas import (
     CourseImageOut,
@@ -177,15 +177,27 @@ def confirm_upload(
     # still there to retry against.
     storage.promote_object(payload.storage_key, permanent_key)
 
-    image = _repository.add_user_image(
-        session, course.id,
-        storage_key=permanent_key,
-        uploaded_by_user_id=user.id,
-        alt_text=f"User-submitted photo of {course.name}",
-        width=payload.width,
-        height=payload.height,
-        round_id=payload.round_id,
-    )
+    try:
+        image = _repository.add_user_image(
+            session, course.id,
+            storage_key=permanent_key,
+            uploaded_by_user_id=user.id,
+            alt_text=f"User-submitted photo of {course.name}",
+            width=payload.width,
+            height=payload.height,
+            round_id=payload.round_id,
+        )
+    except Exception:
+        # The object is already promoted to its permanent key above, outside
+        # course-photos/pending/'s lifecycle rule -- if persisting the row
+        # then fails (exhausted retries, a DB outage), that object would
+        # otherwise be orphaned forever with nothing left to reclaim it.
+        # Clean it up (or durably record the failure for retry) before
+        # letting the original error propagate. The pending copy is
+        # untouched, so a client retry of this same confirm call still
+        # works from scratch.
+        delete_permanent_objects(session, storage, [permanent_key], context="confirm_persist_failed")
+        raise
     return _image_out(session, settings, image)
 
 
