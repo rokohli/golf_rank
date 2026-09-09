@@ -183,6 +183,30 @@ class CourseImage(Base):
         ForeignKey("rounds.id", ondelete="CASCADE"), nullable=True, index=True
     )
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The scorer's stated reasons for quality_score (PhotoScore.reasons). A bare
+    # number tells a moderator nothing about *why* a photo scored what it did,
+    # and an auto-approval would otherwise be unauditable.
+    quality_score_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Set once scoring has been attempted, whether or not it succeeded, so it --
+    # not quality_score -- is the retry key. `scored_at IS NOT NULL AND
+    # quality_score IS NULL` means "we tried and the provider failed"; a sweeper
+    # keyed on quality_score alone would re-burn a call on the same broken image
+    # on every run, forever.
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bounds retries on a permanently-failing image (an object that 404s, a
+    # provider that always refuses). Without it the sweeper is a cost leak.
+    scoring_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Who last approved/rejected/featured this photo. SET NULL, deliberately not
+    # the CASCADE that uploaded_by_user_id above uses: a user's own upload is
+    # their content and goes with their account, but deleting a *moderator's*
+    # account must not delete every photo they ever approved. NULL alongside a
+    # set moderated_at therefore means the auto-scorer made the decision, which
+    # is why no separate is_auto_approved flag is needed.
+    moderated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    moderated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    moderation_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
