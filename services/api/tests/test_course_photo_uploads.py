@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 from app.models import Course, CourseImage, CourseImageModeration
-from app.storage import ObjectMeta, ObjectStorage, PresignedUpload
+from app.storage import ObjectMeta, ObjectStorage, PresignedUpload, promote_storage_key
 
 HEADERS = {"X-Development-Subject": "dev:photo-uploader"}
 
@@ -27,6 +27,11 @@ class FakeObjectStorage(ObjectStorage):
     def delete_object(self, storage_key: str) -> None:
         self.objects.pop(storage_key, None)
         self.deleted.append(storage_key)
+
+    def promote_object(self, pending_key: str, permanent_key: str) -> None:
+        # Mirrors R2ObjectStorage.promote_object: copies, leaves the pending
+        # copy in place (the lifecycle rule reclaims it in real R2).
+        self.objects[permanent_key] = self.objects[pending_key]
 
 
 def _client(*, object_storage: ObjectStorage | None, course_image_base_url: str | None = None) -> TestClient:
@@ -90,7 +95,9 @@ def test_upload_url_returns_scoped_storage_key() -> None:
 
     assert response.status_code == 201
     body = response.json()
-    assert body["storage_key"].startswith(f"course-photos/{course_id}/")
+    # Lands under course-photos/pending/ -- the prefix the R2 lifecycle rule
+    # expires unconfirmed uploads out of (see storage.py).
+    assert body["storage_key"].startswith(f"course-photos/pending/{course_id}/")
     assert body["content_type"] == "image/jpeg"
 
 
@@ -98,7 +105,7 @@ def test_confirm_creates_pending_user_image() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/photo.jpg"
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     response = client.post(
@@ -114,13 +121,35 @@ def test_confirm_creates_pending_user_image() -> None:
     assert body["height"] == 1200
 
 
+def test_confirm_promotes_object_to_its_permanent_key() -> None:
+    """confirm_upload must copy the validated object out of
+    course-photos/pending/ to its permanent key before persisting the row --
+    a row must never point at a key with nothing there, and a live photo
+    must never be subject to the pending prefix's expiry."""
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    response = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+
+    assert response.status_code == 201
+    permanent_key = promote_storage_key(storage_key)
+    assert not permanent_key.startswith("course-photos/pending/")
+    assert response.json()["url"] == f"https://cdn.example/assets/{permanent_key}"
+    assert permanent_key in storage.objects
+
+
 def test_confirm_rejects_missing_object() -> None:
     client = _client(object_storage=FakeObjectStorage())
     course_id = _pebble_id(client)
 
     response = client.post(
         f"/api/v1/courses/{course_id}/photos/confirm",
-        json={"storage_key": f"course-photos/{course_id}/missing.jpg"},
+        json={"storage_key": f"course-photos/pending/{course_id}/missing.jpg"},
         headers=HEADERS,
     )
 
@@ -131,7 +160,7 @@ def test_confirm_rejects_and_deletes_oversized_object() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/huge.jpg"
+    storage_key = f"course-photos/pending/{course_id}/huge.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=50_000_000)
 
     response = client.post(
@@ -146,7 +175,7 @@ def test_confirm_rejects_cross_course_storage_key() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    other_key = f"course-photos/{course_id + 1}/photo.jpg"
+    other_key = f"course-photos/pending/{course_id + 1}/photo.jpg"
     storage.objects[other_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     response = client.post(
@@ -160,7 +189,7 @@ def test_confirm_rejects_unknown_fields() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/photo.jpg"
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     response = client.post(
@@ -178,7 +207,7 @@ def test_confirmed_upload_appears_in_gallery_but_not_as_hero_while_pending() -> 
     storage = FakeObjectStorage()
     client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/photo.jpg"
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     confirm = client.post(
@@ -205,7 +234,7 @@ def test_confirm_links_round_id_and_appears_on_feed_regardless_of_moderation() -
     client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
     course_id = _pebble_id(client)
     round_id = _rated_round_id(client, course_id, HEADERS)
-    storage_key = f"course-photos/{course_id}/round.jpg"
+    storage_key = f"course-photos/pending/{course_id}/round.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     confirm = client.post(
@@ -234,7 +263,7 @@ def test_confirm_rejects_round_id_belonging_to_another_user() -> None:
     course_id = _pebble_id(client)
     other_headers = {"X-Development-Subject": "dev:other-rater"}
     other_round_id = _rated_round_id(client, course_id, other_headers)
-    storage_key = f"course-photos/{course_id}/round.jpg"
+    storage_key = f"course-photos/pending/{course_id}/round.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     response = client.post(
@@ -251,7 +280,7 @@ def test_discard_deletes_unconfirmed_object() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/abandoned.jpg"
+    storage_key = f"course-photos/pending/{course_id}/abandoned.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     response = client.post(
@@ -269,7 +298,7 @@ def test_discard_requires_auth() -> None:
 
     response = client.post(
         f"/api/v1/courses/{course_id}/photos/discard",
-        json={"storage_key": f"course-photos/{course_id}/abandoned.jpg"},
+        json={"storage_key": f"course-photos/pending/{course_id}/abandoned.jpg"},
     )
 
     assert response.status_code == 401
@@ -278,7 +307,7 @@ def test_discard_requires_auth() -> None:
 def test_discard_rejects_cross_course_storage_key() -> None:
     client = _client(object_storage=FakeObjectStorage())
     course_id = _pebble_id(client)
-    other_key = f"course-photos/{course_id + 1}/abandoned.jpg"
+    other_key = f"course-photos/pending/{course_id + 1}/abandoned.jpg"
 
     response = client.post(
         f"/api/v1/courses/{course_id}/photos/discard", json={"storage_key": other_key}, headers=HEADERS,
@@ -291,13 +320,12 @@ def test_discard_refuses_already_confirmed_storage_key() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/confirmed.jpg"
+    storage_key = f"course-photos/pending/{course_id}/confirmed.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
     confirm = client.post(
         f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
     )
     assert confirm.status_code == 201
-    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)  # re-add: confirm doesn't delete it
 
     response = client.post(
         f"/api/v1/courses/{course_id}/photos/discard", json={"storage_key": storage_key}, headers=HEADERS,
@@ -314,7 +342,7 @@ def test_confirm_enforces_photo_cap_per_round() -> None:
     round_id = _rated_round_id(client, course_id, HEADERS)
 
     for index in range(5):
-        storage_key = f"course-photos/{course_id}/round-{index}.jpg"
+        storage_key = f"course-photos/pending/{course_id}/round-{index}.jpg"
         storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
         response = client.post(
             f"/api/v1/courses/{course_id}/photos/confirm",
@@ -323,7 +351,7 @@ def test_confirm_enforces_photo_cap_per_round() -> None:
         )
         assert response.status_code == 201
 
-    overflow_key = f"course-photos/{course_id}/round-overflow.jpg"
+    overflow_key = f"course-photos/pending/{course_id}/round-overflow.jpg"
     storage.objects[overflow_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
     response = client.post(
         f"/api/v1/courses/{course_id}/photos/confirm",
@@ -343,7 +371,7 @@ def test_confirm_replay_is_idempotent_and_does_not_consume_extra_round_slot() ->
     client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
     course_id = _pebble_id(client)
     round_id = _rated_round_id(client, course_id, HEADERS)
-    storage_key = f"course-photos/{course_id}/round.jpg"
+    storage_key = f"course-photos/pending/{course_id}/round.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     first = client.post(
@@ -367,7 +395,7 @@ def test_confirm_replay_is_idempotent_and_does_not_consume_extra_round_slot() ->
     # Four more distinct uploads should still fit under the five-photo cap --
     # the replay above must not have consumed a slot.
     for index in range(4):
-        extra_key = f"course-photos/{course_id}/round-extra-{index}.jpg"
+        extra_key = f"course-photos/pending/{course_id}/round-extra-{index}.jpg"
         storage.objects[extra_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
         response = client.post(
             f"/api/v1/courses/{course_id}/photos/confirm",
@@ -377,11 +405,37 @@ def test_confirm_replay_is_idempotent_and_does_not_consume_extra_round_slot() ->
         assert response.status_code == 201
 
 
+def test_confirm_replay_is_idempotent_even_after_the_pending_object_expired() -> None:
+    """The idempotency check must be keyed on the deterministic permanent key
+    and run before any storage I/O -- a replayed confirm must still succeed
+    even if the pending copy has since aged out of R2 via the
+    course-photos/pending/ lifecycle rule."""
+    storage = FakeObjectStorage()
+    client = _client(object_storage=storage, course_image_base_url="https://cdn.example/assets")
+    course_id = _pebble_id(client)
+    storage_key = f"course-photos/pending/{course_id}/round.jpg"
+    storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
+
+    first = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+    assert first.status_code == 201
+
+    # Simulate the pending copy having expired out of R2.
+    storage.objects.pop(storage_key, None)
+
+    second = client.post(
+        f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=HEADERS,
+    )
+    assert second.status_code == 201
+    assert second.json()["id"] == first.json()["id"]
+
+
 def test_confirm_rejects_replay_from_a_different_user() -> None:
     storage = FakeObjectStorage()
     client = _client(object_storage=storage)
     course_id = _pebble_id(client)
-    storage_key = f"course-photos/{course_id}/photo.jpg"
+    storage_key = f"course-photos/pending/{course_id}/photo.jpg"
     storage.objects[storage_key] = ObjectMeta(content_type="image/jpeg", content_length=5000)
 
     first = client.post(

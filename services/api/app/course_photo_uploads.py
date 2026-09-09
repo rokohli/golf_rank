@@ -31,7 +31,7 @@ from .schemas import (
     CoursePhotoUploadRequest,
     CoursePhotoUploadResponse,
 )
-from .storage import ObjectStorage
+from .storage import ObjectStorage, promote_storage_key
 
 router = APIRouter(tags=["course-photo-uploads"])
 _repository = CourseImageRepository()
@@ -124,8 +124,22 @@ def confirm_upload(
 
     # Path-scoping check: storage_key must belong to this course, even though it's
     # server-generated -- defends against confirming a key issued for a different course_id.
-    if not payload.storage_key.startswith(f"course-photos/{course.id}/"):
+    if not payload.storage_key.startswith(f"course-photos/pending/{course.id}/"):
         raise HTTPException(400, "storage_key does not match course")
+
+    # Idempotent replay, checked before any storage I/O and keyed on the
+    # would-be permanent key (not the pending one the client sent): a
+    # replayed confirm for an already-promoted upload must stay idempotent
+    # even after its pending copy has expired out of R2 (see
+    # storage.py's course-photos/pending/ lifecycle rule and
+    # promote_storage_key's docstring). Also means a replay never re-runs
+    # the round-cap check below, so it can't consume another slot.
+    permanent_key = promote_storage_key(payload.storage_key)
+    existing = _repository.find_by_storage_key(session, permanent_key)
+    if existing is not None:
+        if existing.uploaded_by_user_id != user.id:
+            raise HTTPException(403, "storage_key belongs to another user")
+        return _image_out(session, settings, existing)
 
     meta = storage.head_object(payload.storage_key)
     if meta is None:
@@ -141,15 +155,6 @@ def confirm_upload(
         storage.delete_object(payload.storage_key)
         raise HTTPException(422, "Uploaded object size is out of range")
 
-    # Idempotent replay: a retried confirm for a key that's already been
-    # confirmed (uq_course_image_user_storage_key) must not create a
-    # duplicate gallery entry or consume another round-photo slot.
-    existing = _repository.find_by_storage_key(session, payload.storage_key)
-    if existing is not None:
-        if existing.uploaded_by_user_id != user.id:
-            raise HTTPException(403, "storage_key belongs to another user")
-        return _image_out(session, settings, existing)
-
     if payload.round_id is not None:
         round_ = session.get(Round, payload.round_id)
         if round_ is None or round_.user_id != user.id or round_.course_id != course.id:
@@ -163,9 +168,18 @@ def confirm_upload(
             storage.delete_object(payload.storage_key)
             raise HTTPException(422, f"A round can have at most {MAX_PHOTOS_PER_ROUND} photos")
 
+    # Promotes the validated object out of course-photos/pending/ to its
+    # permanent key before persisting the row -- a row must never point at a
+    # key with nothing there. Left un-caught: a failure here (network,
+    # transient R2 error) surfaces as a 5xx, which the client now treats as
+    # retryable rather than a permanent rejection (see RatingFlow.tsx's
+    # isRetryableConfirmFailure) -- correct, since the pending object is
+    # still there to retry against.
+    storage.promote_object(payload.storage_key, permanent_key)
+
     image = _repository.add_user_image(
         session, course.id,
-        storage_key=payload.storage_key,
+        storage_key=permanent_key,
         uploaded_by_user_id=user.id,
         alt_text=f"User-submitted photo of {course.name}",
         width=payload.width,
@@ -201,9 +215,13 @@ def discard_upload(
     require_course(session, course_id)
     storage = _object_storage(request)
 
-    if not payload.storage_key.startswith(f"course-photos/{course_id}/"):
+    if not payload.storage_key.startswith(f"course-photos/pending/{course_id}/"):
         raise HTTPException(400, "storage_key does not match course")
-    if session.scalar(select(CourseImage).where(CourseImage.storage_key == payload.storage_key)) is not None:
+    # A confirmed row's storage_key is the promoted, permanent key -- never
+    # the pending one this endpoint only ever receives -- so "already
+    # confirmed" has to check the would-be permanent key, not payload.storage_key directly.
+    permanent_key = promote_storage_key(payload.storage_key)
+    if session.scalar(select(CourseImage).where(CourseImage.storage_key == permanent_key)) is not None:
         raise HTTPException(409, "storage_key is already confirmed")
 
     storage.delete_object(payload.storage_key)

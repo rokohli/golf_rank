@@ -19,18 +19,19 @@ delete_object: the confirm endpoint uses it to clean up an object that fails
 that after-the-fact size/type check, since nothing stopped an oversized file
 from reaching R2 in the first place.
 
-KNOWN LIMITATION -- unconfirmed uploads are not size-bounded. Because R2
-can't reject an oversized PUT before it lands, a client can request a
-presigned URL, upload an arbitrarily large object straight to R2, and simply
-never call /photos/confirm. No CourseImage row is ever created, so nothing
-in the app (discard, round/account deletion) ever learns the object exists
-to clean it up -- it can sit in the bucket indefinitely. The existing
-photo_upload_rate_limit only bounds how many presigned URLs a user can
-request per day; it does not bound the size of what they then PUT with one.
-Two ways to actually close this (not just delay it -- a background reaper
-that deletes old orphaned objects only bounds how long an oversized object
-survives, not whether the PUT itself succeeds, since by the time anything in
-this app can see the object, its bytes are already fully stored):
+KNOWN LIMITATION -- unconfirmed uploads are not size-bounded at upload time.
+Because R2 can't reject an oversized PUT before it lands, a client can
+request a presigned URL and upload an arbitrarily large object straight to
+R2 before confirm_upload ever gets a chance to reject it on size. What IS
+bounded now is how long such an object can survive: every upload lands under
+the course-photos/pending/ prefix (see build_storage_key), which carries an
+R2 bucket lifecycle rule expiring objects after 24 hours (see
+scripts/apply_r2_lifecycle_rule.py, and set_up_course_photo_lifecycle_rule
+below for what it configures). confirm_upload promotes a validated object to
+its permanent, unprefixed key (promote_storage_key) -- objects that are
+never confirmed, or are rejected and left behind, just age out on their own.
+This bounds the retained blast radius but not the initial oversized PUT
+itself; closing that still means one of:
   1. Stop using direct-to-R2 presigned PUT for this upload path; route it
      through the API instead, so the server can reject on Content-Length (or
      abort a stream) before the bytes reach R2. This gives up the "file
@@ -43,7 +44,7 @@ this app can see the object, its bytes are already fully stored):
      architecture, but is new infrastructure this repo doesn't have today
      (no wrangler/Workers setup) -- a separate deployable to write, deploy,
      and maintain.
-Neither has been implemented; this is an accepted risk for now.
+Neither has been implemented; this remains an accepted risk.
 """
 
 from dataclasses import dataclass
@@ -80,12 +81,36 @@ class ObjectStorage(Protocol):
 
     def delete_object(self, storage_key: str) -> None: ...
 
+    def promote_object(self, pending_key: str, permanent_key: str) -> None: ...
+
+
+_PENDING_PREFIX = "course-photos/pending/"
+
 
 def build_storage_key(course_id: int, content_type: str) -> str:
     """Server-generated key -- never derived from client input. Prevents path
-    traversal/collisions; the presigned URL is scoped to this exact key."""
+    traversal/collisions; the presigned URL is scoped to this exact key.
+
+    Lands under course-photos/pending/, not course-photos/ directly: that
+    prefix carries an R2 lifecycle rule expiring objects after 24 hours (see
+    this module's docstring), so an upload nobody ever confirms or discards
+    just ages out instead of sitting in the bucket forever. confirm_upload
+    promotes a validated upload out of this prefix -- see promote_storage_key
+    -- so a live, displayed photo is never subject to that expiry."""
     ext = _EXT_BY_CONTENT_TYPE[content_type]
-    return f"course-photos/{course_id}/{uuid.uuid4()}.{ext}"
+    return f"{_PENDING_PREFIX}{course_id}/{uuid.uuid4()}.{ext}"
+
+
+def promote_storage_key(pending_key: str) -> str:
+    """The permanent key a validated pending upload is copied to on confirm --
+    same course_id/filename, just outside course-photos/pending/'s lifecycle
+    rule. Deterministic (not a new random key) so confirm_upload can check
+    for an existing row keyed on the *would-be* permanent key before ever
+    touching storage: a replayed confirm for an already-promoted upload must
+    stay idempotent even after the pending copy has expired out of R2."""
+    if not pending_key.startswith(_PENDING_PREFIX):
+        raise ValueError(f"not a pending storage_key: {pending_key!r}")
+    return f"course-photos/{pending_key.removeprefix(_PENDING_PREFIX)}"
 
 
 class R2ObjectStorage:
@@ -134,6 +159,21 @@ class R2ObjectStorage:
             self._client.delete_object(Bucket=self._bucket, Key=storage_key)
         except (ClientError, BotoCoreError):
             pass
+
+    def promote_object(self, pending_key: str, permanent_key: str) -> None:
+        # Not best-effort: confirm_upload only creates the CourseImage row
+        # after this succeeds, since the row's storage_key points at
+        # permanent_key -- a failure here must propagate so the caller
+        # doesn't persist a row with nothing at its key. The pending copy is
+        # deliberately left in place rather than deleted: it's harmless (the
+        # lifecycle rule reclaims it) and deleting it here would just be
+        # another place a failure could leak an object for no benefit -- the
+        # permanent copy is what's served from now on either way.
+        self._client.copy_object(
+            Bucket=self._bucket,
+            CopySource={"Bucket": self._bucket, "Key": pending_key},
+            Key=permanent_key,
+        )
 
 
 def build_object_storage(settings) -> ObjectStorage | None:

@@ -1,7 +1,8 @@
+import pytest
 from botocore.exceptions import EndpointConnectionError
 
 from app.core.config import Settings
-from app.storage import R2ObjectStorage, build_object_storage
+from app.storage import R2ObjectStorage, build_object_storage, build_storage_key, promote_storage_key
 
 
 class _RaisingClient:
@@ -42,3 +43,66 @@ def test_build_object_storage_requires_a_serving_base_url() -> None:
 def test_build_object_storage_enabled_once_base_url_is_set() -> None:
     settings = Settings(**_R2_CREDS, course_image_base_url="https://cdn.example/assets")
     assert build_object_storage(settings) is not None
+
+
+def test_build_storage_key_lands_under_the_pending_prefix() -> None:
+    """The R2 bucket lifecycle rule (see apply_r2_lifecycle_rule.py) only
+    expires objects under course-photos/pending/ -- an upload must land
+    there so it ages out if never confirmed or discarded."""
+    key = build_storage_key(7, "image/jpeg")
+    assert key.startswith("course-photos/pending/7/")
+    assert key.endswith(".jpg")
+
+
+def test_promote_storage_key_strips_only_the_pending_segment() -> None:
+    permanent = promote_storage_key("course-photos/pending/7/abc-123.jpg")
+    assert permanent == "course-photos/7/abc-123.jpg"
+
+
+def test_promote_storage_key_rejects_a_non_pending_key() -> None:
+    with pytest.raises(ValueError):
+        promote_storage_key("course-photos/7/already-permanent.jpg")
+
+
+class _CopyingClient:
+    def __init__(self) -> None:
+        self.copy_calls: list[dict] = []
+
+    def copy_object(self, **kwargs):
+        self.copy_calls.append(kwargs)
+
+
+def test_promote_object_copies_pending_to_permanent_key() -> None:
+    storage = R2ObjectStorage(
+        account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
+    )
+    client = _CopyingClient()
+    storage._client = client
+
+    storage.promote_object("course-photos/pending/7/abc.jpg", "course-photos/7/abc.jpg")
+
+    assert client.copy_calls == [{
+        "Bucket": "test-bucket",
+        "CopySource": {"Bucket": "test-bucket", "Key": "course-photos/pending/7/abc.jpg"},
+        "Key": "course-photos/7/abc.jpg",
+    }]
+
+
+class _FailingCopyClient:
+    def copy_object(self, **kwargs):
+        raise EndpointConnectionError(endpoint_url="https://r2.example/unreachable")
+
+
+def test_promote_object_failure_is_not_swallowed() -> None:
+    """Unlike delete_object, a promote_object failure must propagate: the
+    caller (confirm_upload) only creates the CourseImage row after this
+    succeeds, since the row's storage_key points at the permanent key --
+    silently swallowing a copy failure would persist a row with nothing at
+    its key."""
+    storage = R2ObjectStorage(
+        account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
+    )
+    storage._client = _FailingCopyClient()
+
+    with pytest.raises(EndpointConnectionError):
+        storage.promote_object("course-photos/pending/7/abc.jpg", "course-photos/7/abc.jpg")
