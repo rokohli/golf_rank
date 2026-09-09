@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons'
 import { Image } from 'expo-image'
 import { Stack, useRouter } from 'expo-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
 
 import {
@@ -38,20 +38,31 @@ export default function AdminPhotos() {
   const [photos, setPhotos] = useState<AdminCoursePhoto[]>([])
   const [cursor, setCursor] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [appendError, setAppendError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const requestIdRef = useRef(0)
+  const loadingMoreRef = useRef(false)
+
   const load = useCallback(async (nextStatus: Status) => {
+    const reqId = ++requestIdRef.current
     setLoading(true)
     setError(null)
+    setAppendError(null)
     try {
       const page = await getAdminCoursePhotos(nextStatus, null, await getAuthHeaders())
+      if (reqId !== requestIdRef.current) return
       setPhotos(page.items)
       setCursor(page.next_cursor)
     } catch (reason) {
+      if (reqId !== requestIdRef.current) return
       setError(reason instanceof Error ? reason.message : 'Unable to load the moderation queue.')
     } finally {
-      setLoading(false)
+      if (reqId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [getAuthHeaders])
 
@@ -60,24 +71,52 @@ export default function AdminPhotos() {
   }, [isAdmin, load, status])
 
   const loadMore = useCallback(async () => {
-    if (cursor === null || loading) return
+    if (cursor === null || loading || loadingMoreRef.current) return
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    setAppendError(null)
+    const reqId = requestIdRef.current
     try {
       const page = await getAdminCoursePhotos(status, cursor, await getAuthHeaders())
-      setPhotos((current) => [...current, ...page.items])
+      if (reqId !== requestIdRef.current) return
+      setPhotos((current) => {
+        const existingIds = new Set(current.map((photo) => photo.image.id))
+        const newItems = page.items.filter((photo) => !existingIds.has(photo.image.id))
+        return [...current, ...newItems]
+      })
       setCursor(page.next_cursor)
-    } catch {
-      // A failed page-append leaves what is already shown intact.
+    } catch (reason) {
+      if (reqId !== requestIdRef.current) return
+      setAppendError(reason instanceof Error ? reason.message : 'Unable to load more photos.')
+    } finally {
+      loadingMoreRef.current = false
+      if (reqId === requestIdRef.current) {
+        setLoadingMore(false)
+      }
     }
   }, [cursor, getAuthHeaders, loading, status])
 
   // Every action returns the updated row, so apply it in place. A photo that no
-  // longer matches the active filter drops out of the list.
+  // longer matches the active filter drops out of the list. If featuring, clear
+  // hero on any existing course photo in the list to mirror tier invariants.
   const applyResult = useCallback((updated: AdminCoursePhoto) => {
-    setPhotos((current) => (
-      updated.moderation_status === status
-        ? current.map((photo) => (photo.image.id === updated.image.id ? updated : photo))
-        : current.filter((photo) => photo.image.id !== updated.image.id)
-    ))
+    setPhotos((current) => {
+      if (updated.moderation_status !== status) {
+        return current.filter((photo) => photo.image.id !== updated.image.id)
+      }
+      return current.map((photo) => {
+        if (photo.image.id === updated.image.id) {
+          return updated
+        }
+        if (updated.image.is_hero && photo.course_id === updated.course_id && photo.image.is_hero) {
+          return {
+            ...photo,
+            image: { ...photo.image, is_hero: false },
+          }
+        }
+        return photo
+      })
+    })
   }, [status])
 
   const run = useCallback(async (
@@ -173,6 +212,18 @@ export default function AdminPhotos() {
       {!loading && photos.length === 0 ? <Text style={styles.empty}>No {status} photos.</Text> : null}
 
       <FlatList
+        ListFooterComponent={
+          loadingMore ? (
+            <ActivityIndicator accessibilityLabel="Loading more photos" color={colors.pine} style={styles.footerLoader} />
+          ) : appendError ? (
+            <View style={styles.appendErrorContainer}>
+              <Text accessibilityRole="alert" style={styles.appendErrorText}>{appendError}</Text>
+              <Pressable accessibilityRole="button" onPress={() => { void loadMore() }} style={styles.retryButton}>
+                <Text style={styles.retryText}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : null
+        }
         data={photos}
         keyExtractor={(photo) => String(photo.image.id)}
         onEndReached={() => { void loadMore() }}
@@ -196,6 +247,26 @@ export default function AdminPhotos() {
   </>
 }
 
+function getAuditActionText(photo: AdminCoursePhoto): string | null {
+  const user = photo.moderated_by_username ? `@${photo.moderated_by_username}` : null
+  switch (photo.moderation_action) {
+    case 'featured':
+      return user ? `Featured by ${user}` : 'Featured'
+    case 'unfeatured':
+      return user ? `Unfeatured by ${user}` : 'Unfeatured'
+    case 'approved':
+      return user ? `Approved by ${user}` : 'Approved'
+    case 'rejected':
+      return user ? `Rejected by ${user}` : 'Rejected'
+    case 'auto_approved':
+      return 'Approved automatically'
+    default:
+      if (user) return `Reviewed by ${user}`
+      if (photo.moderated_at && photo.moderation_status !== 'pending') return 'Reviewed automatically'
+      return null
+  }
+}
+
 function PhotoCard({ busy, onApprove, onDelete, onFeature, onOpenCourse, onReject, photo }: {
   busy: boolean
   onApprove: () => void
@@ -205,6 +276,8 @@ function PhotoCard({ busy, onApprove, onDelete, onFeature, onOpenCourse, onRejec
   onReject: () => void
   photo: AdminCoursePhoto
 }) {
+  const auditText = getAuditActionText(photo)
+
   return (
     <View style={styles.card}>
       {photo.image.url ? (
@@ -227,10 +300,11 @@ function PhotoCard({ busy, onApprove, onDelete, onFeature, onOpenCourse, onRejec
 
       <ScoreSummary photo={photo} />
 
-      {photo.moderated_by_username || photo.moderation_reason ? (
+      {auditText || photo.moderation_reason ? (
         <Text style={styles.meta}>
-          {photo.moderated_by_username ? `Reviewed by @${photo.moderated_by_username}` : 'Reviewed automatically'}
-          {photo.moderation_reason ? ` · ${photo.moderation_reason}` : ''}
+          {auditText && photo.moderation_reason
+            ? `${auditText} · ${photo.moderation_reason}`
+            : (auditText ?? photo.moderation_reason)}
         </Text>
       ) : null}
 
@@ -306,4 +380,9 @@ const styles = StyleSheet.create({
   empty: { color: colors.muted, fontSize: 12, textAlign: 'center' },
   error: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   pressed: { opacity: 0.65 },
+  footerLoader: { marginVertical: 16 },
+  appendErrorContainer: { alignItems: 'center', gap: 8, marginVertical: 16 },
+  appendErrorText: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  retryButton: { borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 6 },
+  retryText: { color: colors.ink, fontSize: 12, fontWeight: '600' },
 })

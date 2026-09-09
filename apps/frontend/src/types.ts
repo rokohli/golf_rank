@@ -33,6 +33,7 @@ export type AdminCoursePhoto = {
   moderated_at?: string | null
   moderated_by_username?: string | null
   moderation_reason?: string | null
+  moderation_action?: 'approved' | 'rejected' | 'featured' | 'unfeatured' | 'auto_approved' | string | null
   quality_score_reasons?: string[] | null
   scored_at?: string | null
   scoring_attempts?: number

@@ -9,6 +9,8 @@ from app.models import (
     CourseImageModeration,
     CourseImageSource,
     FailedObjectDeletion,
+    Profile,
+    User,
 )
 from app.storage import ObjectMeta, ObjectStorage, PresignedUpload
 
@@ -429,3 +431,93 @@ def test_actions_404_for_a_non_user_photo() -> None:
 
 def test_actions_404_for_a_missing_photo() -> None:
     assert _client().post(f"{BASE}/999999/approve", headers=ADMIN).status_code == 404
+
+
+def test_audit_fields_updated_across_different_moderators() -> None:
+    client = _client(admin_clerk_subjects="dev:admin-a,dev:admin-b,dev:admin-c")
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id, key="photo.jpg")
+
+    with client.app.state.session_factory() as session:
+        for sub, uname in [("dev:admin-a", "admin_a"), ("dev:admin-b", "admin_b"), ("dev:admin-c", "admin_c")]:
+            u = User(provider_subject=sub)
+            session.add(u)
+            session.flush()
+            session.add(Profile(user_id=u.id, username=uname, home_region="CA"))
+        session.commit()
+
+    admin_a = {"X-Development-Subject": "dev:admin-a"}
+    admin_b = {"X-Development-Subject": "dev:admin-b"}
+    admin_c = {"X-Development-Subject": "dev:admin-c"}
+
+    # 1. Admin A approves
+    res_a = client.post(f"{BASE}/{image_id}/approve", headers=admin_a).json()
+    assert res_a["moderation_status"] == "approved"
+    assert res_a["moderated_by_username"] == "admin_a"
+    assert res_a["moderation_action"] == "approved"
+    assert res_a["moderated_at"] is not None
+    assert res_a["image"]["is_hero"] is False
+
+    # 2. Admin B features
+    res_b = client.post(f"{BASE}/{image_id}/feature", json={"featured": True}, headers=admin_b).json()
+    assert res_b["image"]["is_hero"] is True
+    assert res_b["moderation_status"] == "approved"
+    assert res_b["moderated_by_username"] == "admin_b"
+    assert res_b["moderation_action"] == "featured"
+    assert res_b["moderated_at"] >= res_a["moderated_at"]
+
+    # 3. Admin C unfeatures
+    res_c = client.post(f"{BASE}/{image_id}/feature", json={"featured": False}, headers=admin_c).json()
+    assert res_c["image"]["is_hero"] is False
+    assert res_c["moderation_status"] == "approved"
+    assert res_c["moderated_by_username"] == "admin_c"
+    assert res_c["moderation_action"] == "unfeatured"
+    assert res_c["moderated_at"] >= res_b["moderated_at"]
+
+
+def test_queue_query_count_bounded_independently_of_page_size() -> None:
+    from sqlalchemy import event
+    client = _client()
+    app = client.app
+    engine = app.state.engine
+
+    # Seed 5 courses with 2 photos each from different users
+    with app.state.session_factory() as session:
+        for c_idx in range(5):
+            course = Course(name=f"Course {c_idx}", region="CA", latitude=37.0, longitude=-122.0)
+            session.add(course)
+            session.flush()
+            for p_idx in range(2):
+                uploader = User(provider_subject=f"dev:uploader-{c_idx}-{p_idx}")
+                session.add(uploader)
+                session.flush()
+                session.add(Profile(user_id=uploader.id, username=f"user_{c_idx}_{p_idx}", home_region="CA"))
+                session.add(CourseImage(
+                    course_id=course.id,
+                    storage_key=f"key-{c_idx}-{p_idx}.jpg",
+                    position=p_idx,
+                    source_type=CourseImageSource.USER,
+                    moderation_status=CourseImageModeration.PENDING,
+                    uploaded_by_user_id=uploader.id,
+                ))
+        session.commit()
+
+    queries = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        res = client.get(BASE, params={"limit": 50}, headers=ADMIN)
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["items"]) >= 10
+        # Queries executed should be strictly bounded:
+        # 1: course_images queue query
+        # 2: courses name lookup
+        # 3: batch_has_featured_hero lookup
+        # 4: batch_uploader_usernames profile lookup
+        assert len(queries) <= 4, f"Expected at most 4 queries, got {len(queries)}: {queries}"
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)

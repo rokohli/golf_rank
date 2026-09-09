@@ -328,6 +328,42 @@ def test_0027_preserves_the_partial_storage_key_index_predicate(monkeypatch: pyt
         assert "source_type" in index_sql
 
 
+def test_0028_adds_and_removes_concurrency_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        columns = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert {"scoring_claimed_at", "moderation_action"} <= columns
+        engine.dispose()
+
+        command.downgrade(config, "0027_course_image_moderation")
+
+        engine = make_engine(db_url)
+        columns_after = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert "scoring_claimed_at" not in columns_after
+        assert "moderation_action" not in columns_after
+        assert MODERATION_AUDIT_COLUMNS <= columns_after
+        engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = make_engine(db_url)
+        assert {"scoring_claimed_at", "moderation_action"} <= {
+            col["name"] for col in inspect(engine).get_columns("course_images")
+        }
+        with engine.connect() as conn:
+            index_sql = conn.execute(text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND name = 'uq_course_image_user_storage_key'"
+            )).scalar()
+        engine.dispose()
+        assert index_sql is not None, "the partial index did not survive 0028"
+        assert "WHERE" in index_sql.upper()
+        assert "source_type" in index_sql
+
+
 def test_0018_migration_preserves_clean_usernames_and_sanitizes_dirty_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that migration 0018 handles legacy dirty usernames deterministically."""
     with NamedTemporaryFile(suffix=".db") as tmp:

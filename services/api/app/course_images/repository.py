@@ -5,7 +5,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..models import CourseImage, CourseImageModeration, CourseImageNegativeCache, CourseImageSource
+from ..models import (
+    CourseImage,
+    CourseImageModeration,
+    CourseImageModerationAction,
+    CourseImageNegativeCache,
+    CourseImageSource,
+)
 
 IDEAL_HERO_ASPECT_RATIO = 16 / 9
 
@@ -233,6 +239,19 @@ class CourseImageRepository:
             ).exists())
         ) or False
 
+    def batch_has_featured_hero(self, session: Session, course_ids: Collection[int]) -> set[int]:
+        """Returns the set of course_ids from course_ids that have an explicit
+        human-featured hero in OFFICIAL or USER tiers, executed in a single query."""
+        if not course_ids:
+            return set()
+        return set(session.scalars(
+            select(CourseImage.course_id).where(
+                CourseImage.course_id.in_(course_ids),
+                CourseImage.source_type.in_((CourseImageSource.OFFICIAL, CourseImageSource.USER)),
+                CourseImage.is_hero.is_(True),
+            ).distinct()
+        ).all())
+
     def moderation_queue(
         self, session: Session, *, status: str, course_id: int | None = None,
         cursor: int | None = None, limit: int = 50,
@@ -274,6 +293,7 @@ class CourseImageRepository:
     def set_moderation(
         self, session: Session, image: CourseImage, *, status: str,
         moderated_by_user_id: int | None, reason: str | None = None,
+        action: str | None = None,
     ) -> CourseImage:
         """Records a moderation decision. moderated_by_user_id is None for an
         automatic (scorer) decision -- see CourseImage.moderated_by_user_id.
@@ -286,40 +306,222 @@ class CourseImageRepository:
         image.moderated_by_user_id = moderated_by_user_id
         image.moderated_at = datetime.now(timezone.utc)
         image.moderation_reason = reason
+        if action:
+            image.moderation_action = action
+        elif status == CourseImageModeration.APPROVED:
+            image.moderation_action = (
+                CourseImageModerationAction.APPROVED
+                if moderated_by_user_id is not None
+                else CourseImageModerationAction.AUTO_APPROVED
+            )
+        elif status == CourseImageModeration.REJECTED:
+            image.moderation_action = CourseImageModerationAction.REJECTED
+
         if status == CourseImageModeration.REJECTED:
             image.is_hero = False
         session.commit()
         session.refresh(image)
         return image
 
-    def set_featured(self, session: Session, image: CourseImage, featured: bool) -> CourseImage:
-        """Sets or clears the explicit hero pick within this photo's source tier.
+    def feature_user_image(
+        self, session: Session, image_id: int, *, featured: bool, moderator_user_id: int,
+    ) -> CourseImage | None:
+        """Features or unfeatures a USER photo with deterministic tier locking.
 
-        Enforces "at most one is_hero per (course, source_type)" for the tier it
-        touches. No database constraint backs that invariant and nothing
-        historically maintained it -- add_wikimedia_image sets is_hero
-        unconditionally, so courses can already have several. _rank_key degrades
-        gracefully when it's violated (it falls through to quality_score), which
-        is why this repairs rather than rejects: featuring one row clears every
-        sibling in the same tier, including a pre-existing duplicate.
-
-        Only the target's own tier is touched -- clearing another tier's hero
-        would silently change which photo that tier contributes to
-        CourseImageService._resolve.
+        To prevent PostgreSQL deadlocks between concurrent feature requests, locks all
+        USER-tier rows for this course in strict deterministic order (ORDER BY id ASC FOR UPDATE)
+        before modifying any rows. Commits approval (if needed), hero flag updates, sibling
+        clearing, and audit fields atomically in one single transaction.
         """
+        target = session.scalar(
+            select(CourseImage).where(
+                CourseImage.id == image_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            )
+        )
+        if target is None:
+            return None
+
+        tier_images = list(session.scalars(
+            select(CourseImage).where(
+                CourseImage.course_id == target.course_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            ).order_by(CourseImage.id.asc()).with_for_update()
+        ).all())
+
+        image = next((img for img in tier_images if img.id == image_id), None)
+        if image is None:
+            return None
+
+        now = datetime.now(timezone.utc)
         if featured:
-            for sibling in session.scalars(
-                select(CourseImage).where(
-                    CourseImage.course_id == image.course_id,
-                    CourseImage.source_type == image.source_type,
-                    CourseImage.id != image.id,
-                ).with_for_update()
-            ).all():
-                sibling.is_hero = False
-        image.is_hero = featured
+            for sibling in tier_images:
+                if sibling.id != image.id:
+                    sibling.is_hero = False
+            image.is_hero = True
+            if image.moderation_status != CourseImageModeration.APPROVED:
+                image.moderation_status = CourseImageModeration.APPROVED
+            image.moderated_by_user_id = moderator_user_id
+            image.moderated_at = now
+            image.moderation_action = CourseImageModerationAction.FEATURED
+        else:
+            image.is_hero = False
+            image.moderated_by_user_id = moderator_user_id
+            image.moderated_at = now
+            image.moderation_action = CourseImageModerationAction.UNFEATURED
+
         session.commit()
         session.refresh(image)
         return image
+
+    def set_featured(self, session: Session, image: CourseImage, featured: bool) -> CourseImage:
+        """Sets or clears the explicit hero pick within this photo's source tier.
+        Deterministic locking in ascending id order ensures Postgres concurrency safety.
+        """
+        tier_images = list(session.scalars(
+            select(CourseImage).where(
+                CourseImage.course_id == image.course_id,
+                CourseImage.source_type == image.source_type,
+            ).order_by(CourseImage.id.asc()).with_for_update()
+        ).all())
+        target = next((img for img in tier_images if img.id == image.id), image)
+        if featured:
+            for sibling in tier_images:
+                if sibling.id != target.id:
+                    sibling.is_hero = False
+        target.is_hero = featured
+        session.commit()
+        session.refresh(target)
+        return target
+
+    def claim_for_scoring(
+        self, session: Session, image_id: int, *, max_attempts: int, lease_seconds: int = 300,
+    ) -> CourseImage | None:
+        """Atomically claims a photo for scoring in a short transaction.
+
+        Returns the claimed CourseImage with its scoring_claimed_at timestamp, or None
+        if the photo cannot be claimed (not user-sourced, not pending, already scored,
+        max attempts exceeded, course hero locked, or another claim is currently active).
+        Does NOT hold a database row lock or transaction across outbound network calls.
+        """
+        image = session.scalar(
+            select(CourseImage).where(
+                CourseImage.id == image_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            ).with_for_update()
+        )
+        if image is None:
+            return None
+        if image.moderation_status != CourseImageModeration.PENDING:
+            return None
+        if image.scored_at is not None:
+            return None
+        if (image.scoring_attempts or 0) >= max_attempts:
+            return None
+        if self.has_featured_hero(session, image.course_id):
+            return None
+
+        now = datetime.now(timezone.utc)
+        if image.scoring_claimed_at is not None:
+            claimed_at = (
+                image.scoring_claimed_at
+                if image.scoring_claimed_at.tzinfo
+                else image.scoring_claimed_at.replace(tzinfo=timezone.utc)
+            )
+            if (now - claimed_at).total_seconds() < lease_seconds:
+                return None
+
+        image.scoring_attempts = (image.scoring_attempts or 0) + 1
+        image.scoring_claimed_at = now
+        session.commit()
+        session.refresh(image)
+        return image
+
+    def complete_scoring(
+        self,
+        session: Session,
+        image_id: int,
+        *,
+        claim_timestamp: datetime,
+        score: int,
+        reasons: list[str],
+        auto_approve_score: float,
+    ) -> bool:
+        """Conditionally persists scoring output and auto-approves only if the photo
+        still belongs to this claimed scoring attempt and human moderation has not
+        intervened.
+
+        Human moderation always takes precedence: if an admin approved, rejected, or
+        featured the photo while scoring was in flight, scoring results are not persisted
+        and auto-approval is skipped.
+        """
+        image = session.scalar(
+            select(CourseImage).where(
+                CourseImage.id == image_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            ).with_for_update()
+        )
+        if image is None:
+            return False
+
+        # Verify claim ownership
+        if image.scoring_claimed_at != claim_timestamp:
+            return False
+
+        # Check eligibility and precedence: if human moderated or hero locked
+        if image.moderation_status != CourseImageModeration.PENDING or self.has_featured_hero(session, image.course_id):
+            image.scoring_claimed_at = None
+            session.commit()
+            return False
+
+        now = datetime.now(timezone.utc)
+        image.quality_score = float(score)
+        image.quality_score_reasons = reasons
+        image.scored_at = now
+        image.scoring_claimed_at = None
+
+        if score >= auto_approve_score:
+            image.moderation_status = CourseImageModeration.APPROVED
+            image.moderated_by_user_id = None
+            image.moderated_at = now
+            image.moderation_reason = "auto:gemini"
+            image.moderation_action = CourseImageModerationAction.AUTO_APPROVED
+
+        session.commit()
+        session.refresh(image)
+        return True
+
+    def release_score_claim(
+        self, session: Session, image_id: int, *, claim_timestamp: datetime,
+    ) -> None:
+        """Releases an in-flight scoring claim on transient failure so the sweeper
+        or retry can claim it again later."""
+        image = session.scalar(
+            select(CourseImage).where(
+                CourseImage.id == image_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            ).with_for_update()
+        )
+        if image is not None and image.scoring_claimed_at == claim_timestamp:
+            image.scoring_claimed_at = None
+            session.commit()
+
+    def record_permanent_score_failure(
+        self, session: Session, image_id: int, *, claim_timestamp: datetime,
+    ) -> None:
+        """Records a permanent scoring failure (provider refusal/400), setting scored_at
+        and clearing claim so it won't be retried."""
+        image = session.scalar(
+            select(CourseImage).where(
+                CourseImage.id == image_id,
+                CourseImage.source_type == CourseImageSource.USER,
+            ).with_for_update()
+        )
+        if image is not None and image.scoring_claimed_at == claim_timestamp:
+            image.scored_at = datetime.now(timezone.utc)
+            image.scoring_claimed_at = None
+            image.quality_score = None
+            session.commit()
 
     def record_score(
         self, session: Session, image: CourseImage, *, score: float, reasons: list[str],
@@ -327,6 +529,7 @@ class CourseImageRepository:
         image.quality_score = score
         image.quality_score_reasons = reasons
         image.scored_at = datetime.now(timezone.utc)
+        image.scoring_claimed_at = None
         image.scoring_attempts = (image.scoring_attempts or 0) + 1
         session.commit()
         session.refresh(image)
@@ -335,18 +538,9 @@ class CourseImageRepository:
     def record_score_failure(
         self, session: Session, image: CourseImage, *, permanent: bool = False,
     ) -> CourseImage:
-        """Counts a failed scoring attempt.
-
-        A transient failure (timeout, 5xx, 429, an object that hasn't reached
-        the CDN yet) leaves scored_at NULL so the sweeper picks the row up
-        again, bounded by scoring_attempts.
-
-        A permanent one -- the provider rejecting this specific image, which no
-        amount of retrying will fix -- sets scored_at with quality_score left
-        NULL. That is the "tried and failed, don't try again" state, and it is
-        what stops a corrupt upload consuming an attempt on every sweep.
-        """
+        """Counts a failed scoring attempt."""
         image.scoring_attempts = (image.scoring_attempts or 0) + 1
+        image.scoring_claimed_at = None
         if permanent:
             image.scored_at = datetime.now(timezone.utc)
         session.commit()

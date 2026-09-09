@@ -154,29 +154,35 @@ def score_and_moderate_image(
 ) -> None:
     """Scores one photo and auto-approves it when it clears the threshold.
 
-    Never raises: the background-task caller has no one to report to, and the
-    sweeper must keep going through the rest of its batch.
+    Uses an atomic claim and conditional-write design so outbound HTTP calls
+    never hold open a database transaction or lock, and late scoring results
+    never overwrite human moderation decisions.
     """
-    image = session.get(CourseImage, image_id)
-    if image is None or not should_score(session, settings, image):
-        return
     if not reference_images:
         logger.warning("scoring_skipped_no_reference_images image_id=%s", image_id)
         return
 
-    url = storage_image_url(settings.course_image_base_url, image.storage_key)
+    claimed = _repository.claim_for_scoring(
+        session, image_id, max_attempts=settings.course_photo_scoring_max_attempts,
+    )
+    if claimed is None:
+        logger.info("scoring_skipped_cannot_claim image_id=%s", image_id)
+        return
+
+    claim_timestamp = claimed.scoring_claimed_at
+    url = storage_image_url(settings.course_image_base_url, claimed.storage_key)
     if url is None:
         logger.warning("scoring_skipped_no_url image_id=%s", image_id)
+        _repository.release_score_claim(session, image_id, claim_timestamp=claim_timestamp)
         return
 
     try:
         data, content_type = fetch_image(client, url)
     except httpx.HTTPError:
-        # Most likely the object was promoted to its permanent key moments ago
-        # and hasn't propagated to the public CDN yet. Count the attempt but
-        # leave scored_at NULL so the sweeper retries later.
+        # Most likely CDN propagation lag on a recently-promoted object.
+        # Release the claim so the sweeper can retry later.
         logger.warning("scoring_image_fetch_failed image_id=%s", image_id, exc_info=True)
-        _repository.record_score_failure(session, image)
+        _repository.release_score_claim(session, image_id, claim_timestamp=claim_timestamp)
         return
 
     try:
@@ -194,23 +200,30 @@ def score_and_moderate_image(
         logger.warning(
             "scoring_failed image_id=%s permanent=%s", image_id, permanent, exc_info=True
         )
-        _repository.record_score_failure(session, image, permanent=permanent)
+        if permanent:
+            _repository.record_permanent_score_failure(session, image_id, claim_timestamp=claim_timestamp)
+        else:
+            _repository.release_score_claim(session, image_id, claim_timestamp=claim_timestamp)
         return
 
-    _repository.record_score(session, image, score=float(score.score), reasons=score.reasons)
-    if score.score >= settings.course_photo_auto_approve_score:
-        # moderated_by_user_id stays None to mark this as a machine decision;
-        # is_hero is deliberately untouched (see module docstring).
-        _repository.set_moderation(
-            session, image,
-            status=CourseImageModeration.APPROVED,
-            moderated_by_user_id=None,
-            reason="auto:gemini",
-        )
-    logger.info(
-        "course_photo_scored image_id=%s score=%s approved=%s",
-        image_id, score.score, score.score >= settings.course_photo_auto_approve_score,
+    persisted = _repository.complete_scoring(
+        session,
+        image_id,
+        claim_timestamp=claim_timestamp,
+        score=score.score,
+        reasons=score.reasons,
+        auto_approve_score=settings.course_photo_auto_approve_score,
     )
+    if persisted:
+        logger.info(
+            "course_photo_scored image_id=%s score=%s approved=%s",
+            image_id, score.score, score.score >= settings.course_photo_auto_approve_score,
+        )
+    else:
+        logger.info(
+            "course_photo_score_discarded image_id=%s reason=superseded_or_ineligible",
+            image_id,
+        )
 
 
 def run_scoring_task(app, image_id: int) -> None:

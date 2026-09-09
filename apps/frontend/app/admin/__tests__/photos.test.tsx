@@ -190,4 +190,149 @@ describe('Photo moderation', () => {
 
     expect(await screen.findByText('Cypress Point')).toBeOnTheScreen()
   })
+
+  it('prevents overlapping page loads when scrolled rapidly', async () => {
+    let resolveSecondPage!: (val: unknown) => void
+    const secondPagePromise = new Promise((resolve) => {
+      resolveSecondPage = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({ items: [photo()], next_cursor: 1 })
+      .mockImplementationOnce(() => secondPagePromise)
+
+    render(<AdminPhotos />)
+    await screen.findByText('Pasatiempo')
+
+    const flatList = screen.UNSAFE_getByType(require('react-native').FlatList)
+    fireEvent(flatList, 'endReached')
+    fireEvent(flatList, 'endReached')
+    fireEvent(flatList, 'endReached')
+
+    // Only one loadMore call should be initiated while in-flight
+    await waitFor(() => expect(mockGetAdminCoursePhotos).toHaveBeenCalledTimes(2))
+
+    resolveSecondPage({
+      items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Cypress Point' })],
+      next_cursor: null,
+    })
+
+    expect(await screen.findByText('Cypress Point')).toBeOnTheScreen()
+  })
+
+  it('discards stale in-flight results when switching status tabs', async () => {
+    let resolveInitialPending!: (val: unknown) => void
+    const pendingPromise = new Promise((resolve) => {
+      resolveInitialPending = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      .mockImplementationOnce(() => pendingPromise)
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 99 }, course_name: 'Approved Course', moderation_status: 'approved' })],
+        next_cursor: null,
+      })
+
+    render(<AdminPhotos />)
+
+    fireEvent.press(screen.getByText('Approved'))
+
+    expect(await screen.findByText('Approved Course')).toBeOnTheScreen()
+
+    resolveInitialPending({
+      items: [photo({ image: { ...photo().image, id: 1 }, course_name: 'Stale Pending Course', moderation_status: 'pending' })],
+      next_cursor: null,
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Stale Pending Course')).not.toBeOnTheScreen()
+    })
+  })
+
+  it('deduplicates appended photos by id to prevent duplicates', async () => {
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({ items: [photo({ image: { ...photo().image, id: 1 } })], next_cursor: 1 })
+      .mockResolvedValueOnce({
+        items: [
+          photo({ image: { ...photo().image, id: 1 } }),
+          photo({ image: { ...photo().image, id: 2 }, course_name: 'New Course' }),
+        ],
+        next_cursor: null,
+      })
+
+    render(<AdminPhotos />)
+    await screen.findByText('Pasatiempo')
+    fireEvent(screen.UNSAFE_getByType(require('react-native').FlatList), 'endReached')
+
+    expect(await screen.findByText('New Course')).toBeOnTheScreen()
+    expect(screen.getAllByText('Pasatiempo')).toHaveLength(1)
+  })
+
+  it('preserves existing photos on append failure and retries on press', async () => {
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({ items: [photo()], next_cursor: 1 })
+      .mockRejectedValueOnce(new Error('Network disconnected'))
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Retried Course' })],
+        next_cursor: null,
+      })
+
+    render(<AdminPhotos />)
+    await screen.findByText('Pasatiempo')
+    fireEvent(screen.UNSAFE_getByType(require('react-native').FlatList), 'endReached')
+
+    expect(await screen.findByText('Network disconnected')).toBeOnTheScreen()
+    expect(screen.getByText('Pasatiempo')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByText('Retry'))
+
+    expect(await screen.findByText('Retried Course')).toBeOnTheScreen()
+    expect(screen.queryByText('Network disconnected')).not.toBeOnTheScreen()
+  })
+
+  it('displays correct audit copy for each moderation action', async () => {
+    mockGetAdminCoursePhotos.mockResolvedValueOnce({
+      items: [
+        photo({
+          image: { ...photo().image, id: 10 },
+          course_name: 'Course Featured',
+          moderated_by_username: 'alice',
+          moderation_action: 'featured',
+        }),
+        photo({
+          image: { ...photo().image, id: 11 },
+          course_name: 'Course Unfeatured',
+          moderated_by_username: 'bob',
+          moderation_action: 'unfeatured',
+        }),
+        photo({
+          image: { ...photo().image, id: 12 },
+          course_name: 'Course Approved',
+          moderated_by_username: 'carol',
+          moderation_action: 'approved',
+        }),
+        photo({
+          image: { ...photo().image, id: 13 },
+          course_name: 'Course Rejected',
+          moderated_by_username: 'dan',
+          moderation_action: 'rejected',
+          moderation_reason: 'Blurry background',
+        }),
+        photo({
+          image: { ...photo().image, id: 14 },
+          course_name: 'Course Auto',
+          moderation_action: 'auto_approved',
+        }),
+      ],
+      next_cursor: null,
+    })
+
+    render(<AdminPhotos />)
+
+    expect(await screen.findByText('Featured by @alice')).toBeOnTheScreen()
+    expect(screen.getByText('Unfeatured by @bob')).toBeOnTheScreen()
+    expect(screen.getByText('Approved by @carol')).toBeOnTheScreen()
+    expect(screen.getByText('Rejected by @dan · Blurry background')).toBeOnTheScreen()
+    expect(screen.getByText('Approved automatically')).toBeOnTheScreen()
+  })
 })

@@ -44,9 +44,19 @@ _repository = CourseImageRepository()
 MAX_PHOTOS_PER_ROUND = 5
 
 
-def image_out(session: Session, settings, image: CourseImage) -> CourseImageOut:
+_UNSET = object()
+
+
+def image_out(
+    session: Session, settings, image: CourseImage, *, uploaded_by_username: str | None | object = _UNSET,
+) -> CourseImageOut:
     """The public per-photo shape. Shared with course_photo_moderation, which
     nests it inside its admin payload rather than duplicating these fields."""
+    resolved_username = (
+        uploaded_by_username
+        if uploaded_by_username is not _UNSET
+        else uploader_username(session, image.uploaded_by_user_id)
+    )
     return CourseImageOut(
         id=image.id,
         url=storage_image_url(settings.course_image_base_url, image.storage_key),
@@ -62,7 +72,7 @@ def image_out(session: Session, settings, image: CourseImage) -> CourseImageOut:
         width=image.width,
         height=image.height,
         created_at=image.created_at.isoformat() if image.created_at else None,
-        uploaded_by_username=uploader_username(session, image.uploaded_by_user_id),
+        uploaded_by_username=resolved_username,
         round_id=image.round_id,
     )
 

@@ -100,16 +100,34 @@ def score_course_photo(
     )
     response.raise_for_status()
     output_text = _gemini_output_text(response.json())
-    parsed = json.loads(output_text)
     try:
-        score = int(parsed["score"])
-    except (TypeError, ValueError) as exc:
-        # The requested JSON schema constrains "score" to an integer, but
-        # Gemini isn't guaranteed to honor it -- treat a malformed score the
-        # same as any other scoring failure (logged and skipped by the
-        # caller) instead of crashing the whole batch run.
-        raise PhotoScoringError(f"invalid_score: {parsed.get('score')!r}") from exc
-    return PhotoScore(score=score, reasons=[str(r) for r in parsed.get("reasons", [])])
+        parsed = json.loads(output_text)
+    except Exception as exc:
+        raise PhotoScoringError("invalid_json_output") from exc
+
+    if not isinstance(parsed, dict):
+        raise PhotoScoringError(f"invalid_output_shape: {type(parsed).__name__}")
+
+    raw_score = parsed.get("score")
+    if not isinstance(raw_score, int) or isinstance(raw_score, bool):
+        raise PhotoScoringError(f"invalid_score: {raw_score!r}")
+    if not (0 <= raw_score <= 10):
+        raise PhotoScoringError(f"score_out_of_range: {raw_score}")
+
+    raw_reasons = parsed.get("reasons")
+    if not isinstance(raw_reasons, list) or not (1 <= len(raw_reasons) <= 3):
+        raise PhotoScoringError(f"invalid_reasons: {raw_reasons!r}")
+
+    validated_reasons: list[str] = []
+    for r in raw_reasons:
+        if not isinstance(r, str):
+            raise PhotoScoringError(f"invalid_reason_item: {r!r}")
+        cleaned = r.strip()
+        if not cleaned or len(cleaned) > 200:
+            raise PhotoScoringError(f"invalid_reason_length: {r!r}")
+        validated_reasons.append(cleaned)
+
+    return PhotoScore(score=raw_score, reasons=validated_reasons)
 
 
 def _gemini_output_text(body: dict) -> str:

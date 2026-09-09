@@ -386,3 +386,90 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
         assert images[0].is_hero is False
         assert images[1].is_hero is True
 
+
+def test_score_course_photo_accepts_boundary_scores() -> None:
+    for valid_score in (0, 10):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _gemini_response(valid_score, ["valid reason"])
+
+        result = score_course_photo(
+            _client(handler),
+            api_key="test-key",
+            model="gemini-2.5-flash-lite",
+            image_data=b"img",
+            image_content_type="image/jpeg",
+            reference_images=[],
+        )
+        assert result.score == valid_score
+        assert result.reasons == ["valid reason"]
+
+
+def test_score_course_photo_rejects_invalid_scores() -> None:
+    import json
+    import pytest
+
+    invalid_scores = [
+        -1,
+        11,
+        99,
+        100,
+        8.5,
+        "8",
+        "10",
+        True,
+        False,
+        None,
+    ]
+
+    for invalid in invalid_scores:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": json.dumps({"score": invalid, "reasons": ["ok"]})}]},
+                }],
+            })
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )
+
+
+def test_score_course_photo_rejects_invalid_reasons() -> None:
+    import json
+    import pytest
+
+    invalid_reasons = [
+        [],  # 0 items
+        ["one", "two", "three", "four"],  # > 3 items
+        "not-a-list",
+        [123],
+        [""],  # empty string
+        ["   "],  # whitespace only
+        ["a" * 201],  # exceeds length
+    ]
+
+    for reasons in invalid_reasons:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": json.dumps({"score": 8, "reasons": reasons})}]},
+                }],
+            })
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )

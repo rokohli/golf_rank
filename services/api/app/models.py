@@ -119,6 +119,16 @@ class CourseImageModeration:
     ALL = (PENDING, APPROVED, REJECTED)
 
 
+class CourseImageModerationAction:
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    FEATURED = "featured"
+    UNFEATURED = "unfeatured"
+    AUTO_APPROVED = "auto_approved"
+
+    ALL = (APPROVED, REJECTED, FEATURED, UNFEATURED, AUTO_APPROVED)
+
+
 class CourseImage(Base):
     __tablename__ = "course_images"
     __table_args__ = (
@@ -196,6 +206,9 @@ class CourseImage(Base):
     # Bounds retries on a permanently-failing image (an object that 404s, a
     # provider that always refuses). Without it the sweeper is a cost leak.
     scoring_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Set when a background or sweeper worker claims this row for scoring,
+    # preventing concurrent scoring and acting as a lease timeout key.
+    scoring_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Who last approved/rejected/featured this photo. SET NULL, deliberately not
     # the CASCADE that uploaded_by_user_id above uses: a user's own upload is
     # their content and goes with their account, but deleting a *moderator's*
@@ -206,6 +219,8 @@ class CourseImage(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     moderated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The explicit last moderation action (approved, rejected, featured, unfeatured, auto_approved).
+    moderation_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
     moderation_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)

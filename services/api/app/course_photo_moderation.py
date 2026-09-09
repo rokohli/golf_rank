@@ -24,8 +24,8 @@ from .core.auth import CurrentUser
 from .course_images.repository import CourseImageRepository
 from .course_photo_uploads import image_out
 from .db import get_session
-from .domain import delete_permanent_objects, require_user, uploader_username
-from .models import Course, CourseImage, CourseImageModeration
+from .domain import batch_uploader_usernames, delete_permanent_objects, require_user, uploader_username
+from .models import Course, CourseImage, CourseImageModeration, CourseImageModerationAction
 from .schemas import (
     AdminCoursePhotoOut,
     AdminCoursePhotoPage,
@@ -49,14 +49,17 @@ _STATUSES = {
 def _admin_photo_out(
     session: Session, settings, image: CourseImage, *,
     course_name: str, hero_locked: bool,
+    uploader_username_val: str | None = None,
+    moderator_username_val: str | None = None,
 ) -> AdminCoursePhotoOut:
     return AdminCoursePhotoOut(
-        image=image_out(session, settings, image),
+        image=image_out(session, settings, image, uploaded_by_username=uploader_username_val),
         course_id=image.course_id,
         course_name=course_name,
         moderation_status=image.moderation_status,
         moderated_at=image.moderated_at.isoformat() if image.moderated_at else None,
-        moderated_by_username=uploader_username(session, image.moderated_by_user_id),
+        moderated_by_username=moderator_username_val,
+        moderation_action=image.moderation_action,
         moderation_reason=image.moderation_reason,
         quality_score_reasons=image.quality_score_reasons,
         scored_at=image.scored_at.isoformat() if image.scored_at else None,
@@ -84,6 +87,8 @@ def _single(session: Session, settings, image: CourseImage) -> AdminCoursePhotoO
         session, settings, image,
         course_name=course.name if course else "",
         hero_locked=_repository.has_featured_hero(session, image.course_id),
+        uploader_username_val=uploader_username(session, image.uploaded_by_user_id),
+        moderator_username_val=uploader_username(session, image.moderated_by_user_id),
     )
 
 
@@ -110,23 +115,27 @@ def list_course_photos(
     rows = rows[:limit]
 
     # Batch the per-page lookups rather than resolving them per row -- a queue
-    # page spans many courses and uploaders, and a per-row course/profile fetch
-    # is the N+1 that commit ec0718dad removed from the feed.
+    # page spans many courses and uploaders. Batching bounds query count independently
+    # of page size.
     course_ids = {image.course_id for image in rows}
     names = dict(session.execute(
         select(Course.id, Course.name).where(Course.id.in_(course_ids))
     ).all()) if course_ids else {}
-    locked = {
-        course_id_: _repository.has_featured_hero(session, course_id_)
-        for course_id_ in course_ids
+    locked = _repository.batch_has_featured_hero(session, course_ids)
+
+    user_ids = {img.uploaded_by_user_id for img in rows if img.uploaded_by_user_id is not None} | {
+        img.moderated_by_user_id for img in rows if img.moderated_by_user_id is not None
     }
+    usernames = batch_uploader_usernames(session, user_ids)
 
     return AdminCoursePhotoPage(
         items=[
             _admin_photo_out(
                 session, settings, image,
                 course_name=names.get(image.course_id, ""),
-                hero_locked=locked.get(image.course_id, False),
+                hero_locked=image.course_id in locked,
+                uploader_username_val=usernames.get(image.uploaded_by_user_id),
+                moderator_username_val=usernames.get(image.moderated_by_user_id),
             )
             for image in rows
         ],
@@ -154,6 +163,7 @@ def approve_course_photo(
         session, image,
         status=CourseImageModeration.APPROVED,
         moderated_by_user_id=user.id,
+        action=CourseImageModerationAction.APPROVED,
     )
     return _single(session, request.app.state.settings, image)
 
@@ -179,6 +189,7 @@ def reject_course_photo(
         status=CourseImageModeration.REJECTED,
         moderated_by_user_id=user.id,
         reason=payload.reason,
+        action=CourseImageModerationAction.REJECTED,
     )
     return _single(session, request.app.state.settings, image)
 
@@ -193,19 +204,15 @@ def feature_course_photo(
 ) -> AdminCoursePhotoOut:
     """Pins (or unpins) this photo as the course's USER-tier hero.
 
-    Featuring implies approving. Without that, featuring a PENDING row would be
-    a silent no-op -- approved_images filters it out, so the flag would be set
-    and nothing would change on the course page.
+    Featuring implies approving. Locks all tier rows deterministically
+    before updating and commits atomically in one transaction to avoid deadlocks.
     """
     user = require_user(session, admin, create=True)
-    image = _require_user_photo(session, image_id)
-    if payload.featured and image.moderation_status != CourseImageModeration.APPROVED:
-        _repository.set_moderation(
-            session, image,
-            status=CourseImageModeration.APPROVED,
-            moderated_by_user_id=user.id,
-        )
-    _repository.set_featured(session, image, payload.featured)
+    image = _repository.feature_user_image(
+        session, image_id, featured=payload.featured, moderator_user_id=user.id,
+    )
+    if image is None:
+        raise HTTPException(404, "Not found")
     return _single(session, request.app.state.settings, image)
 
 

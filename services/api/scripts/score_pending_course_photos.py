@@ -25,7 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
-from sqlalchemy import select
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import or_, select
 
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
@@ -54,10 +55,16 @@ def photos_to_score(
     worth getting wrong quietly -- can be tested without a provider.
     """
     repository = CourseImageRepository()
+    now = datetime.now(timezone.utc)
+    lease_cutoff = now - timedelta(seconds=300)
     query = select(CourseImage).where(
         CourseImage.source_type == CourseImageSource.USER,
         CourseImage.moderation_status == CourseImageModeration.PENDING,
         CourseImage.scoring_attempts < settings.course_photo_scoring_max_attempts,
+        or_(
+            CourseImage.scoring_claimed_at.is_(None),
+            CourseImage.scoring_claimed_at < lease_cutoff,
+        ),
     )
     if not rescore:
         # scored_at, not quality_score: a failed attempt leaves the score NULL.

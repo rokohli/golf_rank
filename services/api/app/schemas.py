@@ -148,6 +148,7 @@ class AdminCoursePhotoOut(BaseModel):
     moderation_status: str
     moderated_at: str | None = None
     moderated_by_username: str | None = None
+    moderation_action: str | None = None
     moderation_reason: str | None = None
     quality_score_reasons: list[str] | None = None
     scored_at: str | None = None

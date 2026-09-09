@@ -19,6 +19,7 @@ from app.models import (
     CourseImage,
     CourseImageModeration,
     CourseImageSource,
+    User,
 )
 
 CDN = "https://cdn.example"
@@ -336,3 +337,119 @@ def test_permanent_failure_classification() -> None:
     assert is_permanent_scoring_failure(status_error(429)) is False
     assert is_permanent_scoring_failure(status_error(500)) is False
     assert is_permanent_scoring_failure(httpx.ConnectError("down")) is False
+
+
+def test_human_rejection_during_scoring_takes_precedence(session: Session) -> None:
+    session.add(User(id=42, provider_subject="dev:admin-42"))
+    session.commit()
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+    settings = _settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, content=IMAGE_BYTES, headers={"content-type": "image/jpeg"})
+        # During scoring HTTP call, admin rejects the photo:
+        CourseImageRepository().set_moderation(
+            session, image,
+            status=CourseImageModeration.REJECTED,
+            moderated_by_user_id=42,
+            reason="admin rejected for people in frame",
+        )
+        # Gemini returns 10, which would normally auto-approve:
+        return httpx.Response(200, json=_gemini_body(10, ["wide fairway"]))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    references = load_reference_images(session, settings, client, use_cache=False)
+    score_and_moderate_image(session, settings, image.id, client=client, reference_images=references)
+
+    session.refresh(image)
+    # Human rejection must NOT be overwritten by Gemini auto-approve
+    assert image.moderation_status == CourseImageModeration.REJECTED
+    assert image.moderated_by_user_id == 42
+    assert image.moderation_reason == "admin rejected for people in frame"
+    assert image.quality_score is None
+    assert image.is_hero is False
+
+
+def test_human_approval_or_feature_during_scoring_takes_precedence(session: Session) -> None:
+    session.add(User(id=99, provider_subject="dev:admin-99"))
+    session.commit()
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+    settings = _settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, content=IMAGE_BYTES, headers={"content-type": "image/jpeg"})
+        # During scoring HTTP call, admin features the photo:
+        CourseImageRepository().feature_user_image(
+            session, image.id, featured=True, moderator_user_id=99,
+        )
+        # Gemini returns 3:
+        return httpx.Response(200, json=_gemini_body(3, ["blurry"]))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    references = load_reference_images(session, settings, client, use_cache=False)
+    score_and_moderate_image(session, settings, image.id, client=client, reference_images=references)
+
+    session.refresh(image)
+    # Human feature must NOT be overwritten or disrupted by Gemini late return
+    assert image.moderation_status == CourseImageModeration.APPROVED
+    assert image.is_hero is True
+    assert image.moderated_by_user_id == 99
+    assert image.moderation_action == "featured"
+    assert image.quality_score is None
+
+
+def test_concurrent_scoring_attempts_serialize_or_skip(session: Session) -> None:
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+    settings = _settings()
+
+    # Worker 1 claims the photo
+    claimed = CourseImageRepository().claim_for_scoring(session, image.id, max_attempts=3)
+    assert claimed is not None
+
+    # Worker 2 attempts to score while Worker 1 has an active claim
+    client, seen = _client(score=9)
+    references = load_reference_images(session, settings, client, use_cache=False)
+    seen.clear()
+
+    score_and_moderate_image(session, settings, image.id, client=client, reference_images=references)
+
+    # Worker 2 should not have made any requests
+    assert seen == []
+    session.refresh(image)
+    assert image.scoring_attempts == 1
+
+
+def test_retry_behavior_after_transient_failure(session: Session) -> None:
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+    settings = _settings()
+
+    # First attempt fails with 503
+    client_fail, _ = _client(gemini_status=503)
+    references = load_reference_images(session, settings, client_fail, use_cache=False)
+    score_and_moderate_image(session, settings, image.id, client=client_fail, reference_images=references)
+
+    session.refresh(image)
+    assert image.scoring_attempts == 1
+    assert image.scored_at is None
+    assert image.scoring_claimed_at is None
+    assert image.moderation_status == CourseImageModeration.PENDING
+
+    # Second attempt succeeds with 9
+    client_success, _ = _client(score=9)
+    score_and_moderate_image(session, settings, image.id, client=client_success, reference_images=references)
+
+    session.refresh(image)
+    assert image.scoring_attempts == 2
+    assert image.scored_at is not None
+    assert image.quality_score == 9.0
+    assert image.moderation_status == CourseImageModeration.APPROVED
