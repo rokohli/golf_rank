@@ -80,17 +80,8 @@ class ContactLinkStatusOut(BaseModel):
     contact_count: int
 
 
-class CourseHeroImageOut(BaseModel):
-    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
-    url: str | None = None
-    thumbnail_url: str | None = None
-    attribution: str | None = None
-    license: str | None = None
-    license_url: str | None = None
-    source_url: str | None = None
-    alt_text: str
-    width: int | None = None
-    height: int | None = None
+class AdminAccessOut(BaseModel):
+    is_admin: bool
 
 
 class CourseImageOut(BaseModel):
@@ -140,6 +131,19 @@ class CoursePhotoConfirmRequest(BaseModel):
 class CoursePhotoDiscardRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     storage_key: str = Field(min_length=1, max_length=1024)
+
+
+class CourseHeroImageOut(BaseModel):
+    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
+    url: str | None = None
+    thumbnail_url: str | None = None
+    attribution: str | None = None
+    license: str | None = None
+    license_url: str | None = None
+    source_url: str | None = None
+    alt_text: str
+    width: int | None = None
+    height: int | None = None
 
 
 class CourseOut(BaseModel):

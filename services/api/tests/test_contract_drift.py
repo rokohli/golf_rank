@@ -48,3 +48,11 @@ def test_openapi_contract_schema_includes_all_critical_models_and_routes() -> No
     friend_properties = friend_ranking_schema.get("properties", {})
     assert "user" in friend_properties
     assert "entries" in friend_properties
+
+    # The admin capability probe. Every *other* admin route deliberately 404s
+    # for non-admins, so this is the only one the client can rely on to decide
+    # whether to render a moderation entry point.
+    assert "/api/v1/me/admin" in paths
+    assert "get" in paths["/api/v1/me/admin"]
+    assert "is_admin" in schemas.get("AdminAccessOut", {}).get("properties", {})
+

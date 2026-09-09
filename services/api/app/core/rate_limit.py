@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from .admin import require_admin
 from .auth import CurrentUser, current_user
 from .config import Settings
 from .rate_limit_alerts import RateLimitAlertObserver
@@ -391,6 +392,36 @@ async def ai_planner_rate_limit(
         fail_closed=True,
     )
     apply_rate_limit(response, quota)
+
+
+async def admin_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(require_admin),
+) -> None:
+    """Governs the admin moderation surface.
+
+    Deliberately its own bucket rather than authenticated_rate_limit's write
+    policy: working a moderation queue is one write per photo in quick
+    succession, and authenticated-write (capacity 20, refill 1/3 per second)
+    would deny a moderator partway through a routine session.
+
+    Depends on require_admin, not current_user, so a non-admin gets its 404
+    before any Redis work happens -- the limiter never spends a bucket, and
+    never creates a key, for a caller who can't reach the endpoint anyway.
+    """
+    settings = request.app.state.settings
+    policy = RateLimitPolicy(
+        "admin",
+        settings.admin_rate_limit_capacity,
+        settings.admin_rate_limit_refill_per_second,
+    )
+    decision = await request.app.state.rate_limiter.token_bucket(
+        policy=policy,
+        identity_type="user",
+        identity=user.provider_subject,
+    )
+    apply_rate_limit(response, decision)
 
 
 def client_ip(request: Request, settings: Settings) -> str:

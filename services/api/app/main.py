@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .core.admin import is_admin
 from .core.auth import CurrentUser, current_user, delete_clerk_user
 from .core.config import Settings
 from .core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
@@ -74,7 +75,13 @@ from .planner_narrative import build_planner_narrative_provider
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
-from .schemas import CourseOut, OnboardingPreferencesIn, ProfileOut, normalize_username
+from .schemas import (
+    AdminAccessOut,
+    CourseOut,
+    OnboardingPreferencesIn,
+    ProfileOut,
+    normalize_username,
+)
 from .seed import seed_test_courses
 from .social import notify_linked_contacts, router as social_router
 from .storage import build_object_storage
@@ -98,6 +105,13 @@ def _assign_unique_username(session: Session, profile: Profile, user_id: int, us
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.validate_security()
+    if not settings.admin_subject_set and settings.app_env != "development":
+        # require_admin fails closed, so this is a locked-down state rather than
+        # an open one -- but it's indistinguishable from a working deploy until
+        # someone tries to moderate and gets a 404, so say it out loud at boot.
+        # Development-only exemption: the module-level create_app() below and
+        # every test app would otherwise emit this on import.
+        logger.warning("admin_allowlist_empty: no ADMIN_CLERK_SUBJECTS configured")
     rate_limiter = RateLimiter(settings)
 
     @asynccontextmanager
@@ -280,6 +294,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             access=preferences.access,
             onboarding_data=preferences.onboarding_data,
         )
+
+    @app.get("/api/v1/me/admin", response_model=AdminAccessOut)
+    def admin_access(
+        _rate_limit: None = Depends(authenticated_rate_limit),
+        user: CurrentUser = Depends(current_user),
+    ) -> AdminAccessOut:
+        """Whether the caller may reach the admin surface.
+
+        The only admin-related route that answers a non-admin instead of
+        404ing: every actual admin endpoint is indistinguishable from a
+        missing route (see core/admin.py's require_admin), which leaves the
+        client no way to decide whether to show a moderation entry point.
+        This probe closes that gap and leaks nothing beyond the existence of
+        an admin concept.
+        """
+        return AdminAccessOut(is_admin=is_admin(settings, user))
 
     @app.get("/api/v1/me/data-export")
     def data_export(

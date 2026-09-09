@@ -251,6 +251,12 @@ Returns `200` with the complete rating-state shape documented for GET, including
 
 Returns the authenticated user's current ordered ranking. Each entry includes its course, tier, personal rating and confidence fields, plus backend-derived `round_count` and nullable `best_score`. Round metadata is recomputed from current stored rounds when the ranking is read, so it remains accurate even for older ranking snapshots.
 
+## `GET /api/v1/me/admin`
+
+Returns `{"is_admin": true|false}` for the authenticated caller. Admin identity is an environment allowlist of full provider subjects (`ADMIN_CLERK_SUBJECTS`), not a database column, and an empty allowlist means nobody is an admin.
+
+This probe exists because every other admin route answers `404` for a non-admin rather than `403`, so that the admin surface cannot be enumerated with a valid token. That leaves a client no way to tell whether to render a moderation entry point — this endpoint is the exception, always returning `200`, and reveals nothing beyond whether the caller themselves is an admin. Unauthenticated callers still get `401`.
+
 ## Error response bodies
 
 Authentication and route business errors raised by the API use a string `detail`, for example:

@@ -28,6 +28,10 @@ services:
         sync: false
       - key: CLERK_SECRET_KEY
         sync: false
+      # Comma-separated clerk:<user_id> subjects allowed to moderate course
+      # photos. Empty means nobody -- require_admin fails closed.
+      - key: ADMIN_CLERK_SUBJECTS
+        sync: false
       - key: REDIS_URL
         fromService:
           name: fairway-rate-limits
