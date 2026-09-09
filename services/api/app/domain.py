@@ -243,6 +243,20 @@ def uploader_username(session: Session | None, uploaded_by_user_id: int | None) 
     return profile.username if profile else None
 
 
+def _batch_uploader_usernames(session: Session | None, user_ids: set[int]) -> dict[int, str | None]:
+    """One query for every distinct uploader instead of one per image -- a
+    course/round photo list can have many images from many different
+    uploaders, and uploader_username()'s per-call session.get() would
+    otherwise add an N+1 series of profile lookups on top of the
+    course/image load itself."""
+    if session is None or not user_ids:
+        return {}
+    rows = session.execute(
+        select(Profile.user_id, Profile.username).where(Profile.user_id.in_(user_ids))
+    ).all()
+    return {user_id: username for user_id, username in rows}
+
+
 def course_image_data(course: Course) -> list[dict]:
     """All of a course's photos, regardless of moderation_status -- moderation
     only gates hero-image eligibility (see CourseImageRepository.approved_images,
@@ -252,6 +266,10 @@ def course_image_data(course: Course) -> list[dict]:
     never as a gallery photo."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
+    usernames = _batch_uploader_usernames(
+        session,
+        {image.uploaded_by_user_id for image in course.images if image.uploaded_by_user_id is not None},
+    )
     output = []
     for image in course.images:
         if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
@@ -274,7 +292,7 @@ def course_image_data(course: Course) -> list[dict]:
             "width": image.width,
             "height": image.height,
             "created_at": image.created_at.isoformat() if image.created_at else None,
-            "uploaded_by_username": uploader_username(session, image.uploaded_by_user_id),
+            "uploaded_by_username": usernames.get(image.uploaded_by_user_id) if image.uploaded_by_user_id is not None else None,
         })
     return output
 
@@ -293,6 +311,9 @@ def round_image_data(session: Session, round_id: int) -> list[dict]:
     images = session.scalars(
         select(CourseImage).where(CourseImage.round_id == round_id).order_by(CourseImage.position)
     ).all()
+    usernames = _batch_uploader_usernames(
+        session, {image.uploaded_by_user_id for image in images if image.uploaded_by_user_id is not None}
+    )
     output = []
     for image in images:
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
@@ -313,7 +334,7 @@ def round_image_data(session: Session, round_id: int) -> list[dict]:
             "width": image.width,
             "height": image.height,
             "created_at": image.created_at.isoformat() if image.created_at else None,
-            "uploaded_by_username": uploader_username(session, image.uploaded_by_user_id),
+            "uploaded_by_username": usernames.get(image.uploaded_by_user_id) if image.uploaded_by_user_id is not None else None,
             "round_id": image.round_id,
         })
     return output

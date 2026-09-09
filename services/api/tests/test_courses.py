@@ -1,8 +1,9 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Course, CourseImage, CourseImageModeration, CourseImageSource, CourseReconciliation
+from app.models import Course, CourseImage, CourseImageModeration, CourseImageSource, CourseReconciliation, Profile, User
 
 
 def test_course_search_filters_by_region_fee_and_access() -> None:
@@ -213,6 +214,51 @@ def test_course_gallery_includes_images_regardless_of_moderation_status() -> Non
         "https://images.example/pending.jpg",
         "https://images.example/rejected.jpg",
     }
+
+
+def test_course_gallery_resolves_many_uploader_usernames_in_one_query() -> None:
+    """Regression test: uploader_username() previously ran one session.get()
+    per image, adding an N+1 series of profile lookups to a course page with
+    photos from many distinct uploaders. course_image_data() must resolve
+    every distinct uploader's username with a single batched query."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    with app.state.session_factory() as session:
+        pebble = session.query(Course).filter(Course.name == "Pebble Beach Golf Links").one()
+        uploader_ids = []
+        for index in range(5):
+            user = User(provider_subject=f"dev:gallery-uploader-{index}")
+            session.add(user)
+            session.flush()
+            session.add(Profile(user_id=user.id, home_region="Monterey, CA", username=f"golfer{index}"))
+            uploader_ids.append(user.id)
+        session.add_all([
+            CourseImage(
+                course_id=pebble.id, storage_key=f"course-photos/{pebble.id}/{index}.jpg",
+                position=index, source_type=CourseImageSource.USER,
+                moderation_status=CourseImageModeration.APPROVED, uploaded_by_user_id=user_id,
+            )
+            for index, user_id in enumerate(uploader_ids)
+        ])
+        session.commit()
+    client = TestClient(app)
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(app.state.engine, "before_cursor_execute", capture_select)
+    try:
+        response = client.get(f"/api/v1/courses/{pebble.id}")
+    finally:
+        event.remove(app.state.engine, "before_cursor_execute", capture_select)
+
+    assert response.status_code == 200
+    usernames = {image["uploaded_by_username"] for image in response.json()["images"]}
+    assert usernames == {"golfer0", "golfer1", "golfer2", "golfer3", "golfer4"}
+    profile_lookup_statements = [s for s in statements if "profiles" in s.lower()]
+    assert len(profile_lookup_statements) == 1
 
 
 def test_course_gallery_excludes_wikimedia_images() -> None:
