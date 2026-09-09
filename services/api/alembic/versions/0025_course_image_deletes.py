@@ -51,6 +51,11 @@ def upgrade() -> None:
         ["storage_key"],
         unique=True,
         postgresql_where=sa.text("source_type = 'user'"),
+        # Without this, SQLite ignores postgresql_where and the index becomes
+        # a global unique constraint on storage_key -- breaking migration
+        # 0024's Fleming/Harding OFFICIAL rows, which deliberately share one
+        # storage_key.
+        sqlite_where=sa.text("source_type = 'user'"),
     )
 
 

@@ -12,6 +12,7 @@ from app.models import (
     ActivityEvent,
     AppNotification,
     Course,
+    CourseImage,
     CourseReconciliation,
     Follow,
     LinkedContact,
@@ -69,6 +70,35 @@ def _rate_course(client: TestClient, headers: dict[str, str], course_id: int, *,
     )
     assert details.status_code == 200
     return response.json()
+
+
+def test_feed_hides_unmoderated_round_photos_from_friends_but_owner_still_sees_them() -> None:
+    """A PENDING/REJECTED photo must stay owner-only: round_image_data's
+    include_unapproved must be False for anyone viewing a round they don't
+    own, including through a friends/public feed entry (see domain.py's
+    round_image_data and course_ratings.py's own-round state, which is the
+    one legitimate include_unapproved=True caller)."""
+    app = create_app(Settings(course_image_base_url="https://cdn.example/assets"))
+    client = TestClient(app)
+    alice = _profile(client, "dev:feed-photo-alice", "Alice", "alice")
+    bob = _profile(client, "dev:feed-photo-bob", "Bob", "bob")
+    _mutual_friend(client, alice, bob, "bob")
+
+    rated = _rate_course(client, bob, 1, visibility="friends")
+    round_id = rated["round"]["id"]
+    with app.state.session_factory() as session:
+        bob_id = session.scalar(select(User.id).where(User.provider_subject == "dev:feed-photo-bob"))
+        session.add(CourseImage(
+            course_id=1, storage_key="course-photos/1/pending.jpg", position=0, source_type="user",
+            moderation_status="pending", uploaded_by_user_id=bob_id, round_id=round_id,
+        ))
+        session.commit()
+
+    item = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+    assert item["data"]["photos"] == []
+
+    own_state = client.get("/api/v1/me/course-ratings/1", headers=bob).json()
+    assert len(own_state["round"]["photos"]) == 1
 
 
 def test_course_friend_thoughts_only_exposes_eligible_ratings_and_friends_shared_memories() -> None:

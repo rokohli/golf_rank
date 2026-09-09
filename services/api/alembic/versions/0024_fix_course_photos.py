@@ -42,6 +42,7 @@ def upgrade() -> None:
         sa.column("storage_key", sa.String()),
         sa.column("alt_text", sa.String()),
         sa.column("source_name", sa.String()),
+        sa.column("source_url", sa.String()),
         sa.column("source_type", sa.String()),
         sa.column("moderation_status", sa.String()),
         sa.column("position", sa.Integer()),

@@ -289,16 +289,22 @@ def storage_image_url(base_url: str | None, storage_key: str | None) -> str | No
     return f"{base_url.rstrip('/')}/{quote(storage_key, safe='/')}"
 
 
-def round_image_data(session: Session, round_id: int) -> list[dict]:
-    """Photos submitted with a specific round, regardless of moderation_status --
-    moderation only gates hero-image/course-gallery eligibility (course_image_data
-    above), never a user's own round posting."""
+def round_image_data(session: Session, round_id: int, *, include_unapproved: bool) -> list[dict]:
+    """Photos submitted with a specific round. include_unapproved must be True
+    only for the round's own owner viewing their own posting -- moderation
+    gates hero-image/course-gallery eligibility (course_image_data above) for
+    everyone, but a PENDING/REJECTED photo shown to any other viewer (e.g. a
+    friend or the public via the feed) is exactly the unmoderated exposure
+    course_image_data guards against; round ownership is not itself a
+    moderation bypass for third parties."""
     image_base_url = session.info.get("course_image_base_url")
     images = session.scalars(
         select(CourseImage).where(CourseImage.round_id == round_id).order_by(CourseImage.position)
     ).all()
     output = []
     for image in images:
+        if not include_unapproved and image.moderation_status != CourseImageModeration.APPROVED:
+            continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:
             continue

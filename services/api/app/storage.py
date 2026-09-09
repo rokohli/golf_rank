@@ -25,7 +25,7 @@ from typing import Protocol
 import uuid
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _EXT_BY_CONTENT_TYPE = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
@@ -97,9 +97,16 @@ class R2ObjectStorage:
         )
 
     def delete_object(self, storage_key: str) -> None:
+        # Best-effort: callers use this for cleanup after their own primary
+        # operation (a DB commit, a rejected upload) has already succeeded --
+        # a storage failure here must never propagate and abort that already-
+        # -completed work. Catches BotoCoreError too, not just ClientError:
+        # a transport failure (e.g. R2 unreachable) raises BotoCoreError
+        # subclasses like EndpointConnectionError, which ClientError alone
+        # would let escape.
         try:
             self._client.delete_object(Bucket=self._bucket, Key=storage_key)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass
 
 

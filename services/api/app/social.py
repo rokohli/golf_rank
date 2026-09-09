@@ -367,7 +367,7 @@ def _event_matches_current_round_visibility(session: Session, event: ActivityEve
     )
 
 
-def _activity_data(session: Session, event: ActivityEvent) -> dict:
+def _activity_data(session: Session, event: ActivityEvent, viewer_id: int) -> dict:
     """Return current, intentionally shared round details for an activity."""
     data = dict(event.event_data)
     if event.subject_type not in {"round", "rating_round"}:
@@ -384,7 +384,10 @@ def _activity_data(session: Session, event: ActivityEvent) -> dict:
         data["note"] = note.body
     if round_.favorite_hole is not None:
         data["favorite_hole"] = round_.favorite_hole
-    data["photos"] = round_image_data(session, round_.id)
+    # A PENDING/REJECTED photo is only for its own owner to see -- a friend or
+    # public viewer of this feed entry must never see unmoderated content
+    # (see round_image_data's docstring).
+    data["photos"] = round_image_data(session, round_.id, include_unapproved=viewer_id == round_.user_id)
     return data
 
 
@@ -734,7 +737,7 @@ def activity_feed(
             if actor is None:
                 continue
             course = None
-            data = _activity_data(session, event)
+            data = _activity_data(session, event, user.id)
             course_id = data.get("course_id")
             if isinstance(course_id, int):
                 try:
@@ -781,7 +784,7 @@ def _activity_out(session: Session, event: ActivityEvent, viewer_id: int) -> Act
     if actor is None:
         raise HTTPException(404, "Activity not found")
     course = None
-    data = _activity_data(session, event)
+    data = _activity_data(session, event, viewer_id)
     course_id = data.get("course_id")
     if isinstance(course_id, int):
         try:

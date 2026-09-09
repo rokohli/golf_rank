@@ -88,6 +88,85 @@ def test_full_migration_upgrade_and_downgrade_cycle(monkeypatch: pytest.MonkeyPa
         engine.dispose()
 
 
+def test_0024_migration_shares_fleming_storage_key_with_harding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for two 0024 bugs: (1) fleming_hero["source_url"] raised
+    a KeyError because the lightweight course_images table declaration didn't
+    include that column: (2) the inserted Harding row pointed at a fabricated
+    storage_key no R2 object was ever copied to. The fix reuses Fleming's
+    actual storage_key/source_url instead."""
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+
+        command.upgrade(config, "0023_course_image_round_link")
+
+        engine = make_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO courses (id, name, region, source, source_course_id, latitude, longitude) VALUES "
+                "(1, 'Tpc Harding Park Fleming Course', 'SF', 'seed', "
+                "'61fb03c8-74fc-4fc8-87d0-0491190e2d54', 37.7, -122.5), "
+                "(2, 'Tpc Harding Park Harding Course', 'SF', 'seed', "
+                "'21922834-62d3-4603-b624-b44867b60eb4', 37.7, -122.5)"
+            ))
+            conn.execute(text(
+                "INSERT INTO course_images (course_id, storage_key, alt_text, source_name, source_url, "
+                "position, is_hero, source_type, moderation_status) VALUES "
+                "(1, 'courses/1/hero.jpg', 'Fleming hero', 'GolfRank photographer', "
+                "'https://golfrank.example/photos/fleming', 0, 1, 'official', 'approved')"
+            ))
+        engine.dispose()
+
+        # Must not raise -- this is where the missing source_url column
+        # declaration used to blow up with a KeyError.
+        command.upgrade(config, "0024_fix_course_photos")
+
+        engine = make_engine(db_url)
+        with engine.connect() as conn:
+            harding = conn.execute(text(
+                "SELECT storage_key, source_url FROM course_images WHERE course_id = 2"
+            )).one()
+            assert harding[0] == "courses/1/hero.jpg"
+            assert harding[1] == "https://golfrank.example/photos/fleming"
+        engine.dispose()
+
+
+def test_0025_storage_key_uniqueness_is_partial_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uq_course_image_user_storage_key must only constrain USER rows -- two
+    OFFICIAL rows sharing one storage_key (migration 0024's Fleming/Harding
+    shared hero) must remain insertable, while two USER rows sharing a key
+    must still be rejected. Without sqlite_where this index becomes a global
+    unique constraint on SQLite (postgresql_where is silently ignored there),
+    breaking the first case."""
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO courses (id, name, region, source, latitude, longitude) "
+                "VALUES (1, 'Course', 'CA', 'seed', 37.7, -122.5)"
+            ))
+            conn.execute(text(
+                "INSERT INTO course_images (course_id, storage_key, position, is_hero, source_type, moderation_status) "
+                "VALUES (1, 'shared.jpg', 0, 1, 'official', 'approved'), "
+                "(1, 'shared.jpg', 1, 0, 'official', 'approved')"
+            ))
+        engine.dispose()
+
+        engine = make_engine(db_url)
+        with pytest.raises(Exception):
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO course_images (course_id, storage_key, position, is_hero, source_type, moderation_status) "
+                    "VALUES (1, 'dup-user.jpg', 2, 0, 'user', 'pending'), "
+                    "(1, 'dup-user.jpg', 3, 0, 'user', 'pending')"
+                ))
+        engine.dispose()
+
+
 def test_0018_migration_preserves_clean_usernames_and_sanitizes_dirty_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that migration 0018 handles legacy dirty usernames deterministically."""
     with NamedTemporaryFile(suffix=".db") as tmp:
