@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     # bucket would deny them a third of the way through.
     admin_rate_limit_capacity: int = 120
     admin_rate_limit_refill_per_second: float = 2.0
+    # Quality scoring for user-submitted photos. Off by default: enabling it
+    # spends a Gemini call per upload and lets the model publish a hero without
+    # a human, so it is opt-in per environment.
+    course_photo_autoscore_on_confirm: bool = False
+    course_photo_scoring_model: str = "gemini-flash-lite-latest"
+    # A score at or above this auto-approves the photo, making it eligible to
+    # win the USER tier -- which, since this catalog has almost no OFFICIAL
+    # rows, usually means becoming the course hero outright. Deliberately
+    # strict; treat it as a production dial to loosen after watching the queue.
+    course_photo_auto_approve_score: float = 8.0
+    course_photo_scoring_timeout_seconds: float = 20.0
+    # Caps concurrent scoring calls started from the request process, so a
+    # burst of uploads can't fan out into unbounded provider traffic.
+    course_photo_scoring_max_concurrent: int = 2
+    course_photo_scoring_max_attempts: int = 3
+    course_photo_scoring_reference_course_ids: str = "210,213"
     ai_planner_enabled: bool = False
     ai_planner_provider: str = "gemini"
     gemini_api_key: str | None = None
@@ -207,6 +223,20 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ADMIN_CLERK_SUBJECTS may only contain dev: subjects in development"
                 )
+        if self.course_photo_autoscore_on_confirm and not self.gemini_api_key:
+            raise ValueError(
+                "GEMINI_API_KEY is required when course photo autoscoring is enabled"
+            )
+        if not 0 <= self.course_photo_auto_approve_score <= 10:
+            raise ValueError("COURSE_PHOTO_AUTO_APPROVE_SCORE must be between 0 and 10")
+        positive_scoring_settings = {
+            "COURSE_PHOTO_SCORING_TIMEOUT_SECONDS": self.course_photo_scoring_timeout_seconds,
+            "COURSE_PHOTO_SCORING_MAX_CONCURRENT": self.course_photo_scoring_max_concurrent,
+            "COURSE_PHOTO_SCORING_MAX_ATTEMPTS": self.course_photo_scoring_max_attempts,
+        }
+        for name, value in positive_scoring_settings.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
         positive_admin_settings = {
             "ADMIN_RATE_LIMIT_CAPACITY": self.admin_rate_limit_capacity,
             "ADMIN_RATE_LIMIT_REFILL_PER_SECOND": self.admin_rate_limit_refill_per_second,
@@ -218,6 +248,15 @@ class Settings(BaseSettings):
     @property
     def allowed_host_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @property
+    def course_photo_scoring_reference_course_id_list(self) -> list[int]:
+        """Courses whose current hero photo few-shot primes the scorer."""
+        return [
+            int(part.strip())
+            for part in self.course_photo_scoring_reference_course_ids.split(",")
+            if part.strip()
+        ]
 
     @property
     def admin_subject_set(self) -> set[str]:

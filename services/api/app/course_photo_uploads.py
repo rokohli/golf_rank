@@ -17,13 +17,14 @@ hero", not "hidden". Removing a photo from view is DELETE
 /api/v1/admin/course-photos/{id}, which deletes the row and the R2 object.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .core.rate_limit import photo_confirm_rate_limit, photo_discard_rate_limit, photo_upload_rate_limit
 from .course_images.repository import CourseImageRepository
+from .course_photo_scoring_job import run_scoring_task
 from .db import get_session
 from .domain import delete_permanent_objects, require_course, require_user, storage_image_url, uploader_username
 from .models import CourseImage, Round
@@ -119,6 +120,7 @@ def confirm_upload(
     course_id: int,
     payload: CoursePhotoConfirmRequest,
     request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> CourseImageOut:
@@ -203,6 +205,14 @@ def confirm_upload(
         # works from scratch.
         delete_permanent_objects(session, storage, [permanent_key], context="confirm_persist_failed")
         raise
+
+    # Scored out of band, after the row is committed and only on a genuinely
+    # new upload -- the idempotent-replay path above returns before reaching
+    # here, so a retried confirm never spends a second Gemini call. The task
+    # swallows its own failures: an upload that succeeded must not report an
+    # error because scoring didn't.
+    if settings.course_photo_autoscore_on_confirm and settings.gemini_api_key:
+        background.add_task(run_scoring_task, request.app, image.id)
     return image_out(session, settings, image)
 
 

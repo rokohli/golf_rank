@@ -61,8 +61,16 @@ def score_course_photo(
     image_data: bytes,
     image_content_type: str,
     reference_images: list[tuple[bytes, str]],
+    max_retries: int = MAX_TRANSIENT_RETRIES,
 ) -> PhotoScore:
-    """Score one candidate photo, few-shot primed with reference "good" photos."""
+    """Score one candidate photo, few-shot primed with reference "good" photos.
+
+    max_retries defaults to the batch-friendly budget the offline script wants.
+    A caller running inside the request process should lower it: at the default
+    of 5, with request_with_retries' linearly growing backoff, one bad run can
+    occupy a worker thread for the better part of a minute (see
+    course_photo_scoring_job, which passes 1).
+    """
     parts: list[dict] = [{"text": CRITERIA_PROMPT}]
     for reference_data, reference_content_type in reference_images:
         parts.append({"text": "REFERENCE GOOD EXAMPLE:"})
@@ -86,7 +94,7 @@ def score_course_photo(
     }
     response = request_with_retries(
         client, "POST", GEMINI_GENERATE_URL.format(model=model),
-        max_retries=MAX_TRANSIENT_RETRIES,
+        max_retries=max_retries,
         headers={"x-goog-api-key": api_key},
         json=payload,
     )

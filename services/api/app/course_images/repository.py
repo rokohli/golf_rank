@@ -332,14 +332,23 @@ class CourseImageRepository:
         session.refresh(image)
         return image
 
-    def record_score_failure(self, session: Session, image: CourseImage) -> CourseImage:
-        """Counts a failed scoring attempt without marking the photo scored.
+    def record_score_failure(
+        self, session: Session, image: CourseImage, *, permanent: bool = False,
+    ) -> CourseImage:
+        """Counts a failed scoring attempt.
 
-        scored_at stays NULL so the sweeper picks the row up again;
-        scoring_attempts is what eventually stops it retrying a permanently
-        broken image forever.
+        A transient failure (timeout, 5xx, 429, an object that hasn't reached
+        the CDN yet) leaves scored_at NULL so the sweeper picks the row up
+        again, bounded by scoring_attempts.
+
+        A permanent one -- the provider rejecting this specific image, which no
+        amount of retrying will fix -- sets scored_at with quality_score left
+        NULL. That is the "tried and failed, don't try again" state, and it is
+        what stops a corrupt upload consuming an attempt on every sweep.
         """
         image.scoring_attempts = (image.scoring_attempts or 0) + 1
+        if permanent:
+            image.scored_at = datetime.now(timezone.utc)
         session.commit()
         session.refresh(image)
         return image

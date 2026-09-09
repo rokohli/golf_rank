@@ -161,7 +161,7 @@ def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> N
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
@@ -274,7 +274,7 @@ def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monke
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
@@ -362,7 +362,7 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
