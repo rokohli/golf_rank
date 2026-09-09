@@ -486,10 +486,16 @@ function PersonalDetails({ courseId, courseName, getAuthHeaders, onPhotosChanged
     try {
       await uploadCoursePhoto(courseId, picked.uri, picked.contentType, await getAuthHeaders(), picked.dimensions, rating.round.id)
       setPhotoUploadState('idle')
-      await onPhotosChanged()
     } catch (reason) {
       setPhotoUploadState('error')
       setPhotoUploadError(errorMessage(reason, 'Unable to submit photo. Please try again.'))
+    } finally {
+      // Refresh regardless of outcome: an apparent failure can still mean
+      // confirm actually committed server-side and only the response was
+      // lost (see uploadCoursePhoto/isRetryableConfirmFailure) -- without
+      // this, that case would leave the gallery permanently stale even
+      // though the photo really is attached.
+      await onPhotosChanged()
     }
   }
   return <View style={styles.personalDetails}>

@@ -1,5 +1,5 @@
 import pytest
-from botocore.exceptions import EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from app.core.config import Settings
 from app.storage import R2ObjectStorage, build_object_storage, build_storage_key, promote_storage_key
@@ -22,6 +22,45 @@ def test_delete_object_swallows_transport_failures() -> None:
     storage._client = _RaisingClient()
 
     storage.delete_object("course-photos/1/photo.jpg")
+
+
+class _HeadObjectErrorClient:
+    def __init__(self, error: ClientError) -> None:
+        self._error = error
+
+    def head_object(self, **kwargs):
+        raise self._error
+
+
+def _client_error(code: str, status: int) -> ClientError:
+    return ClientError(
+        {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, "HeadObject",
+    )
+
+
+def test_head_object_treats_only_404_as_not_found() -> None:
+    storage = R2ObjectStorage(
+        account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
+    )
+    storage._client = _HeadObjectErrorClient(_client_error("404", 404))
+
+    assert storage.head_object("course-photos/pending/1/x.jpg") is None
+
+
+def test_head_object_propagates_operational_failures() -> None:
+    """A throttling, temporary-5xx, expired-credentials, or access-denied
+    ClientError from HeadObject is not "the object doesn't exist" -- treating
+    it as None makes confirm_upload respond with a definitive 422 rejection,
+    which the client's retry classifier (isRetryableConfirmFailure) treats
+    as permanent and drops the staged photo, when the object may well still
+    be there and the failure was purely operational."""
+    storage = R2ObjectStorage(
+        account_id="test", access_key_id="test", secret_access_key="test", bucket_name="test-bucket",
+    )
+    storage._client = _HeadObjectErrorClient(_client_error("SlowDown", 503))
+
+    with pytest.raises(ClientError):
+        storage.head_object("course-photos/pending/1/x.jpg")
 
 
 _R2_CREDS = {

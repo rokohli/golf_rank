@@ -140,8 +140,22 @@ class R2ObjectStorage:
     def head_object(self, storage_key: str) -> ObjectMeta | None:
         try:
             response = self._client.head_object(Bucket=self._bucket, Key=storage_key)
-        except ClientError:
-            return None
+        except ClientError as error:
+            # HeadObject has no response body, so S3/R2 report a genuine
+            # "not found" as Error.Code "404" (not "NoSuchKey", which only
+            # ever appears on GetObject) -- that, and only that, means the
+            # object really isn't there. Every other ClientError (throttling,
+            # a temporary 5xx, expired credentials, access denied) is an
+            # operational failure, not an absent object, and must propagate:
+            # confirm_upload treats a None here as a definitive 422
+            # rejection, but the client's retry classifier only treats a 5xx
+            # as retryable -- collapsing an operational failure into the
+            # same None as "not found" would misclassify it as permanent.
+            code = error.response.get("Error", {}).get("Code")
+            status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in ("404", "NoSuchKey") or status == 404:
+                return None
+            raise
         return ObjectMeta(
             content_type=response.get("ContentType", ""),
             content_length=int(response.get("ContentLength", 0)),

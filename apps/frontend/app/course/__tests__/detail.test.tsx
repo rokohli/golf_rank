@@ -446,6 +446,11 @@ describe('course detail ratings', () => {
 
     expect(await screen.findByText('Too many requests')).toBeOnTheScreen()
     expect(screen.getByLabelText('Add photos')).toBeOnTheScreen()
+    // Refreshes regardless of the reported failure: confirm can fail on the
+    // client's end (a lost response, a 5xx) while actually having committed
+    // server-side, so the gallery must still catch up rather than staying
+    // stale forever on an apparent failure.
+    await waitFor(() => expect(mockGetCourse).toHaveBeenCalledTimes(2))
   })
 
   it('disables Add photos when there is no round to link photos to yet', async () => {

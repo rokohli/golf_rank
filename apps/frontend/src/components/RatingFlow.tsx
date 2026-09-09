@@ -27,8 +27,8 @@ import {
   RatingDetailsInput,
   RatingTier,
 } from '../types'
-import { ApiResponseError, CoursePhotoContentType } from '../api/client'
-import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
+import { CoursePhotoContentType } from '../api/client'
+import { MAX_PHOTOS_PER_ROUND, isRetryableConfirmFailure, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
 import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
 
@@ -117,7 +117,7 @@ export function RatingFlow({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guestMessage, setGuestMessage] = useState<string | null>(null)
-  const [existingPhotos] = useState<CourseImage[]>(initialRating.round?.photos ?? [])
+  const [existingPhotos, setExistingPhotos] = useState<CourseImage[]>(initialRating.round?.photos ?? [])
   const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
   const savingRef = useRef(false)
   const totalPhotoCount = existingPhotos.length + stagedPhotos.length
@@ -171,7 +171,7 @@ export function RatingFlow({
     if (!ready.length) return
     const outcomes = await Promise.all(ready.map((photo) =>
       confirmPhotoUpload(photo.storageKey as string, roundId, photo.dimensions)
-        .then(() => ({ id: photo.id, ok: true as const }))
+        .then((image) => ({ id: photo.id, ok: true as const, image }))
         .catch((reason) => ({ id: photo.id, ok: false as const, retryable: isRetryableConfirmFailure(reason) }))
     ))
     // Confirmation is idempotent per storage_key (server-side), so a photo
@@ -185,6 +185,15 @@ export function RatingFlow({
     const failures = outcomes.filter((outcome): outcome is Extract<typeof outcome, { ok: false }> => !outcome.ok)
     const retryableIds = new Set(failures.filter((failure) => failure.retryable).map((failure) => failure.id))
     const rejectedCount = failures.length - retryableIds.size
+    // existingPhotos was previously frozen from the initial rating -- a
+    // successfully confirmed photo has to be added to it, not just dropped
+    // from stagedPhotos, so totalPhotoCount and the round preview stay
+    // correct if the user navigates back to this stage from reveal (the
+    // header back button allows that) instead of finishing the flow.
+    const confirmedImages = outcomes
+      .filter((outcome): outcome is Extract<typeof outcome, { ok: true }> => outcome.ok)
+      .map((outcome) => outcome.image)
+    if (confirmedImages.length) setExistingPhotos((current) => [...current, ...confirmedImages])
     setStagedPhotos((current) => current.filter((photo) => retryableIds.has(photo.id)))
     if (rejectedCount && retryableIds.size) {
       setGuestMessage('Your round was saved. Some photos could not be attached and were removed; others can be retried.')
@@ -530,20 +539,6 @@ function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback
 }
 
-// A confirm failure is worth retrying whenever the object might still exist:
-// a network-level failure (no response at all -- not an ApiResponseError),
-// a 429 (rate limited, nothing about the request was rejected), or a 5xx
-// (a server-side failure -- an R2 transport error inside head_object, a
-// transient database error, storage briefly unavailable -- none of which
-// confirm_upload's own validation-rejection paths raise; those are always
-// 4xx and delete the object before responding). Only a definitive 4xx
-// rejection (bad type/size, round mismatch, cap exceeded, wrong owner) means
-// the server actually processed the request and deleted the object -- that,
-// and only that, can never succeed by retrying the same storage_key.
-function isRetryableConfirmFailure(reason: unknown): boolean {
-  if (!(reason instanceof ApiResponseError)) return true
-  return reason.status === 429 || reason.status >= 500
-}
 
 function isValidDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false

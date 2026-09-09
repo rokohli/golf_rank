@@ -262,6 +262,32 @@ describe('RatingFlow', () => {
     ))
   })
 
+  it('keeps a confirmed photo counted after navigating back from reveal', async () => {
+    // existingPhotos was previously frozen from the initial rating -- a
+    // successfully confirmed photo has to be merged into it (not just
+    // dropped from stagedPhotos), or totalPhotoCount forgets it as soon as
+    // the user returns to this stage via the header back button, letting
+    // them stage a whole new batch the server then rejects at the round cap.
+    const inputProps = props({ initialRating: { ...existingRating, companions: [] } })
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file:///picked-photo.jpg', mimeType: 'image/jpeg' }],
+    })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Photos' }))
+    await screen.findByText('1 photo added')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(inputProps.confirmPhotoUpload).toHaveBeenCalledTimes(1))
+    await screen.findByLabelText(/your rating is/i)
+
+    fireEvent.press(screen.getByLabelText('Go back'))
+
+    expect(await screen.findByText('1 photo added')).toBeOnTheScreen()
+  })
+
   it('drops a photo the server rejected instead of offering to retry it', async () => {
     // confirm_upload deletes the R2 object before responding to a validation
     // rejection (bad type/size, round mismatch, cap exceeded) -- retrying
