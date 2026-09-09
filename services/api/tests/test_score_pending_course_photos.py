@@ -132,3 +132,22 @@ def test_exits_nonzero_without_a_gemini_key(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     assert main() == 1
+
+
+def test_rescore_recovers_a_photo_stranded_by_transient_failures(session: Session) -> None:
+    """claim_for_scoring spends an attempt *before* the provider call, so a few
+    transient failures -- a brief provider outage, CDN lag on a just-promoted
+    object -- can exhaust the budget on a photo that was never actually scored.
+    The normal sweep must still respect the ceiling, but --rescore has to be
+    able to reach those photos or manual SQL is the only recovery."""
+    course = _course(session)
+    stranded = _photo(session, course, key="stranded.jpg", attempts=3)
+
+    normal, _ = photos_to_score(session, _settings(course_photo_scoring_max_attempts=3))
+    assert normal == []
+
+    recovered, _ = photos_to_score(
+        session, _settings(course_photo_scoring_max_attempts=3),
+        rescore=True, course_ids=[course.id],
+    )
+    assert [image.id for image in recovered] == [stranded.id]

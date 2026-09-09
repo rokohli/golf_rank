@@ -60,7 +60,6 @@ def photos_to_score(
     query = select(CourseImage).where(
         CourseImage.source_type == CourseImageSource.USER,
         CourseImage.moderation_status == CourseImageModeration.PENDING,
-        CourseImage.scoring_attempts < settings.course_photo_scoring_max_attempts,
         or_(
             CourseImage.scoring_claimed_at.is_(None),
             CourseImage.scoring_claimed_at < lease_cutoff,
@@ -69,6 +68,17 @@ def photos_to_score(
     if not rescore:
         # scored_at, not quality_score: a failed attempt leaves the score NULL.
         query = query.where(CourseImage.scored_at.is_(None))
+        # The attempt ceiling is deliberately NOT applied in rescore mode.
+        # claim_for_scoring spends an attempt *before* the provider call, so
+        # transient failures (a brief provider outage, CDN lag on a
+        # just-promoted object) burn the budget on photos that were never
+        # actually scored. Applying the ceiling here too would leave those
+        # permanently unreachable from every CLI path, with manual SQL as the
+        # only recovery -- exactly what --rescore exists to avoid. main()
+        # resets scoring_attempts for the rows it selects in this mode.
+        query = query.where(
+            CourseImage.scoring_attempts < settings.course_photo_scoring_max_attempts
+        )
     if course_ids:
         query = query.where(CourseImage.course_id.in_(course_ids))
     candidates = list(session.scalars(query.order_by(CourseImage.id)).all())
@@ -127,6 +137,11 @@ def main() -> int:
         if args.rescore and not args.dry_run:
             for image in pending:
                 image.scored_at = None
+                # Reset alongside scored_at: leaving attempts at the ceiling
+                # would let this reselect the photo and then have
+                # claim_for_scoring refuse it, so the run would report work it
+                # silently never did.
+                image.scoring_attempts = 0
             session.commit()
 
         if not pending:
