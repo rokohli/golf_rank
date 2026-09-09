@@ -257,6 +257,20 @@ Returns `{"is_admin": true|false}` for the authenticated caller. Admin identity 
 
 This probe exists because every other admin route answers `404` for a non-admin rather than `403`, so that the admin surface cannot be enumerated with a valid token. That leaves a client no way to tell whether to render a moderation entry point — this endpoint is the exception, always returning `200`, and reveals nothing beyond whether the caller themselves is an admin. Unauthenticated callers still get `401`.
 
+## Admin course-photo moderation
+
+All routes under `/api/v1/admin/course-photos` require an admin identity and answer `404` — not `403` — for any other authenticated caller, so the surface cannot be enumerated with an ordinary token. Unauthenticated callers get `401`. Every route is scoped to `source_type = user`; an `image_id` that exists but is an OFFICIAL or WIKIMEDIA row returns `404`, the same as a missing one.
+
+Moderation governs **hero-image eligibility only, never visibility**. A `pending` photo already appears in the course gallery and on its round's feed posting, and `reject` does not change that — it means "never eligible to become the hero". The only action that removes a photo from view is `DELETE`.
+
+- `GET /api/v1/admin/course-photos?status=pending&course_id=&cursor=&limit=` — the queue, oldest first. `status` is `pending` (default), `approved`, or `rejected`; an unknown value returns `422`. `limit` is 1–100, default 50. Returns `{"items": [...], "next_cursor": <id>|null}`, paginated by keyset on `id`. Each item nests the public `CourseImageOut` under `image` and adds `moderation_status`, `moderated_at`, `moderated_by_username`, `moderation_reason`, `quality_score_reasons`, `scored_at`, `scoring_attempts`, and `course_hero_locked`.
+- `POST /api/v1/admin/course-photos/{image_id}/approve` — makes the photo eligible to win the USER tier. Does not set `is_hero`. Idempotent.
+- `POST /api/v1/admin/course-photos/{image_id}/reject` — body `{"reason": "..."|null}`, max 200 characters. Sets `rejected` and clears `is_hero`. The row and its stored object are retained.
+- `POST /api/v1/admin/course-photos/{image_id}/feature` — body `{"featured": true|false}`. Featuring approves the photo if needed, sets `is_hero`, and clears `is_hero` on every other photo of the same course **in the same source tier**; other tiers are untouched.
+- `DELETE /api/v1/admin/course-photos/{image_id}` — `204`. Deletes the row, then the stored object; a storage failure is recorded for later retry rather than failing the request.
+
+All four mutating routes return the updated queue item, so a client can re-render without refetching.
+
 ## Error response bodies
 
 Authentication and route business errors raised by the API use a string `detail`, for example:

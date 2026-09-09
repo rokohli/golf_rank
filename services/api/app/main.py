@@ -18,12 +18,14 @@ from .core.config import Settings
 from .core.http_security import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from .core.rate_limit import (
     RateLimiter,
+    admin_rate_limit,
     authenticated_rate_limit,
     public_rate_limit,
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
 from .course_images.service import CourseImageService
+from .course_photo_moderation import router as course_photo_moderation_router
 from .course_photo_uploads import router as course_photo_uploads_router
 from .course_ratings import router as course_ratings_router
 from .db import get_session, make_engine, make_session_factory
@@ -151,6 +153,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(social_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
     app.include_router(course_photo_uploads_router)
+    # admin_rate_limit depends on require_admin, so a non-admin gets its 404
+    # before the limiter ever reaches Redis.
+    app.include_router(course_photo_moderation_router, dependencies=[Depends(admin_rate_limit)])
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
 

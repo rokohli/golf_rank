@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
 from app.core.config import Settings
+from app.course_images.repository import CourseImageRepository
 from app.main import create_app
-from app.models import Course
+from app.models import Course, CourseImage, CourseImageSource
 from app.ranking import _lock_user_for_ranking_update
 
 
@@ -25,6 +26,53 @@ def test_lock_user_for_ranking_update_emits_for_update_on_postgres() -> None:
             captured.append(statement)
 
     _lock_user_for_ranking_update(_RecordingSession(), 1)
+
+    assert len(captured) == 1
+    compiled = str(captured[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in compiled
+
+
+def test_lock_image_for_moderation_emits_for_update_on_postgres() -> None:
+    """Same reasoning as above: SQLite silently drops FOR UPDATE, so only a
+    dialect-compiled assertion can catch a deleted `.with_for_update()` in the
+    moderation path, where two admins acting on one photo would then race."""
+    captured: list = []
+
+    class _RecordingSession:
+        def scalar(self, statement):
+            captured.append(statement)
+            return None
+
+    CourseImageRepository().lock_image_for_moderation(_RecordingSession(), 1)
+
+    assert len(captured) == 1
+    compiled = str(captured[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in compiled
+
+
+def test_set_featured_locks_the_tier_on_postgres() -> None:
+    """Featuring clears is_hero across the whole (course, source_type) tier, so
+    it must lock those rows -- otherwise two concurrent features on one course
+    can both commit with is_hero set."""
+    captured: list = []
+
+    class _RecordingSession:
+        def scalars(self, statement):
+            captured.append(statement)
+            return _Empty()
+
+        def commit(self):
+            pass
+
+        def refresh(self, _obj):
+            pass
+
+    class _Empty:
+        def all(self):
+            return []
+
+    image = CourseImage(id=1, course_id=1, source_type=CourseImageSource.USER, is_hero=False)
+    CourseImageRepository().set_featured(_RecordingSession(), image, True)
 
     assert len(captured) == 1
     compiled = str(captured[0].compile(dialect=postgresql.dialect()))

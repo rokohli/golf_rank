@@ -56,3 +56,20 @@ def test_openapi_contract_schema_includes_all_critical_models_and_routes() -> No
     assert "get" in paths["/api/v1/me/admin"]
     assert "is_admin" in schemas.get("AdminAccessOut", {}).get("properties", {})
 
+    # Admin photo moderation.
+    assert "get" in paths["/api/v1/admin/course-photos"]
+    assert "delete" in paths["/api/v1/admin/course-photos/{image_id}"]
+    for action in ("approve", "reject", "feature"):
+        assert "post" in paths[f"/api/v1/admin/course-photos/{{image_id}}/{action}"]
+
+    admin_photo_properties = schemas.get("AdminCoursePhotoOut", {}).get("properties", {})
+    assert "moderation_status" in admin_photo_properties
+    assert "quality_score_reasons" in admin_photo_properties
+    assert "moderated_at" in admin_photo_properties
+    assert "course_hero_locked" in admin_photo_properties
+
+    # The public per-photo shape must NOT grow moderator-only fields: it is
+    # embedded in every course and round payload.
+    course_image_properties = schemas.get("CourseImageOut", {}).get("properties", {})
+    for moderator_only in ("moderation_reason", "moderated_by_username", "moderated_at"):
+        assert moderator_only not in course_image_properties

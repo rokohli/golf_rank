@@ -133,6 +133,46 @@ class CoursePhotoDiscardRequest(BaseModel):
     storage_key: str = Field(min_length=1, max_length=1024)
 
 
+class AdminCoursePhotoOut(BaseModel):
+    """One row of the moderation queue.
+
+    Composes CourseImageOut rather than extending it: that model is the public
+    per-photo shape embedded in course and round payloads, so moderator-only
+    fields added to it would leak moderation_reason and reviewer identity into
+    every course-detail response.
+    """
+
+    image: CourseImageOut
+    course_id: int
+    course_name: str
+    moderation_status: str
+    moderated_at: str | None = None
+    moderated_by_username: str | None = None
+    moderation_reason: str | None = None
+    quality_score_reasons: list[str] | None = None
+    scored_at: str | None = None
+    scoring_attempts: int = 0
+    # True when the course already has a human-featured OFFICIAL/USER hero, in
+    # which case the scorer deliberately skips this photo -- lets the UI show
+    # "not scored (hero locked)" instead of an indistinguishable "not scored".
+    course_hero_locked: bool = False
+
+
+class AdminCoursePhotoPage(BaseModel):
+    items: list[AdminCoursePhotoOut] = Field(default_factory=list)
+    next_cursor: int | None = None
+
+
+class CoursePhotoRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class CoursePhotoFeatureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    featured: bool
+
+
 class CourseHeroImageOut(BaseModel):
     type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
     url: str | None = None

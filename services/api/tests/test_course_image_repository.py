@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy.orm import Session
@@ -147,3 +147,110 @@ def test_pending_user_upload_ineligible_as_hero_until_approved(session: Session)
     session.commit()
 
     assert service.resolve_hero_image(session, course).type == "USER"
+
+
+def _approved_user_image(
+    session: Session, course: Course, *, key: str, score: float | None,
+    created_at: datetime, is_hero: bool = False,
+) -> CourseImage:
+    image = CourseImage(
+        course_id=course.id,
+        storage_key=key,
+        position=CourseImageRepository().next_position(session, course.id),
+        is_hero=is_hero,
+        source_type=CourseImageSource.USER,
+        moderation_status=CourseImageModeration.APPROVED,
+        quality_score=score,
+        width=1600,
+        height=900,
+        created_at=created_at,
+    )
+    session.add(image)
+    session.commit()
+    return image
+
+
+def test_equal_scores_keep_the_incumbent_hero(session: Session) -> None:
+    """The scorer emits integers, so ties are common. Newest-first would rotate
+    the hero to the most recent equally-scored upload every time one landed --
+    churn with no gain in quality. The older row must win."""
+    course = make_course(session)
+    older = _approved_user_image(
+        session, course, key="older.jpg", score=8.0,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    _approved_user_image(
+        session, course, key="newer.jpg", score=8.0,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    ranked = CourseImageRepository().approved_images(session, course.id, CourseImageSource.USER)
+
+    assert ranked[0].id == older.id
+
+
+def test_a_strictly_higher_score_still_displaces_the_incumbent(session: Session) -> None:
+    course = make_course(session)
+    _approved_user_image(
+        session, course, key="older.jpg", score=8.0,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    better = _approved_user_image(
+        session, course, key="newer.jpg", score=9.0,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    ranked = CourseImageRepository().approved_images(session, course.id, CourseImageSource.USER)
+
+    assert ranked[0].id == better.id
+
+
+def test_a_featured_photo_outranks_a_higher_scoring_one(session: Session) -> None:
+    """is_hero is the first term: a human's explicit pick is not displaced by
+    any score, which is what makes auto-approval safe to leave is_hero alone."""
+    course = make_course(session)
+    featured = _approved_user_image(
+        session, course, key="featured.jpg", score=2.0,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), is_hero=True,
+    )
+    _approved_user_image(
+        session, course, key="high.jpg", score=10.0,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    ranked = CourseImageRepository().approved_images(session, course.id, CourseImageSource.USER)
+
+    assert ranked[0].id == featured.id
+
+
+def test_has_featured_hero_only_counts_official_and_user_tiers(session: Session) -> None:
+    course = make_course(session)
+    repository = CourseImageRepository()
+
+    assert repository.has_featured_hero(session, course.id) is False
+
+    # add_wikimedia_image sets is_hero unconditionally on every cached row, so
+    # counting that tier would report nearly every course as locked.
+    repository.add_wikimedia_image(
+        session, course.id, external_url="https://commons.example/a.jpg",
+        thumbnail_url="https://commons.example/a.jpg", alt_text="a",
+        source_name=None, source_url=None, license_name=None, license_url=None,
+        width=1600, height=900,
+    )
+    assert repository.has_featured_hero(session, course.id) is False
+
+    _approved_user_image(
+        session, course, key="user.jpg", score=8.0,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), is_hero=True,
+    )
+    assert repository.has_featured_hero(session, course.id) is True
+
+
+def test_has_featured_hero_is_false_for_approved_but_unfeatured(session: Session) -> None:
+    course = make_course(session)
+    _approved_user_image(
+        session, course, key="user.jpg", score=8.0,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), is_hero=False,
+    )
+
+    assert CourseImageRepository().has_featured_hero(session, course.id) is False

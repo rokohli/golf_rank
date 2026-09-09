@@ -5,13 +5,16 @@ never pass through this API process. See storage.py for the R2-specific
 pieces; this module only orchestrates auth, validation, and persistence.
 
 Uploaded rows always land as CourseImageSource.USER / CourseImageModeration.PENDING
--- moderation (approving/rejecting/featuring) is a separate, not-yet-built slice
-that governs ONLY hero-image eligibility (resolve_hero_image, via
+-- moderation (approving/rejecting/featuring) lives in course_photo_moderation.py
+and governs ONLY hero-image eligibility (resolve_hero_image, via
 CourseImageRepository.approved_images, ignores non-APPROVED rows). A pending
 upload is immediately visible in the course's photo gallery (course_image_data
 does not filter on moderation_status) and, when uploaded with a round_id, on
 that round's feed posting too (domain.round_image_data) -- moderation never
 gates plain visibility, only whether a photo can become the course's hero image.
+That holds for REJECTED as well: rejecting means "never eligible to be the
+hero", not "hidden". Removing a photo from view is DELETE
+/api/v1/admin/course-photos/{id}, which deletes the row and the R2 object.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -40,7 +43,9 @@ _repository = CourseImageRepository()
 MAX_PHOTOS_PER_ROUND = 5
 
 
-def _image_out(session: Session, settings, image: CourseImage) -> CourseImageOut:
+def image_out(session: Session, settings, image: CourseImage) -> CourseImageOut:
+    """The public per-photo shape. Shared with course_photo_moderation, which
+    nests it inside its admin payload rather than duplicating these fields."""
     return CourseImageOut(
         id=image.id,
         url=storage_image_url(settings.course_image_base_url, image.storage_key),
@@ -139,7 +144,7 @@ def confirm_upload(
     if existing is not None:
         if existing.uploaded_by_user_id != user.id:
             raise HTTPException(403, "storage_key belongs to another user")
-        return _image_out(session, settings, existing)
+        return image_out(session, settings, existing)
 
     meta = storage.head_object(payload.storage_key)
     if meta is None:
@@ -198,7 +203,7 @@ def confirm_upload(
         # works from scratch.
         delete_permanent_objects(session, storage, [permanent_key], context="confirm_persist_failed")
         raise
-    return _image_out(session, settings, image)
+    return image_out(session, settings, image)
 
 
 @router.post(
@@ -222,7 +227,7 @@ def discard_upload(
     e.g. the user removed the staged photo before Continue confirmed it.
     Only ever deletes the raw object: a storage_key that's already backed by
     a CourseImage row is a confirmed, published photo and must go through
-    the (not-yet-built) moderation deletion flow instead, never this one."""
+    DELETE /api/v1/admin/course-photos/{id} instead, never this one."""
     require_user(session, current, create=True)
     require_course(session, course_id)
     storage = _object_storage(request)
