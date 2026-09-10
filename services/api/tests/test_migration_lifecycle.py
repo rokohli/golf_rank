@@ -263,6 +263,107 @@ def test_0025_storage_key_uniqueness_is_partial_on_sqlite(monkeypatch: pytest.Mo
         engine.dispose()
 
 
+MODERATION_AUDIT_COLUMNS = {
+    "quality_score_reasons",
+    "scored_at",
+    "scoring_attempts",
+    "moderated_by_user_id",
+    "moderated_at",
+    "moderation_reason",
+}
+
+
+def test_0027_adds_and_removes_the_moderation_audit_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        columns = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert MODERATION_AUDIT_COLUMNS <= columns
+        engine.dispose()
+
+        command.downgrade(config, "0026_failed_object_deletions")
+
+        engine = make_engine(db_url)
+        columns_after = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert not (MODERATION_AUDIT_COLUMNS & columns_after)
+        # The columns 0026 and earlier own must survive the batch table rebuild.
+        assert {"quality_score", "storage_key", "round_id", "uploaded_by_user_id"} <= columns_after
+        engine.dispose()
+
+        # Re-upgrading must work too -- a downgrade that leaves the table in a
+        # subtly different shape only shows up on the way back up.
+        command.upgrade(config, "head")
+        engine = make_engine(db_url)
+        assert MODERATION_AUDIT_COLUMNS <= {
+            col["name"] for col in inspect(engine).get_columns("course_images")
+        }
+        engine.dispose()
+
+
+def test_0027_preserves_the_partial_storage_key_index_predicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """0027 must drop and recreate uq_course_image_user_storage_key around its
+    batch_alter_table, not rebuild the table underneath it. Alembic's batch
+    reflection can re-emit a partial index without its WHERE clause, which
+    would silently promote it to a global unique constraint on storage_key and
+    break migration 0024's Fleming/Harding OFFICIAL rows. Assert the predicate
+    itself, not just that an index by that name exists."""
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        with engine.connect() as conn:
+            index_sql = conn.execute(text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND name = 'uq_course_image_user_storage_key'"
+            )).scalar()
+        engine.dispose()
+
+        assert index_sql is not None, "the partial index did not survive 0027"
+        assert "WHERE" in index_sql.upper()
+        assert "source_type" in index_sql
+
+
+def test_0028_adds_and_removes_concurrency_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        columns = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert {"scoring_claimed_at", "moderation_action"} <= columns
+        engine.dispose()
+
+        command.downgrade(config, "0027_course_image_moderation")
+
+        engine = make_engine(db_url)
+        columns_after = {col["name"] for col in inspect(engine).get_columns("course_images")}
+        assert "scoring_claimed_at" not in columns_after
+        assert "moderation_action" not in columns_after
+        assert MODERATION_AUDIT_COLUMNS <= columns_after
+        engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = make_engine(db_url)
+        assert {"scoring_claimed_at", "moderation_action"} <= {
+            col["name"] for col in inspect(engine).get_columns("course_images")
+        }
+        with engine.connect() as conn:
+            index_sql = conn.execute(text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND name = 'uq_course_image_user_storage_key'"
+            )).scalar()
+        engine.dispose()
+        assert index_sql is not None, "the partial index did not survive 0028"
+        assert "WHERE" in index_sql.upper()
+        assert "source_type" in index_sql
+
+
 def test_0018_migration_preserves_clean_usernames_and_sanitizes_dirty_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that migration 0018 handles legacy dirty usernames deterministically."""
     with NamedTemporaryFile(suffix=".db") as tmp:

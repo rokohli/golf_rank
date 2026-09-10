@@ -27,6 +27,7 @@ from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
 from app.course_images.service import WIKIMEDIA_PROVIDER_NAME
 from app.course_photo_scoring import PhotoScoringError, score_course_photo
+from app.course_photo_scoring_job import fetch_image
 from app.course_photos import WIKIMEDIA_USER_AGENT
 from app.db import make_engine, make_session_factory
 from app.domain import course_image_data, storage_image_url
@@ -35,12 +36,6 @@ from app.models import Course
 REFERENCE_COURSE_IDS = [210, 213]  # Crystal Springs, Cypress Point
 MODEL = "gemini-flash-lite-latest"
 REQUEST_DELAY_SECONDS = 2.0  # paid tier; a 429 slipped through at 1.0, backing off further
-
-
-def _fetch(client: httpx.Client, url: str) -> tuple[bytes, str]:
-    response = client.get(url)
-    response.raise_for_status()
-    return response.content, response.headers.get("content-type", "image/jpeg")
 
 
 def main() -> int:
@@ -78,7 +73,7 @@ def main() -> int:
                     print(f"Warning: reference course #{reference_id} has no hero photo, skipping it as a reference.")
                     continue
                 try:
-                    data, content_type = _fetch(client, hero["url"])
+                    data, content_type = fetch_image(client, hero["url"])
                     reference_images.append((data, content_type))
                 except httpx.HTTPError as exc:
                     print(f"Warning: failed to fetch reference image for course #{reference_id}: {exc}")
@@ -110,7 +105,7 @@ def main() -> int:
                         print(f"    skipping image #{image.id}: COURSE_IMAGE_BASE_URL is required for storage keys")
                         continue
                     try:
-                        data, content_type = _fetch(client, url)
+                        data, content_type = fetch_image(client, url)
                         score = score_course_photo(
                             client,
                             api_key=settings.gemini_api_key,

@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     clerk_jwks_url: str | None = None
     clerk_audience: str | None = None
     clerk_secret_key: str | None = None
+    # Comma-separated *full* provider_subject values ("clerk:user_2abc", "dev:admin"),
+    # matching what CurrentUser.provider_subject carries -- not bare Clerk user ids.
+    # An empty value means nobody is an admin; see admin_subject_set and
+    # core/admin.py's require_admin, which deliberately does NOT fail open the way
+    # ai_planner_allowed_subject_set does.
+    admin_clerk_subjects: str = ""
     course_image_base_url: str | None = None
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None
@@ -73,6 +79,28 @@ class Settings(BaseSettings):
     candidate_daily_quota: int = 5
     readiness_rate_limit_capacity: int = 10
     readiness_rate_limit_refill_per_second: float = 0.1
+    # Deliberately far more generous than authenticated_write_* (capacity 20,
+    # refill 1/3 per second): a moderator clearing a queue of pending photos
+    # issues one write per photo in quick succession, and the ordinary write
+    # bucket would deny them a third of the way through.
+    admin_rate_limit_capacity: int = 120
+    admin_rate_limit_refill_per_second: float = 2.0
+    # Quality scoring for user-submitted photos. Off by default: enabling it
+    # spends a Gemini call per upload and lets the model publish a hero without
+    # a human, so it is opt-in per environment.
+    course_photo_autoscore_on_confirm: bool = False
+    course_photo_scoring_model: str = "gemini-flash-lite-latest"
+    # A score at or above this auto-approves the photo, making it eligible to
+    # win the USER tier -- which, since this catalog has almost no OFFICIAL
+    # rows, usually means becoming the course hero outright. Deliberately
+    # strict; treat it as a production dial to loosen after watching the queue.
+    course_photo_auto_approve_score: float = 8.0
+    course_photo_scoring_timeout_seconds: float = 20.0
+    # Caps concurrent scoring calls started from the request process, so a
+    # burst of uploads can't fan out into unbounded provider traffic.
+    course_photo_scoring_max_concurrent: int = 2
+    course_photo_scoring_max_attempts: int = 3
+    course_photo_scoring_reference_course_ids: str = "210,213"
     ai_planner_enabled: bool = False
     ai_planner_provider: str = "gemini"
     gemini_api_key: str | None = None
@@ -183,10 +211,83 @@ class Settings(BaseSettings):
                 )
         if not 0 <= self.wikimedia_confidence_threshold <= 1:
             raise ValueError("WIKIMEDIA_CONFIDENCE_THRESHOLD must be between 0 and 1")
+        for subject in self.admin_subject_set:
+            # A bare Clerk user id ("user_2abc") silently matches nothing, since
+            # CurrentUser.provider_subject is always prefixed -- that reads as a
+            # broken deploy rather than a locked-down one, so reject it loudly.
+            if not subject.startswith(("clerk:", "dev:")):
+                raise ValueError(
+                    "ADMIN_CLERK_SUBJECTS entries must be prefixed with clerk: or dev:"
+                )
+            if subject.startswith("dev:") and self.app_env != "development":
+                raise ValueError(
+                    "ADMIN_CLERK_SUBJECTS may only contain dev: subjects in development"
+                )
+        if self.course_photo_autoscore_on_confirm and not self.gemini_api_key:
+            raise ValueError(
+                "GEMINI_API_KEY is required when course photo autoscoring is enabled"
+            )
+        if not 0 <= self.course_photo_auto_approve_score <= 10:
+            raise ValueError("COURSE_PHOTO_AUTO_APPROVE_SCORE must be between 0 and 10")
+        positive_scoring_settings = {
+            "COURSE_PHOTO_SCORING_TIMEOUT_SECONDS": self.course_photo_scoring_timeout_seconds,
+            "COURSE_PHOTO_SCORING_MAX_CONCURRENT": self.course_photo_scoring_max_concurrent,
+            "COURSE_PHOTO_SCORING_MAX_ATTEMPTS": self.course_photo_scoring_max_attempts,
+        }
+        for name, value in positive_scoring_settings.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        positive_admin_settings = {
+            "ADMIN_RATE_LIMIT_CAPACITY": self.admin_rate_limit_capacity,
+            "ADMIN_RATE_LIMIT_REFILL_PER_SECOND": self.admin_rate_limit_refill_per_second,
+        }
+        for name, value in positive_admin_settings.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        try:
+            ref_course_ids = self.course_photo_scoring_reference_course_id_list
+        except ValueError as exc:
+            raise ValueError(
+                "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must contain valid comma-separated integers"
+            ) from exc
+        for course_id in ref_course_ids:
+            if course_id <= 0:
+                raise ValueError(
+                    "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS entries must be positive integers"
+                )
+        if self.course_photo_autoscore_on_confirm and not ref_course_ids:
+            raise ValueError(
+                "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must not be empty when course photo autoscoring is enabled"
+            )
 
     @property
     def allowed_host_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @property
+    def course_photo_scoring_reference_course_id_list(self) -> list[int]:
+        """Courses whose current hero photo few-shot primes the scorer."""
+        return [
+            int(part.strip())
+            for part in self.course_photo_scoring_reference_course_ids.split(",")
+            if part.strip()
+        ]
+
+    @property
+    def admin_subject_set(self) -> set[str]:
+        """Provider subjects allowed to reach the admin surface.
+
+        An empty set means *nobody* is an admin. Callers must therefore test
+        plain membership and must not guard it with `if admin_subject_set and
+        ...` the way ai_planner_rate_limit treats its allowlist -- that idiom
+        fails open, which for an allowlist of moderators would turn an unset
+        env var into "everyone is an admin".
+        """
+        return {
+            subject.strip()
+            for subject in self.admin_clerk_subjects.split(",")
+            if subject.strip()
+        }
 
     @property
     def ai_planner_allowed_subject_set(self) -> set[str]:

@@ -258,6 +258,9 @@ def _batch_uploader_usernames(session: Session | None, user_ids: set[int]) -> di
     return {user_id: username for user_id, username in rows}
 
 
+batch_uploader_usernames = _batch_uploader_usernames
+
+
 def course_image_data(course: Course) -> list[dict]:
     """All of a course's photos, regardless of moderation_status -- moderation
     only gates hero-image eligibility (see CourseImageRepository.approved_images,

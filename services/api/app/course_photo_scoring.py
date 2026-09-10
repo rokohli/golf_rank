@@ -61,8 +61,16 @@ def score_course_photo(
     image_data: bytes,
     image_content_type: str,
     reference_images: list[tuple[bytes, str]],
+    max_retries: int = MAX_TRANSIENT_RETRIES,
 ) -> PhotoScore:
-    """Score one candidate photo, few-shot primed with reference "good" photos."""
+    """Score one candidate photo, few-shot primed with reference "good" photos.
+
+    max_retries defaults to the batch-friendly budget the offline script wants.
+    A caller running inside the request process should lower it: at the default
+    of 5, with request_with_retries' linearly growing backoff, one bad run can
+    occupy a worker thread for the better part of a minute (see
+    course_photo_scoring_job, which passes 1).
+    """
     parts: list[dict] = [{"text": CRITERIA_PROMPT}]
     for reference_data, reference_content_type in reference_images:
         parts.append({"text": "REFERENCE GOOD EXAMPLE:"})
@@ -86,33 +94,67 @@ def score_course_photo(
     }
     response = request_with_retries(
         client, "POST", GEMINI_GENERATE_URL.format(model=model),
-        max_retries=MAX_TRANSIENT_RETRIES,
+        max_retries=max_retries,
         headers={"x-goog-api-key": api_key},
         json=payload,
     )
     response.raise_for_status()
-    output_text = _gemini_output_text(response.json())
-    parsed = json.loads(output_text)
     try:
-        score = int(parsed["score"])
-    except (TypeError, ValueError) as exc:
-        # The requested JSON schema constrains "score" to an integer, but
-        # Gemini isn't guaranteed to honor it -- treat a malformed score the
-        # same as any other scoring failure (logged and skipped by the
-        # caller) instead of crashing the whole batch run.
-        raise PhotoScoringError(f"invalid_score: {parsed.get('score')!r}") from exc
-    return PhotoScore(score=score, reasons=[str(r) for r in parsed.get("reasons", [])])
+        raw_body = response.json()
+    except Exception as exc:
+        raise PhotoScoringError("invalid_json_envelope") from exc
+    output_text = _gemini_output_text(raw_body)
+    try:
+        parsed = json.loads(output_text)
+    except Exception as exc:
+        raise PhotoScoringError("invalid_json_output") from exc
+
+    if not isinstance(parsed, dict):
+        raise PhotoScoringError(f"invalid_output_shape: {type(parsed).__name__}")
+
+    raw_score = parsed.get("score")
+    if not isinstance(raw_score, int) or isinstance(raw_score, bool):
+        raise PhotoScoringError(f"invalid_score: {raw_score!r}")
+    if not (0 <= raw_score <= 10):
+        raise PhotoScoringError(f"score_out_of_range: {raw_score}")
+
+    raw_reasons = parsed.get("reasons")
+    if not isinstance(raw_reasons, list) or not (1 <= len(raw_reasons) <= 3):
+        raise PhotoScoringError(f"invalid_reasons: {raw_reasons!r}")
+
+    validated_reasons: list[str] = []
+    for r in raw_reasons:
+        if not isinstance(r, str):
+            raise PhotoScoringError(f"invalid_reason_item: {r!r}")
+        cleaned = r.strip()
+        if not cleaned or len(cleaned) > 200:
+            raise PhotoScoringError(f"invalid_reason_length: {r!r}")
+        validated_reasons.append(cleaned)
+
+    return PhotoScore(score=raw_score, reasons=validated_reasons)
 
 
-def _gemini_output_text(body: dict) -> str:
-    prompt_feedback = body.get("promptFeedback") or {}
-    if prompt_feedback.get("blockReason"):
+def _gemini_output_text(body: object) -> str:
+    if not isinstance(body, dict):
+        raise PhotoScoringError("invalid_response_envelope")
+    prompt_feedback = body.get("promptFeedback")
+    if isinstance(prompt_feedback, dict) and prompt_feedback.get("blockReason"):
         raise PhotoScoringError("provider_refusal")
-    for candidate in body.get("candidates", []):
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list):
+        raise PhotoScoringError("missing_output")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
         if candidate.get("finishReason") not in {None, "STOP"}:
             raise PhotoScoringError("incomplete_response")
-        content = candidate.get("content") or {}
-        for part in content.get("parts", []):
-            if isinstance(part.get("text"), str):
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
                 return part["text"]
     raise PhotoScoringError("missing_output")

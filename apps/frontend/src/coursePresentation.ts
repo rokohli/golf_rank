@@ -91,10 +91,14 @@ export function attributedCourseImage(course: Course): ImageSourcePropType | und
     if (aspectDelta !== 0) {
       return aspectDelta
     }
+    // Oldest wins, mirroring CourseImageRepository._rank_key: the quality
+    // scorer emits integers, so ties are common, and newest-first would rotate
+    // the hero to the most recent equally-scored upload every time one landed.
+    // Preferring the incumbent means only a strictly higher score displaces it.
     const createdA = a.created_at ? Date.parse(a.created_at) : 0
     const createdB = b.created_at ? Date.parse(b.created_at) : 0
     if (createdA !== createdB) {
-      return createdB - createdA
+      return createdA - createdB
     }
     return a.id - b.id
   })

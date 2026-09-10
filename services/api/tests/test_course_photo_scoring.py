@@ -161,7 +161,7 @@ def test_score_course_photos_apply_clears_unscored_hero_images(monkeypatch) -> N
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
@@ -274,7 +274,7 @@ def test_score_course_photos_apply_quality_floor_preserves_unscored_photos(monke
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
@@ -362,7 +362,7 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
     monkeypatch.setattr(script, "make_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(script, "REFERENCE_COURSE_IDS", [210])
     monkeypatch.setattr(script, "REQUEST_DELAY_SECONDS", 0.0)
-    monkeypatch.setattr(script, "_fetch", lambda client, url: (b"bytes", "image/jpeg"))
+    monkeypatch.setattr(script, "fetch_image", lambda client, url: (b"bytes", "image/jpeg"))
 
     def mock_score(client, *, api_key, model, image_data, image_content_type, reference_images):
         from app.course_photo_scoring import PhotoScore
@@ -386,3 +386,127 @@ def test_score_course_photos_isolates_scoring_failures_per_candidate(monkeypatch
         assert images[0].is_hero is False
         assert images[1].is_hero is True
 
+
+def test_score_course_photo_accepts_boundary_scores() -> None:
+    for valid_score in (0, 10):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _gemini_response(valid_score, ["valid reason"])
+
+        result = score_course_photo(
+            _client(handler),
+            api_key="test-key",
+            model="gemini-2.5-flash-lite",
+            image_data=b"img",
+            image_content_type="image/jpeg",
+            reference_images=[],
+        )
+        assert result.score == valid_score
+        assert result.reasons == ["valid reason"]
+
+
+def test_score_course_photo_rejects_invalid_scores() -> None:
+    import json
+    import pytest
+
+    invalid_scores = [
+        -1,
+        11,
+        99,
+        100,
+        8.5,
+        "8",
+        "10",
+        True,
+        False,
+        None,
+    ]
+
+    for invalid in invalid_scores:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": json.dumps({"score": invalid, "reasons": ["ok"]})}]},
+                }],
+            })
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )
+
+
+def test_score_course_photo_rejects_invalid_reasons() -> None:
+    import json
+    import pytest
+
+    invalid_reasons = [
+        [],  # 0 items
+        ["one", "two", "three", "four"],  # > 3 items
+        "not-a-list",
+        [123],
+        [""],  # empty string
+        ["   "],  # whitespace only
+        ["a" * 201],  # exceeds length
+    ]
+
+    for reasons in invalid_reasons:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": json.dumps({"score": 8, "reasons": reasons})}]},
+                }],
+            })
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )
+
+
+def test_score_course_photo_handles_malformed_envelope_and_json() -> None:
+    import pytest
+
+    malformed_responses = [
+        # Non-JSON body
+        httpx.Response(200, text="<html>502 Bad Gateway</html>", headers={"content-type": "text/html"}),
+        # Top-level list
+        httpx.Response(200, json=[{"candidates": []}]),
+        # candidates not a list
+        httpx.Response(200, json={"candidates": "invalid"}),
+        # candidates containing non-dict items
+        httpx.Response(200, json={"candidates": ["not-a-dict", 123]}),
+        # candidate with non-dict content
+        httpx.Response(200, json={"candidates": [{"content": "string-content"}]}),
+        # parts not a list
+        httpx.Response(200, json={"candidates": [{"content": {"parts": "not-a-list"}}]}),
+        # parts containing non-dict items
+        httpx.Response(200, json={"candidates": [{"content": {"parts": ["not-a-dict", 123]}}]}),
+        # promptFeedback is not a dict
+        httpx.Response(200, json={"promptFeedback": "blocked", "candidates": []}),
+    ]
+
+    for resp in malformed_responses:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return resp
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )

@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { deleteAccount, getProfile } from '../src/api/client'
+import { useAdminAccess } from '../src/auth/useAdminAccess'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { ProductScreen, ScreenHeader } from '../src/components/ProductUI'
@@ -14,6 +15,7 @@ export default function Settings() {
   const router = useRouter()
   const { signOut } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
+  const { isAdmin } = useAdminAccess()
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -102,6 +104,14 @@ export default function Settings() {
         <SettingsRow icon="download" label="Download my data" meta="JSON export" onPress={() => router.push('/data-export' as never)} />
         <SettingsRow icon="help-circle" label="Help & support" onPress={() => void Linking.openURL('mailto:support@golfrank.app?subject=GolfRank%20support')} />
       </SettingsSection>
+
+      {/* Discovery only -- the admin routes 404 server-side for everyone else,
+          which is the actual gate. */}
+      {isAdmin ? (
+        <SettingsSection title="MODERATION">
+          <SettingsRow icon="image" label="Photo moderation" onPress={() => router.push('/admin/photos' as never)} />
+        </SettingsSection>
+      ) : null}
 
       <Pressable accessibilityRole="button" onPress={confirmSignOut} style={({ pressed }) => [styles.signOut, pressed && styles.pressed]}><Feather name="log-out" size={18} color={colors.error} /><Text style={styles.signOutText}>Sign out</Text></Pressable>
 

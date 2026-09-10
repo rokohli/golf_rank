@@ -28,6 +28,10 @@ services:
         sync: false
       - key: CLERK_SECRET_KEY
         sync: false
+      # Comma-separated clerk:<user_id> subjects allowed to moderate course
+      # photos. Empty means nobody -- require_admin fails closed.
+      - key: ADMIN_CLERK_SUBJECTS
+        sync: false
       - key: REDIS_URL
         fromService:
           name: fairway-rate-limits
@@ -71,6 +75,12 @@ services:
         value: gemini
       - key: GEMINI_API_KEY
         sync: false
+      # Ship false, run scripts/score_pending_course_photos.py against the
+      # environment first, review the score distribution, then enable.
+      - key: COURSE_PHOTO_AUTOSCORE_ON_CONFIRM
+        value: "false"
+      - key: COURSE_PHOTO_AUTO_APPROVE_SCORE
+        value: "8"
       - key: AI_PLANNER_DATA_TIER
         value: paid
       - key: AI_PLANNER_ALLOWED_SUBJECTS

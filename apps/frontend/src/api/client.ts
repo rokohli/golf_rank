@@ -1,5 +1,7 @@
 import { ApiHeaders } from '../auth/useAuthToken'
 import {
+  AdminCoursePhoto,
+  AdminCoursePhotoPage,
   AIGolfPlan,
   Activity,
   AppNotification,
@@ -89,6 +91,73 @@ export async function getProfile(headers: ApiHeaders): Promise<OnboardingPrefere
   })
   if (!response.ok) throw await responseError(response, 'Unable to load profile. Please complete onboarding first.')
   return response.json()
+}
+
+export async function getAdminAccess(headers: ApiHeaders): Promise<boolean> {
+  const response = await fetch(`${baseUrl}/api/v1/me/admin`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to check admin access.')
+  const payload = await response.json() as { is_admin?: unknown }
+  return payload.is_admin === true
+}
+
+export async function getAdminCoursePhotos(
+  status: string,
+  cursor: number | null,
+  headers: ApiHeaders,
+): Promise<AdminCoursePhotoPage> {
+  const params = new URLSearchParams({ status })
+  if (cursor !== null) params.set('cursor', String(cursor))
+  const response = await fetch(`${baseUrl}/api/v1/admin/course-photos?${params.toString()}`, { headers })
+  // 404 is what a non-admin sees -- the endpoints are deliberately
+  // indistinguishable from missing routes, so surface it as a lack of access
+  // rather than as a missing page.
+  if (!response.ok) throw await responseError(response, 'Unable to load the moderation queue.')
+  return response.json()
+}
+
+export async function approveCoursePhoto(imageId: number, headers: ApiHeaders): Promise<AdminCoursePhoto> {
+  const response = await fetch(`${baseUrl}/api/v1/admin/course-photos/${imageId}/approve`, {
+    method: 'POST',
+    headers,
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to approve this photo.')
+  return response.json()
+}
+
+export async function rejectCoursePhoto(
+  imageId: number,
+  reason: string | null,
+  headers: ApiHeaders,
+): Promise<AdminCoursePhoto> {
+  const response = await fetch(`${baseUrl}/api/v1/admin/course-photos/${imageId}/reject`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to reject this photo.')
+  return response.json()
+}
+
+export async function setCoursePhotoFeatured(
+  imageId: number,
+  featured: boolean,
+  headers: ApiHeaders,
+): Promise<AdminCoursePhoto> {
+  const response = await fetch(`${baseUrl}/api/v1/admin/course-photos/${imageId}/feature`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ featured }),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to update the featured photo.')
+  return response.json()
+}
+
+export async function deleteCoursePhoto(imageId: number, headers: ApiHeaders): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/admin/course-photos/${imageId}`, {
+    method: 'DELETE',
+    headers,
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to delete this photo.')
 }
 
 export async function searchCourses(filters?: OnboardingPreferences | CourseSearchFilters): Promise<Course[]> {

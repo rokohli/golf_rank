@@ -479,3 +479,95 @@ def test_confirm_rejects_replay_from_a_different_user() -> None:
         f"/api/v1/courses/{course_id}/photos/confirm", json={"storage_key": storage_key}, headers=other_headers,
     )
     assert second.status_code == 403
+
+
+def _scoring_client(*, enabled: bool, gemini_api_key: str | None = "test-key") -> tuple[TestClient, list]:
+    """A client whose confirm path records scheduled background tasks instead
+    of running them, so the scheduling decision can be asserted on its own."""
+    app = create_app(Settings(
+        wikimedia_live_lookup_enabled=False,
+        course_image_base_url="https://cdn.example",
+        course_photo_autoscore_on_confirm=enabled,
+        gemini_api_key=gemini_api_key,
+    ))
+    app.state.object_storage = FakeObjectStorage()
+    scheduled: list = []
+
+    import app.course_photo_uploads as uploads
+
+    original = uploads.run_scoring_task
+    uploads.run_scoring_task = lambda application, image_id: scheduled.append(image_id)
+    client = TestClient(app)
+    client.__dict__["_restore_scoring"] = lambda: setattr(uploads, "run_scoring_task", original)
+    return client, scheduled
+
+
+def _confirm_one(client: TestClient) -> tuple[int, str]:
+    course_id = _pebble_id(client)
+    upload = client.post(
+        f"/api/v1/courses/{course_id}/photos/upload-url",
+        json={"content_type": "image/jpeg"}, headers=HEADERS,
+    ).json()
+    client.app.state.object_storage.objects[upload["storage_key"]] = ObjectMeta(
+        content_type="image/jpeg", content_length=4096
+    )
+    return course_id, upload["storage_key"]
+
+
+def test_confirm_schedules_scoring_when_enabled() -> None:
+    client, scheduled = _scoring_client(enabled=True)
+    try:
+        course_id, key = _confirm_one(client)
+        response = client.post(
+            f"/api/v1/courses/{course_id}/photos/confirm",
+            json={"storage_key": key}, headers=HEADERS,
+        )
+
+        assert response.status_code == 201
+        assert scheduled == [response.json()["id"]]
+    finally:
+        client._restore_scoring()
+
+
+def test_confirm_schedules_nothing_when_disabled() -> None:
+    client, scheduled = _scoring_client(enabled=False)
+    try:
+        course_id, key = _confirm_one(client)
+        client.post(
+            f"/api/v1/courses/{course_id}/photos/confirm",
+            json={"storage_key": key}, headers=HEADERS,
+        )
+
+        assert scheduled == []
+    finally:
+        client._restore_scoring()
+
+
+def test_confirm_schedules_nothing_without_an_api_key() -> None:
+    client, scheduled = _scoring_client(enabled=False, gemini_api_key=None)
+    try:
+        course_id, key = _confirm_one(client)
+        client.post(
+            f"/api/v1/courses/{course_id}/photos/confirm",
+            json={"storage_key": key}, headers=HEADERS,
+        )
+
+        assert scheduled == []
+    finally:
+        client._restore_scoring()
+
+
+def test_a_replayed_confirm_does_not_schedule_scoring_again() -> None:
+    """The idempotent-replay path returns before the scheduling hook, so a
+    retried confirm must not spend a second provider call."""
+    client, scheduled = _scoring_client(enabled=True)
+    try:
+        course_id, key = _confirm_one(client)
+        body = {"storage_key": key}
+        first = client.post(f"/api/v1/courses/{course_id}/photos/confirm", json=body, headers=HEADERS)
+        second = client.post(f"/api/v1/courses/{course_id}/photos/confirm", json=body, headers=HEADERS)
+
+        assert first.json()["id"] == second.json()["id"]
+        assert scheduled == [first.json()["id"]]
+    finally:
+        client._restore_scoring()
