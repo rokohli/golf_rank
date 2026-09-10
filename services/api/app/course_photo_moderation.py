@@ -15,6 +15,8 @@ curated by the offline scripts (scripts/refresh_course_photos.py,
 scripts/score_course_photos.py) and must never be mutated from here.
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,6 +54,24 @@ def _admin_photo_out(
     uploader_username_val: str | None = None,
     moderator_username_val: str | None = None,
 ) -> AdminCoursePhotoOut:
+    now = datetime.now(timezone.utc)
+    lease_seconds = 300
+    is_claimed = False
+    if image.scoring_claimed_at is not None:
+        claimed_at = (
+            image.scoring_claimed_at
+            if image.scoring_claimed_at.tzinfo
+            else image.scoring_claimed_at.replace(tzinfo=timezone.utc)
+        )
+        is_claimed = (now - claimed_at).total_seconds() < lease_seconds
+
+    is_scoring = is_claimed and image.scored_at is None and image.quality_score is None
+    scoring_exhausted = (
+        (image.scoring_attempts or 0) >= settings.course_photo_scoring_max_attempts
+        and image.scored_at is None
+        and image.quality_score is None
+    )
+
     return AdminCoursePhotoOut(
         image=image_out(session, settings, image, uploaded_by_username=uploader_username_val),
         course_id=image.course_id,
@@ -65,6 +85,8 @@ def _admin_photo_out(
         scored_at=image.scored_at.isoformat() if image.scored_at else None,
         scoring_attempts=image.scoring_attempts or 0,
         course_hero_locked=hero_locked,
+        is_scoring=is_scoring,
+        scoring_exhausted=scoring_exhausted,
     )
 
 

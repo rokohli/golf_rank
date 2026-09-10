@@ -40,6 +40,8 @@ export type AdminCoursePhoto = {
   // The course already has a human-featured hero, so the scorer deliberately
   // skipped this photo -- distinct from "not scored yet".
   course_hero_locked?: boolean
+  is_scoring?: boolean
+  scoring_exhausted?: boolean
 }
 
 export type AdminCoursePhotoPage = {

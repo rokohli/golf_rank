@@ -602,14 +602,25 @@ describe('Photo moderation', () => {
     expect(await screen.findByText('Approved Course')).toBeOnTheScreen()
   })
 
-  it('reports a failed scoring attempt when attempts > 0 even if scored_at is null', async () => {
+  it('reports a failed scoring attempt when scoring_exhausted is true even if scored_at is null', async () => {
     mockGetAdminCoursePhotos.mockResolvedValue({
-      items: [photo({ scored_at: null, scoring_attempts: 3 })],
+      items: [photo({ scored_at: null, scoring_attempts: 3, scoring_exhausted: true })],
       next_cursor: null,
     })
 
     render(<AdminPhotos />)
 
     expect(await screen.findByText('Scoring failed after 3 attempt(s).')).toBeOnTheScreen()
+  })
+
+  it('reports scoring in progress when is_scoring is true', async () => {
+    mockGetAdminCoursePhotos.mockResolvedValue({
+      items: [photo({ scored_at: null, scoring_attempts: 1, is_scoring: true })],
+      next_cursor: null,
+    })
+
+    render(<AdminPhotos />)
+
+    expect(await screen.findByText('Scoring in progress...')).toBeOnTheScreen()
   })
 })

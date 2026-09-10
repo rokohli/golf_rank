@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -77,6 +78,8 @@ def _add_photo(
     quality_score: float | None = None,
     key: str | None = None,
     round_id: int | None = None,
+    attempts: int = 0,
+    scoring_claimed_at: datetime | None = None,
 ) -> int:
     """Inserts a photo directly -- the upload path is covered by its own tests."""
     with client.app.state.session_factory() as session:
@@ -90,6 +93,8 @@ def _add_photo(
             moderation_status=status,
             quality_score=quality_score,
             round_id=round_id,
+            scoring_attempts=attempts,
+            scoring_claimed_at=scoring_claimed_at,
         )
         session.add(image)
         session.commit()
@@ -208,6 +213,24 @@ def test_queue_reports_whether_the_courses_hero_is_locked() -> None:
                is_hero=True, key="featured.jpg")
 
     assert client.get(BASE, headers=ADMIN).json()["items"][0]["course_hero_locked"] is True
+
+
+def test_queue_reports_is_scoring_and_scoring_exhausted() -> None:
+    client = _client()
+    course_id = _course_id(client)
+    now = datetime.now(timezone.utc)
+
+    id1 = _add_photo(client, course_id, key="claiming.jpg", attempts=1, scoring_claimed_at=now)
+    id2 = _add_photo(client, course_id, key="exhausted.jpg", attempts=3)
+
+    items = client.get(BASE, headers=ADMIN).json()["items"]
+    by_id = {item["image"]["id"]: item for item in items}
+
+    assert by_id[id1]["is_scoring"] is True
+    assert by_id[id1]["scoring_exhausted"] is False
+
+    assert by_id[id2]["is_scoring"] is False
+    assert by_id[id2]["scoring_exhausted"] is True
 
 
 # --- approve --------------------------------------------------------------

@@ -157,6 +157,8 @@ class AdminCoursePhotoOut(BaseModel):
     # which case the scorer deliberately skips this photo -- lets the UI show
     # "not scored (hero locked)" instead of an indistinguishable "not scored".
     course_hero_locked: bool = False
+    is_scoring: bool = False
+    scoring_exhausted: bool = False
 
 
 class AdminCoursePhotoPage(BaseModel):

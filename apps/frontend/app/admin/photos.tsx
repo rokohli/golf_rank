@@ -349,7 +349,8 @@ function ScoreSummary({ photo }: { photo: AdminCoursePhoto }) {
   const score = photo.image.quality_score
   if (score === null || score === undefined) {
     if (photo.course_hero_locked) return <Text style={styles.meta}>Not scored — this course already has a featured hero.</Text>
-    if (photo.scored_at || (photo.scoring_attempts ?? 0) > 0) return <Text style={styles.meta}>Scoring failed after {photo.scoring_attempts ?? 0} attempt(s).</Text>
+    if (photo.is_scoring) return <Text style={styles.meta}>Scoring in progress...</Text>
+    if (photo.scored_at || photo.scoring_exhausted) return <Text style={styles.meta}>Scoring failed after {photo.scoring_attempts ?? 0} attempt(s).</Text>
     return <Text style={styles.meta}>Not scored yet.</Text>
   }
   return (

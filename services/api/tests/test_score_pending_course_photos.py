@@ -200,14 +200,16 @@ def test_rescore_resets_auto_approved_status_and_clears_prior_results(session: S
     pending_photo.quality_score_reasons = ["grainy"]
     session.commit()
 
-    reset_for_rescore(session, auto_approved)
-    reset_for_rescore(session, pending_photo)
+    reset_for_rescore(session, auto_approved.id)
+    reset_for_rescore(session, pending_photo.id)
 
     session.refresh(auto_approved)
     session.refresh(pending_photo)
 
     assert auto_approved.moderation_status == CourseImageModeration.PENDING
     assert auto_approved.moderation_action is None
+    assert auto_approved.moderated_at is None
+    assert auto_approved.moderation_reason is None
     assert auto_approved.scored_at is None
     assert auto_approved.scoring_attempts == 0
     assert auto_approved.quality_score is None
@@ -218,6 +220,33 @@ def test_rescore_resets_auto_approved_status_and_clears_prior_results(session: S
     assert pending_photo.scoring_attempts == 0
     assert pending_photo.quality_score is None
     assert pending_photo.quality_score_reasons is None
+
+
+def test_rescore_does_not_reset_human_moderated_photo(session: Session) -> None:
+    mod = User(provider_subject="mod_safety")
+    session.add(mod)
+    session.commit()
+
+    course = _course(session)
+    human_approved = _photo(
+        session, course, key="human.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.APPROVED,
+        moderated_by_user_id=mod.id,
+        scored_at=SCORED_AT,
+    )
+    human_approved.quality_score = 9.0
+    session.commit()
+
+    # Attempting to reset a human-moderated row returns False and changes nothing
+    reset_ok = reset_for_rescore(session, human_approved.id)
+    assert reset_ok is False
+
+    session.refresh(human_approved)
+    assert human_approved.moderation_status == CourseImageModeration.APPROVED
+    assert human_approved.moderation_action == CourseImageModerationAction.APPROVED
+    assert human_approved.moderated_by_user_id == mod.id
+    assert human_approved.quality_score == 9.0
 
 
 def test_rescore_does_not_demote_if_references_fail(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

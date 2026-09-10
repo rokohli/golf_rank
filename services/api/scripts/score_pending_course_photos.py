@@ -127,25 +127,51 @@ def photos_to_score(
     return selected, skipped_count
 
 
-def reset_for_rescore(session: Session, image: CourseImage) -> None:
+def reset_for_rescore(session: Session, image_id: int) -> bool:
     """Reset scoring state and prior results for a photo being rescored.
 
+    Re-fetches and locks the row so human moderation decisions made after photos_to_score
+    loaded the batch are never overwritten.
     Clears scored_at, quality_score, quality_score_reasons, and resets scoring_attempts to 0.
     For automatically approved photos (not moderated by a human), resets moderation_status to
-    PENDING and clears moderation_action.
+    PENDING and clears moderation_action, moderated_at, and moderation_reason.
+    Returns True if the photo was reset and is eligible to be scored, False if skipped.
     """
+    image = session.scalar(
+        select(CourseImage)
+        .where(CourseImage.id == image_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if image is None:
+        session.rollback()
+        return False
+
+    # Never touch a human-moderated row
+    if image.moderated_by_user_id is not None:
+        session.rollback()
+        return False
+
+    is_pending = image.moderation_status == CourseImageModeration.PENDING
+    is_auto_approved = (
+        image.moderation_status == CourseImageModeration.APPROVED
+        and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
+    )
+    if not (is_pending or is_auto_approved):
+        session.rollback()
+        return False
+
     image.scored_at = None
     image.scoring_attempts = 0
     image.quality_score = None
     image.quality_score_reasons = None
-    if (
-        image.moderation_status == CourseImageModeration.APPROVED
-        and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
-        and image.moderated_by_user_id is None
-    ):
+    if is_auto_approved:
         image.moderation_status = CourseImageModeration.PENDING
         image.moderation_action = None
+        image.moderated_at = None
+        image.moderation_reason = None
     session.commit()
+    return True
 
 
 def main() -> int:
@@ -221,7 +247,9 @@ def main() -> int:
                 if repository.has_featured_hero(session, image.course_id):
                     continue
                 if args.rescore:
-                    reset_for_rescore(session, image)
+                    if not reset_for_rescore(session, image.id):
+                        continue
+                    session.refresh(image)
                 if not should_score(session, settings, image):
                     continue
                 before = image.moderation_status
