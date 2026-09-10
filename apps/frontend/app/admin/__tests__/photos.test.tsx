@@ -623,4 +623,86 @@ describe('Photo moderation', () => {
 
     expect(await screen.findByText('Scoring in progress...')).toBeOnTheScreen()
   })
+
+  it('sequences concurrent feature results per course and drops older responses arriving last', async () => {
+    let resolveFirst!: (val: unknown) => void
+    let resolveSecond!: (val: unknown) => void
+    const firstPromise = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondPromise = new Promise((resolve) => {
+      resolveSecond = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({ items: [], next_cursor: null })
+      .mockResolvedValueOnce({
+        items: [
+          photo({
+            image: { ...photo().image, id: 101, is_hero: false },
+            course_id: 42,
+            course_name: 'Pebble Beach',
+            moderation_status: 'approved',
+          }),
+          photo({
+            image: { ...photo().image, id: 102, is_hero: false },
+            course_id: 42,
+            course_name: 'Pebble Beach',
+            moderation_status: 'approved',
+          }),
+        ],
+        next_cursor: null,
+      })
+
+    mockSetFeatured
+      .mockImplementationOnce(() => firstPromise)
+      .mockImplementationOnce(() => secondPromise)
+
+    render(<AdminPhotos />)
+    fireEvent.press(screen.getByText('Approved'))
+    expect(await screen.findAllByText('Feature')).toHaveLength(2)
+
+    // Feature photo 101 first, then feature photo 102
+    const featureButtons = screen.getAllByText('Feature')
+    fireEvent.press(featureButtons[0])
+    fireEvent.press(featureButtons[1])
+
+    // Resolve second feature action first (the later winner)
+    await act(async () => {
+      resolveSecond(
+        photo({
+          image: { ...photo().image, id: 102, is_hero: true },
+          course_id: 42,
+          course_name: 'Pebble Beach',
+          moderation_status: 'approved',
+          moderation_action: 'featured',
+          moderated_by_username: 'admin2',
+          moderated_at: '2026-09-10T05:00:02Z',
+        })
+      )
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('Featured by @admin2')).toBeOnTheScreen()
+
+    // Resolve first feature action later (stale response arriving last)
+    await act(async () => {
+      resolveFirst(
+        photo({
+          image: { ...photo().image, id: 101, is_hero: true },
+          course_id: 42,
+          course_name: 'Pebble Beach',
+          moderation_status: 'approved',
+          moderation_action: 'featured',
+          moderated_by_username: 'admin1',
+          moderated_at: '2026-09-10T05:00:01Z',
+        })
+      )
+      await Promise.resolve()
+    })
+
+    // The later winner (photo 102) remains featured; stale photo 101 response is discarded
+    expect(screen.getByText('Featured by @admin2')).toBeOnTheScreen()
+    expect(screen.queryByText('Featured by @admin1')).not.toBeOnTheScreen()
+  })
 })

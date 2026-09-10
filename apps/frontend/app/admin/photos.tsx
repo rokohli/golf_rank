@@ -45,10 +45,14 @@ export default function AdminPhotos() {
 
   const requestIdRef = useRef(0)
   const loadingMoreRef = useRef(false)
+  const courseMutationGenRef = useRef<Map<number, number>>(new Map())
+  const courseAppliedGenRef = useRef<Map<number, number>>(new Map())
 
   const load = useCallback(async (nextStatus: Status) => {
     const reqId = ++requestIdRef.current
     loadingMoreRef.current = false
+    courseMutationGenRef.current.clear()
+    courseAppliedGenRef.current.clear()
     setLoading(true)
     setLoadingMore(false)
     setError(null)
@@ -108,6 +112,18 @@ export default function AdminPhotos() {
       if (updated.moderation_status !== status) {
         return current.filter((photo) => photo.image.id !== updated.image.id)
       }
+      const hasNewerHero = updated.image.is_hero && current.some(
+        (photo) =>
+          photo.course_id === updated.course_id &&
+          photo.image.id !== updated.image.id &&
+          photo.image.is_hero &&
+          photo.moderated_at &&
+          updated.moderated_at &&
+          new Date(photo.moderated_at).getTime() > new Date(updated.moderated_at).getTime()
+      )
+      if (hasNewerHero) {
+        return current
+      }
       return current.map((photo) => {
         if (photo.image.id === updated.image.id) {
           return updated
@@ -129,14 +145,23 @@ export default function AdminPhotos() {
 
   const run = useCallback(async (
     imageId: number,
+    courseId: number,
     action: (headers: Awaited<ReturnType<typeof getAuthHeaders>>) => Promise<AdminCoursePhoto | void>,
   ) => {
     const reqId = requestIdRef.current
+    const gen = (courseMutationGenRef.current.get(courseId) ?? 0) + 1
+    courseMutationGenRef.current.set(courseId, gen)
+
     setBusyIds((prev) => new Set(prev).add(imageId))
     setError(null)
     try {
       const updated = await action(await getAuthHeaders())
       if (reqId !== requestIdRef.current) return
+      const lastApplied = courseAppliedGenRef.current.get(courseId) ?? 0
+      if (gen < lastApplied) {
+        return
+      }
+      courseAppliedGenRef.current.set(courseId, gen)
       if (updated) applyResult(updated)
       else setPhotos((current) => current.filter((photo) => photo.image.id !== imageId))
     } catch (reason) {
@@ -162,7 +187,7 @@ export default function AdminPhotos() {
           text: 'Reject',
           style: 'destructive',
           onPress: () => {
-            void run(photo.image.id, (headers) => rejectCoursePhoto(photo.image.id, null, headers))
+            void run(photo.image.id, photo.course_id, (headers) => rejectCoursePhoto(photo.image.id, null, headers))
           },
         },
       ],
@@ -179,7 +204,7 @@ export default function AdminPhotos() {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            void run(photo.image.id, (headers) => deleteCoursePhoto(photo.image.id, headers))
+            void run(photo.image.id, photo.course_id, (headers) => deleteCoursePhoto(photo.image.id, headers))
           },
         },
       ],
@@ -251,10 +276,10 @@ export default function AdminPhotos() {
         renderItem={({ item }) => (
           <PhotoCard
             busy={busyIds.has(item.image.id)}
-            onApprove={() => { void run(item.image.id, (headers) => approveCoursePhoto(item.image.id, headers)) }}
+            onApprove={() => { void run(item.image.id, item.course_id, (headers) => approveCoursePhoto(item.image.id, headers)) }}
             onDelete={() => confirmDelete(item)}
             onFeature={() => {
-              void run(item.image.id, (headers) => setCoursePhotoFeatured(item.image.id, !item.image.is_hero, headers))
+              void run(item.image.id, item.course_id, (headers) => setCoursePhotoFeatured(item.image.id, !item.image.is_hero, headers))
             }}
             onOpenCourse={() => router.push(`/course/${item.course_id}` as never)}
             onReject={() => confirmReject(item)}
