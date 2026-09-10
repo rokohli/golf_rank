@@ -11,7 +11,9 @@ from app.models import (
     Course,
     CourseImage,
     CourseImageModeration,
+    CourseImageModerationAction,
     CourseImageSource,
+    User,
 )
 from scripts.score_pending_course_photos import main, photos_to_score
 
@@ -46,11 +48,14 @@ def _course(session: Session, name: str = "Course") -> Course:
 def _photo(session: Session, course: Course, *, key: str,
            status: str = CourseImageModeration.PENDING,
            source_type: str = CourseImageSource.USER,
+           action: str | None = None,
+           moderated_by_user_id: int | None = None,
            scored_at=None, attempts: int = 0, is_hero: bool = False) -> CourseImage:
     image = CourseImage(
         course_id=course.id, storage_key=key,
         position=CourseImageRepository().next_position(session, course.id),
         is_hero=is_hero, source_type=source_type, moderation_status=status,
+        moderation_action=action, moderated_by_user_id=moderated_by_user_id,
         scored_at=scored_at, scoring_attempts=attempts,
     )
     session.add(image)
@@ -118,6 +123,98 @@ def test_rescore_reselects_already_scored_photos(session: Session) -> None:
 
     rescored, _ = photos_to_score(session, _settings(), rescore=True, course_ids=[course.id])
     assert [image.id for image in rescored] == [already.id]
+
+
+def test_rescore_includes_auto_approved_photos_without_moderator(session: Session) -> None:
+    mod = User(provider_subject="mod_1")
+    session.add(mod)
+    session.commit()
+
+    course = _course(session)
+    auto_approved = _photo(
+        session, course, key="auto.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.AUTO_APPROVED,
+        moderated_by_user_id=None,
+        scored_at=SCORED_AT,
+    )
+    human_approved = _photo(
+        session, course, key="human.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.APPROVED,
+        moderated_by_user_id=mod.id,
+        scored_at=SCORED_AT,
+    )
+    human_featured = _photo(
+        session, course, key="featured.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.FEATURED,
+        moderated_by_user_id=mod.id,
+        scored_at=SCORED_AT,
+    )
+    human_rejected = _photo(
+        session, course, key="rejected.jpg",
+        status=CourseImageModeration.REJECTED,
+        action=CourseImageModerationAction.REJECTED,
+        moderated_by_user_id=mod.id,
+    )
+    pending_photo = _photo(session, course, key="pending.jpg", scored_at=SCORED_AT)
+
+    # In default run, neither auto_approved nor human_approved nor already scored pending is selected
+    default_run, _ = photos_to_score(session, _settings())
+    assert default_run == []
+
+    # In rescore run, auto_approved and pending are included, but human-moderated photos are excluded
+    rescored, _ = photos_to_score(session, _settings(), rescore=True, course_ids=[course.id])
+    rescored_ids = {image.id for image in rescored}
+    assert auto_approved.id in rescored_ids
+    assert pending_photo.id in rescored_ids
+    assert human_approved.id not in rescored_ids
+    assert human_featured.id not in rescored_ids
+    assert human_rejected.id not in rescored_ids
+
+
+def test_rescore_resets_auto_approved_status_to_pending(session: Session) -> None:
+    course = _course(session)
+    auto_approved = _photo(
+        session, course, key="auto.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.AUTO_APPROVED,
+        moderated_by_user_id=None,
+        scored_at=SCORED_AT,
+        attempts=2,
+    )
+    pending_photo = _photo(
+        session, course, key="pending.jpg",
+        status=CourseImageModeration.PENDING,
+        scored_at=SCORED_AT,
+        attempts=3,
+    )
+
+    pending, _ = photos_to_score(session, _settings(), rescore=True, course_ids=[course.id])
+    for image in pending:
+        image.scored_at = None
+        image.scoring_attempts = 0
+        if (
+            image.moderation_status == CourseImageModeration.APPROVED
+            and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
+            and image.moderated_by_user_id is None
+        ):
+            image.moderation_status = CourseImageModeration.PENDING
+            image.moderation_action = None
+    session.commit()
+
+    session.refresh(auto_approved)
+    session.refresh(pending_photo)
+
+    assert auto_approved.moderation_status == CourseImageModeration.PENDING
+    assert auto_approved.moderation_action is None
+    assert auto_approved.scored_at is None
+    assert auto_approved.scoring_attempts == 0
+
+    assert pending_photo.moderation_status == CourseImageModeration.PENDING
+    assert pending_photo.scored_at is None
+    assert pending_photo.scoring_attempts == 0
 
 
 def test_rescore_without_course_ids_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:

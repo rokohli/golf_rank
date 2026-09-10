@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import aliased
 
 from app.core.config import Settings
@@ -39,7 +39,12 @@ from app.course_photo_scoring_job import (
 )
 from app.course_photos import WIKIMEDIA_USER_AGENT
 from app.db import make_engine, make_session_factory
-from app.models import CourseImage, CourseImageModeration, CourseImageSource
+from app.models import (
+    CourseImage,
+    CourseImageModeration,
+    CourseImageModerationAction,
+    CourseImageSource,
+)
 
 # Paced well below the provider's limit: a 429 slipped through at 1.0s during
 # the original batch run, so this stays at the same 2.0s the sibling script uses.
@@ -53,7 +58,8 @@ def photos_to_score(
     """The sweeper's selection. Returns (photos, skipped_for_locked_hero).
 
     Kept separate from main() so the selection rules -- which are the part
-    worth getting wrong quietly -- can be tested without a provider.
+    that actually matters for correctness -- are unit-testable against SQLite
+    without faking Gemini or the HTTP client.
     """
     now = datetime.now(timezone.utc)
     lease_cutoff = now - timedelta(seconds=300)
@@ -71,13 +77,13 @@ def photos_to_score(
 
     base_conditions = [
         CourseImage.source_type == CourseImageSource.USER,
-        CourseImage.moderation_status == CourseImageModeration.PENDING,
         or_(
             CourseImage.scoring_claimed_at.is_(None),
             CourseImage.scoring_claimed_at < lease_cutoff,
         ),
     ]
     if not rescore:
+        base_conditions.append(CourseImage.moderation_status == CourseImageModeration.PENDING)
         # scored_at, not quality_score: a failed attempt leaves the score NULL.
         base_conditions.append(CourseImage.scored_at.is_(None))
         # The attempt ceiling is deliberately NOT applied in rescore mode.
@@ -90,6 +96,19 @@ def photos_to_score(
         # resets scoring_attempts for the rows it selects in this mode.
         base_conditions.append(
             CourseImage.scoring_attempts < settings.course_photo_scoring_max_attempts
+        )
+    else:
+        # Rescore includes PENDING rows and automatically-approved rows, but NEVER
+        # rows that were moderated by a human (moderated_by_user_id is set).
+        base_conditions.append(
+            or_(
+                CourseImage.moderation_status == CourseImageModeration.PENDING,
+                and_(
+                    CourseImage.moderation_status == CourseImageModeration.APPROVED,
+                    CourseImage.moderation_action == CourseImageModerationAction.AUTO_APPROVED,
+                    CourseImage.moderated_by_user_id.is_(None),
+                ),
+            )
         )
     if course_ids:
         base_conditions.append(CourseImage.course_id.in_(course_ids))
@@ -165,6 +184,13 @@ def main() -> int:
                 # claim_for_scoring refuse it, so the run would report work it
                 # silently never did.
                 image.scoring_attempts = 0
+                if (
+                    image.moderation_status == CourseImageModeration.APPROVED
+                    and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
+                    and image.moderated_by_user_id is None
+                ):
+                    image.moderation_status = CourseImageModeration.PENDING
+                    image.moderation_action = None
             session.commit()
 
         if not pending:

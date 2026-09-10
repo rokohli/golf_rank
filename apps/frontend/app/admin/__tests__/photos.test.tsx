@@ -450,8 +450,9 @@ describe('Photo moderation', () => {
     // Switch tab to Approved while approve action is in-flight and tab fetch is pending
     fireEvent.press(screen.getByText('Approved'))
 
-    // The photo card should still be busy (not reset by load) while still visible
-    expect(screen.getByLabelText('Applying')).toBeOnTheScreen()
+    // The previous photo queue is cleared immediately so stale cards cannot be manipulated
+    expect(screen.queryByText('Photo In Flight')).not.toBeOnTheScreen()
+    expect(screen.getByLabelText('Loading photos')).toBeOnTheScreen()
 
     // Resolve the in-flight action
     resolveApprove(photo({ image: { ...photo().image, id: 1 }, moderation_status: 'approved' }))
@@ -564,5 +565,45 @@ describe('Photo moderation', () => {
     // Footer loader must still not be present
     expect(screen.queryByLabelText('Loading more photos')).not.toBeOnTheScreen()
     expect(screen.queryByText('Stale Appended Photo')).not.toBeOnTheScreen()
+  })
+
+  it('clears previous tab photos immediately upon switching tabs', async () => {
+    let resolveApproved!: (val: unknown) => void
+    const approvedPromise = new Promise((resolve) => {
+      resolveApproved = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 1 }, course_name: 'Pending Course' })],
+        next_cursor: null,
+      })
+      .mockImplementationOnce(() => approvedPromise)
+
+    render(<AdminPhotos />)
+    expect(await screen.findByText('Pending Course')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByText('Approved'))
+
+    // Existing photos from previous tab are immediately cleared
+    expect(screen.queryByText('Pending Course')).not.toBeOnTheScreen()
+
+    resolveApproved({
+      items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Approved Course', moderation_status: 'approved' })],
+      next_cursor: null,
+    })
+
+    expect(await screen.findByText('Approved Course')).toBeOnTheScreen()
+  })
+
+  it('reports a failed scoring attempt when attempts > 0 even if scored_at is null', async () => {
+    mockGetAdminCoursePhotos.mockResolvedValue({
+      items: [photo({ scored_at: null, scoring_attempts: 3 })],
+      next_cursor: null,
+    })
+
+    render(<AdminPhotos />)
+
+    expect(await screen.findByText('Scoring failed after 3 attempt(s).')).toBeOnTheScreen()
   })
 })
