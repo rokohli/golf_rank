@@ -40,7 +40,7 @@ export default function AdminPhotos() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [appendError, setAppendError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<number | null>(null)
+  const [busyIds, setBusyIds] = useState<ReadonlySet<number>>(() => new Set())
   const [error, setError] = useState<string | null>(null)
 
   const requestIdRef = useRef(0)
@@ -51,6 +51,7 @@ export default function AdminPhotos() {
     setLoading(true)
     setError(null)
     setAppendError(null)
+    setBusyIds(new Set())
     try {
       const page = await getAdminCoursePhotos(nextStatus, null, await getAuthHeaders())
       if (reqId !== requestIdRef.current) return
@@ -124,7 +125,7 @@ export default function AdminPhotos() {
     action: (headers: Awaited<ReturnType<typeof getAuthHeaders>>) => Promise<AdminCoursePhoto | void>,
   ) => {
     const reqId = requestIdRef.current
-    setBusyId(imageId)
+    setBusyIds((prev) => new Set(prev).add(imageId))
     setError(null)
     try {
       const updated = await action(await getAuthHeaders())
@@ -135,7 +136,12 @@ export default function AdminPhotos() {
       if (reqId !== requestIdRef.current) return
       setError(reason instanceof Error ? reason.message : 'That action did not go through.')
     } finally {
-      setBusyId(null)
+      setBusyIds((prev) => {
+        if (!prev.has(imageId)) return prev
+        const next = new Set(prev)
+        next.delete(imageId)
+        return next
+      })
     }
   }, [applyResult, getAuthHeaders])
 
@@ -233,7 +239,7 @@ export default function AdminPhotos() {
         onEndReachedThreshold={0.4}
         renderItem={({ item }) => (
           <PhotoCard
-            busy={busyId === item.image.id}
+            busy={busyIds.has(item.image.id)}
             onApprove={() => { void run(item.image.id, (headers) => approveCoursePhoto(item.image.id, headers)) }}
             onDelete={() => confirmDelete(item)}
             onFeature={() => {

@@ -95,6 +95,7 @@ def _gemini_body(score: int, reasons: list[str]) -> dict:
 
 
 def _client(*, score: int = 9, reasons=("wide fairway",), gemini_status: int = 200,
+            gemini_body: dict | None = None,
             candidate_image_status: int = 200) -> tuple[httpx.Client, list[str]]:
     """Serves image bytes for CDN GETs and a Gemini response for the POST.
 
@@ -111,7 +112,10 @@ def _client(*, score: int = 9, reasons=("wide fairway",), gemini_status: int = 2
                 return httpx.Response(candidate_image_status)
             return httpx.Response(200, content=IMAGE_BYTES, headers={"content-type": "image/jpeg"})
         if gemini_status != 200:
-            return httpx.Response(gemini_status, json={"error": "nope"})
+            return httpx.Response(
+                gemini_status,
+                json=gemini_body if gemini_body is not None else {"error": "nope"},
+            )
         return httpx.Response(200, json=_gemini_body(score, list(reasons)))
 
     return httpx.Client(transport=httpx.MockTransport(handler)), seen
@@ -296,12 +300,15 @@ def test_run_scoring_task_never_raises(session: Session) -> None:
 
 
 def test_a_rejected_image_is_marked_permanently_failed(session: Session) -> None:
-    """A 400 means the provider rejected this specific image -- a corrupt
-    upload, say -- and will reject it identically forever. Marking scored_at
+    """A 400 with an image decoding/corruption error means the provider rejected this
+    specific image and will reject it identically forever. Marking scored_at
     stops it consuming an attempt on every future sweep."""
     _reference_course(session)
     image = _photo(session, _course(session))
-    client, _ = _client(gemini_status=400)
+    client, _ = _client(
+        gemini_status=400,
+        gemini_body={"error": {"message": "Unable to process input image: corrupt JPEG"}},
+    )
 
     _score(session, _settings(), image, client)
 
@@ -309,6 +316,24 @@ def test_a_rejected_image_is_marked_permanently_failed(session: Session) -> None
     assert image.scored_at is not None
     assert image.scoring_attempts == 1
     assert should_score(session, _settings(), image) is False
+
+
+def test_a_generic_400_configuration_error_stays_retryable(session: Session) -> None:
+    """A generic 400 (e.g. invalid parameter/schema) is a provider or configuration
+    defect that affects all photos, so it must stay retryable without stamping scored_at."""
+    _reference_course(session)
+    image = _photo(session, _course(session))
+    client, _ = _client(
+        gemini_status=400,
+        gemini_body={"error": {"message": "Invalid argument: unknown field 'foo'"}},
+    )
+
+    _score(session, _settings(), image, client)
+
+    assert image.quality_score is None
+    assert image.scored_at is None
+    assert image.scoring_attempts == 1
+    assert should_score(session, _settings(), image) is True
 
 
 def test_a_rate_limited_response_stays_retryable(session: Session) -> None:
@@ -326,20 +351,68 @@ def test_a_rate_limited_response_stays_retryable(session: Session) -> None:
 def test_permanent_failure_classification() -> None:
     from app.course_photo_scoring_job import is_permanent_scoring_failure
 
-    def status_error(code: int) -> httpx.HTTPStatusError:
+    def status_error(code: int, text: str = "") -> httpx.HTTPStatusError:
         request = httpx.Request("POST", "https://example.test")
         return httpx.HTTPStatusError(
-            "boom", request=request, response=httpx.Response(code, request=request)
+            "boom", request=request, response=httpx.Response(code, text=text, request=request)
         )
 
-    assert is_permanent_scoring_failure(status_error(400)) is True
-    assert is_permanent_scoring_failure(status_error(422)) is True
+    # Photo-specific payload errors (corrupt/unsupported image) are permanent
+    assert is_permanent_scoring_failure(status_error(400, "Unable to process input image")) is True
+    assert is_permanent_scoring_failure(status_error(400, "Corrupt image file")) is True
+    assert is_permanent_scoring_failure(status_error(400, "Image decoding failed")) is True
+    assert is_permanent_scoring_failure(status_error(422, "Unsupported image mime type")) is True
+
+    # Generic or system configuration 400s must remain retryable (not permanent)
+    assert is_permanent_scoring_failure(status_error(400, "Invalid JSON schema in request")) is False
+    assert is_permanent_scoring_failure(status_error(400, "Unknown parameter 'temperature'")) is False
+    assert is_permanent_scoring_failure(status_error(400, "")) is False
+    assert is_permanent_scoring_failure(status_error(422, "Field required: prompt")) is False
+
+    # Authentication, quota, model name, and server errors must remain retryable
     assert is_permanent_scoring_failure(status_error(401)) is False
     assert is_permanent_scoring_failure(status_error(403)) is False
     assert is_permanent_scoring_failure(status_error(404)) is False
     assert is_permanent_scoring_failure(status_error(429)) is False
     assert is_permanent_scoring_failure(status_error(500)) is False
     assert is_permanent_scoring_failure(httpx.ConnectError("down")) is False
+
+
+def test_claim_for_scoring_refreshes_preloaded_instance(session: Session) -> None:
+    """Verifies Finding 2: claim_for_scoring refreshes attributes from the database even
+    when the session identity map already holds a stale instance loaded earlier."""
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+
+    # Preload the candidate into session identity map (as sweeper photos_to_score does)
+    preloaded = session.get(CourseImage, image.id)
+    assert preloaded is not None
+    assert preloaded.scoring_claimed_at is None
+    assert preloaded.scored_at is None
+
+    repo = CourseImageRepository()
+
+    # Another worker concurrently claims and scores the photo in a separate session
+    with Session(session.get_bind()) as worker_session:
+        worker_image = worker_session.get(CourseImage, image.id)
+        assert worker_image is not None
+        claimed = repo.claim_for_scoring(worker_session, worker_image.id, max_attempts=3)
+        assert claimed is not None
+        repo.complete_scoring(
+            worker_session,
+            worker_image.id,
+            claim_timestamp=claimed.scoring_claimed_at,
+            score=9,
+            reasons=["great shot"],
+            auto_approve_score=8.0,
+        )
+
+    # Session's in-memory instance is stale. claim_for_scoring must refresh it and refuse to re-claim
+    second_claim = repo.claim_for_scoring(session, image.id, max_attempts=3)
+    assert second_claim is None
+    assert preloaded.scored_at is not None
+    assert preloaded.moderation_status == CourseImageModeration.APPROVED
 
 
 def test_complete_scoring_refreshes_concurrent_moderation_from_separate_session(session: Session) -> None:

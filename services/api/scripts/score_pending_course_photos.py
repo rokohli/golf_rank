@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import aliased
 
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
@@ -54,20 +55,31 @@ def photos_to_score(
     Kept separate from main() so the selection rules -- which are the part
     worth getting wrong quietly -- can be tested without a provider.
     """
-    repository = CourseImageRepository()
     now = datetime.now(timezone.utc)
     lease_cutoff = now - timedelta(seconds=300)
-    query = select(CourseImage).where(
+
+    hero_image = aliased(CourseImage)
+    locked_hero_exists = (
+        select(1)
+        .where(
+            hero_image.course_id == CourseImage.course_id,
+            hero_image.source_type.in_((CourseImageSource.OFFICIAL, CourseImageSource.USER)),
+            hero_image.is_hero.is_(True),
+        )
+        .exists()
+    )
+
+    base_conditions = [
         CourseImage.source_type == CourseImageSource.USER,
         CourseImage.moderation_status == CourseImageModeration.PENDING,
         or_(
             CourseImage.scoring_claimed_at.is_(None),
             CourseImage.scoring_claimed_at < lease_cutoff,
         ),
-    )
+    ]
     if not rescore:
         # scored_at, not quality_score: a failed attempt leaves the score NULL.
-        query = query.where(CourseImage.scored_at.is_(None))
+        base_conditions.append(CourseImage.scored_at.is_(None))
         # The attempt ceiling is deliberately NOT applied in rescore mode.
         # claim_for_scoring spends an attempt *before* the provider call, so
         # transient failures (a brief provider outage, CDN lag on a
@@ -76,19 +88,24 @@ def photos_to_score(
         # permanently unreachable from every CLI path, with manual SQL as the
         # only recovery -- exactly what --rescore exists to avoid. main()
         # resets scoring_attempts for the rows it selects in this mode.
-        query = query.where(
+        base_conditions.append(
             CourseImage.scoring_attempts < settings.course_photo_scoring_max_attempts
         )
     if course_ids:
-        query = query.where(CourseImage.course_id.in_(course_ids))
-    candidates = list(session.scalars(query.order_by(CourseImage.id)).all())
+        base_conditions.append(CourseImage.course_id.in_(course_ids))
 
-    # A pinned hero outranks every score, so scoring these would buy nothing.
-    selected = [
-        image for image in candidates
-        if not repository.has_featured_hero(session, image.course_id)
-    ]
-    return selected[:limit], len(candidates) - len(selected)
+    skipped_count = session.scalar(
+        select(func.count(CourseImage.id)).where(*base_conditions, locked_hero_exists)
+    ) or 0
+
+    selected_query = (
+        select(CourseImage)
+        .where(*base_conditions, ~locked_hero_exists)
+        .order_by(CourseImage.id)
+        .limit(limit)
+    )
+    selected = list(session.scalars(selected_query).all())
+    return selected, skipped_count
 
 
 def main() -> int:

@@ -347,6 +347,7 @@ class CourseImageRepository:
                 CourseImage.course_id == target.course_id,
                 CourseImage.source_type == CourseImageSource.USER,
             ).order_by(CourseImage.id.asc()).with_for_update()
+            .execution_options(populate_existing=True)
         ).all())
 
         image = next((img for img in tier_images if img.id == image_id), None)
@@ -359,8 +360,7 @@ class CourseImageRepository:
                 if sibling.id != image.id:
                     sibling.is_hero = False
             image.is_hero = True
-            if image.moderation_status != CourseImageModeration.APPROVED:
-                image.moderation_status = CourseImageModeration.APPROVED
+            image.moderation_status = CourseImageModeration.APPROVED
             image.moderated_by_user_id = moderator_user_id
             image.moderated_at = now
             image.moderation_reason = None
@@ -385,6 +385,7 @@ class CourseImageRepository:
                 CourseImage.course_id == image.course_id,
                 CourseImage.source_type == image.source_type,
             ).order_by(CourseImage.id.asc()).with_for_update()
+            .execution_options(populate_existing=True)
         ).all())
         target = next((img for img in tier_images if img.id == image.id), image)
         if featured:
@@ -411,9 +412,11 @@ class CourseImageRepository:
                 CourseImage.id == image_id,
                 CourseImage.source_type == CourseImageSource.USER,
             ).with_for_update()
+            .execution_options(populate_existing=True)
         )
         if image is None:
             return None
+        session.refresh(image)
         if image.moderation_status != CourseImageModeration.PENDING:
             return None
         if image.scored_at is not None:

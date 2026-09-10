@@ -58,25 +58,48 @@ _reference_cache_lock = threading.Lock()
 SCORING_ERRORS = (PhotoScoringError, httpx.HTTPError, ValueError, KeyError)
 
 
+_IMAGE_FAILURE_SIGNATURES = (
+    "unable to process input image",
+    "image decode",
+    "image decoding",
+    "failed to decode",
+    "corrupt image",
+    "corrupted image",
+    "unsupported image",
+    "invalid image",
+    "cannot process image",
+    "inline_data",
+    "inlinedata",
+    "unsupported mime type",
+    "unsupported media type",
+    "image format",
+)
+
+
 def is_permanent_scoring_failure(error: Exception) -> bool:
     """Whether retrying this photo could ever succeed.
 
-    Only photo-specific payload errors (e.g. 400 INVALID_ARGUMENT when an image
-    file is corrupt or degenerate, or 422 Unprocessable) represent permanent
-    image failures that will never succeed on retry.
+    Only photo-specific payload errors (e.g. 400/422 when an image file is
+    corrupt, unsupported format, or degenerate) represent permanent image failures
+    that will never succeed on retry.
 
-    Provider/configuration errors -- 401/403 (invalid or revoked API key,
-    project permissions/quota) and 404 (bad or retired configured model name) --
-    are system/configuration failures that affect the entire scorer rather than
-    the photo. They must remain retryable so photos are not permanently failed
-    before the configuration is fixed.
+    Provider/configuration errors -- 400 with invalid schema/parameter/model config,
+    401/403 (invalid or revoked API key, project permissions/quota), and 404
+    (bad or retired configured model name) -- are system/configuration failures that
+    affect the entire scorer rather than the photo. They must remain retryable so photos
+    are not permanently failed before the configuration is fixed.
 
     Everything else -- timeouts, 5xx, 429, a transport error, an unparseable
     response -- is worth another attempt later.
     """
     if isinstance(error, httpx.HTTPStatusError):
         status = error.response.status_code
-        return status in {400, 422}
+        if status in {400, 422}:
+            try:
+                body_text = error.response.text.lower()
+            except Exception:
+                return False
+            return any(sig in body_text for sig in _IMAGE_FAILURE_SIGNATURES)
     return False
 
 

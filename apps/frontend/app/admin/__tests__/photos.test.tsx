@@ -368,4 +368,56 @@ describe('Photo moderation', () => {
     })
     expect(screen.getByText('Approved Photo')).toBeOnTheScreen()
   })
+
+  it('maintains independent busy indicators for distinct photo cards when multiple actions are in flight', async () => {
+    let resolveFirst!: (val: unknown) => void
+    let resolveSecond!: (val: unknown) => void
+    const firstPromise = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondPromise = new Promise((resolve) => {
+      resolveSecond = resolve
+    })
+    mockApprove.mockImplementationOnce(() => firstPromise)
+    mockSetFeatured.mockImplementationOnce(() => secondPromise)
+
+    mockGetAdminCoursePhotos.mockResolvedValueOnce({
+      items: [
+        photo({ image: { ...photo().image, id: 1 }, course_name: 'First Photo' }),
+        photo({ image: { ...photo().image, id: 2 }, course_name: 'Second Photo' }),
+      ],
+      next_cursor: null,
+    })
+
+    render(<AdminPhotos />)
+    expect(await screen.findByText('First Photo')).toBeOnTheScreen()
+    expect(screen.getByText('Second Photo')).toBeOnTheScreen()
+
+    // Trigger action on first card
+    fireEvent.press(screen.getAllByText('Approve')[0])
+
+    // Trigger action on second card (first card has unmounted its action buttons)
+    fireEvent.press(screen.getByText('Feature'))
+
+    // Both cards should show busy indicator
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Applying')).toHaveLength(2)
+    })
+
+    // Resolve first action
+    resolveFirst(photo({ image: { ...photo().image, id: 1 }, course_name: 'First Photo', moderation_status: 'approved' }))
+
+    // First card should finish busy, but second card remains busy
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Applying')).toHaveLength(1)
+    })
+
+    // Resolve second action
+    resolveSecond(photo({ image: { ...photo().image, id: 2, is_hero: true }, course_name: 'Second Photo', moderation_status: 'approved' }))
+
+    // Both finished
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Applying')).not.toBeOnTheScreen()
+    })
+  })
 })

@@ -558,3 +558,55 @@ def test_feature_and_unfeature_clears_prior_rejection_reason() -> None:
     assert unfeature_body["image"]["is_hero"] is False
     assert unfeature_body["moderation_action"] == "unfeatured"
     assert unfeature_body["moderation_reason"] is None
+
+
+def test_feature_user_image_refreshes_stale_identity_map_and_sets_approved() -> None:
+    """Verifies Finding 1: feature_user_image refreshes cached session attributes when locking
+    and unconditionally ensures moderation_status = approved even if target was rejected concurrently."""
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id)
+
+    factory = client.app.state.session_factory
+    with factory() as session:
+        user = User(provider_subject="dev:moderator")
+        session.add(user)
+        session.commit()
+        moderator_id = user.id
+
+        # Preload target image into session identity map with APPROVED status
+        repo = CourseImageRepository()
+        img = session.get(CourseImage, image_id)
+        assert img is not None
+        img.moderation_status = CourseImageModeration.APPROVED
+        session.commit()
+
+        # Another session rejects the image concurrently
+        with factory() as other_session:
+            other_img = other_session.get(CourseImage, image_id)
+            assert other_img is not None
+            repo.set_moderation(
+                other_session,
+                other_img,
+                status=CourseImageModeration.REJECTED,
+                moderated_by_user_id=moderator_id,
+                reason="rejected concurrently",
+            )
+
+        # In the original session, calling feature_user_image must lock rows, refresh target,
+        # and ensure it is APPROVED and hero
+        featured_img = repo.feature_user_image(session, image_id, featured=True, moderator_user_id=moderator_id)
+        assert featured_img is not None
+        assert featured_img.is_hero is True
+        assert featured_img.moderation_status == CourseImageModeration.APPROVED
+        assert featured_img.moderated_by_user_id == moderator_id
+        assert featured_img.moderation_action == "featured"
+
+        # Verify persisted state in a fresh session
+        with factory() as verify_session:
+            db_img = verify_session.get(CourseImage, image_id)
+            assert db_img is not None
+            assert db_img.is_hero is True
+            assert db_img.moderation_status == CourseImageModeration.APPROVED
+            assert db_img.moderated_by_user_id == moderator_id
+            assert db_img.moderation_action == "featured"

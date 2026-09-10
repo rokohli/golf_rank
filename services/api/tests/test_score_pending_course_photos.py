@@ -151,3 +151,30 @@ def test_rescore_recovers_a_photo_stranded_by_transient_failures(session: Sessio
         rescore=True, course_ids=[course.id],
     )
     assert [image.id for image in recovered] == [stranded.id]
+
+
+def test_photos_to_score_applies_sql_limit_without_n_plus_one(session: Session) -> None:
+    """Verifies Finding 4: photos_to_score applies limit and hero check directly in SQL
+    without materializing full backlogs or executing N+1 queries."""
+    from sqlalchemy import event
+    engine = session.get_bind()
+
+    # Create 10 courses and photos
+    for i in range(10):
+        course = _course(session, f"Course {i}")
+        _photo(session, course, key=f"photo_{i}.jpg")
+
+    queries = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        selected, skipped = photos_to_score(session, _settings(), limit=3)
+        assert len(selected) == 3
+        assert skipped == 0
+        # Exactly 2 queries: one COUNT(*) for skipped and one SELECT ... LIMIT 3 for selected
+        assert len(queries) == 2, f"Expected exactly 2 queries, got {len(queries)}: {queries}"
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
