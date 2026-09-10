@@ -363,11 +363,13 @@ class CourseImageRepository:
                 image.moderation_status = CourseImageModeration.APPROVED
             image.moderated_by_user_id = moderator_user_id
             image.moderated_at = now
+            image.moderation_reason = None
             image.moderation_action = CourseImageModerationAction.FEATURED
         else:
             image.is_hero = False
             image.moderated_by_user_id = moderator_user_id
             image.moderated_at = now
+            image.moderation_reason = None
             image.moderation_action = CourseImageModerationAction.UNFEATURED
 
         session.commit()
@@ -456,13 +458,18 @@ class CourseImageRepository:
         and auto-approval is skipped.
         """
         image = session.scalar(
-            select(CourseImage).where(
+            select(CourseImage)
+            .where(
                 CourseImage.id == image_id,
                 CourseImage.source_type == CourseImageSource.USER,
-            ).with_for_update()
+            )
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
         if image is None:
             return False
+
+        session.refresh(image)
 
         # Verify claim ownership
         if image.scoring_claimed_at != claim_timestamp:
@@ -497,10 +504,13 @@ class CourseImageRepository:
         """Releases an in-flight scoring claim on transient failure so the sweeper
         or retry can claim it again later."""
         image = session.scalar(
-            select(CourseImage).where(
+            select(CourseImage)
+            .where(
                 CourseImage.id == image_id,
                 CourseImage.source_type == CourseImageSource.USER,
-            ).with_for_update()
+            )
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
         if image is not None and image.scoring_claimed_at == claim_timestamp:
             image.scoring_claimed_at = None
@@ -512,10 +522,13 @@ class CourseImageRepository:
         """Records a permanent scoring failure (provider refusal/400), setting scored_at
         and clearing claim so it won't be retried."""
         image = session.scalar(
-            select(CourseImage).where(
+            select(CourseImage)
+            .where(
                 CourseImage.id == image_id,
                 CourseImage.source_type == CourseImageSource.USER,
-            ).with_for_update()
+            )
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
         if image is not None and image.scoring_claimed_at == claim_timestamp:
             image.scored_at = datetime.now(timezone.utc)

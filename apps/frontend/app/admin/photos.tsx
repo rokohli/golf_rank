@@ -123,13 +123,16 @@ export default function AdminPhotos() {
     imageId: number,
     action: (headers: Awaited<ReturnType<typeof getAuthHeaders>>) => Promise<AdminCoursePhoto | void>,
   ) => {
+    const reqId = requestIdRef.current
     setBusyId(imageId)
     setError(null)
     try {
       const updated = await action(await getAuthHeaders())
+      if (reqId !== requestIdRef.current) return
       if (updated) applyResult(updated)
       else setPhotos((current) => current.filter((photo) => photo.image.id !== imageId))
     } catch (reason) {
+      if (reqId !== requestIdRef.current) return
       setError(reason instanceof Error ? reason.message : 'That action did not go through.')
     } finally {
       setBusyId(null)

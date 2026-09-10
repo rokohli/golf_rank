@@ -61,19 +61,22 @@ SCORING_ERRORS = (PhotoScoringError, httpx.HTTPError, ValueError, KeyError)
 def is_permanent_scoring_failure(error: Exception) -> bool:
     """Whether retrying this photo could ever succeed.
 
-    A 4xx other than 429 means the provider rejected this specific request and
-    will reject it identically next time. The case that prompted this: a
-    corrupt or degenerate upload (a file with a valid JPEG header but no usable
-    image) returns 400 INVALID_ARGUMENT "Unable to process input image". Left
-    as retryable, every such photo would consume its full attempt budget across
-    successive sweeps for nothing.
+    Only photo-specific payload errors (e.g. 400 INVALID_ARGUMENT when an image
+    file is corrupt or degenerate, or 422 Unprocessable) represent permanent
+    image failures that will never succeed on retry.
+
+    Provider/configuration errors -- 401/403 (invalid or revoked API key,
+    project permissions/quota) and 404 (bad or retired configured model name) --
+    are system/configuration failures that affect the entire scorer rather than
+    the photo. They must remain retryable so photos are not permanently failed
+    before the configuration is fixed.
 
     Everything else -- timeouts, 5xx, 429, a transport error, an unparseable
     response -- is worth another attempt later.
     """
     if isinstance(error, httpx.HTTPStatusError):
         status = error.response.status_code
-        return 400 <= status < 500 and status != 429
+        return status in {400, 422}
     return False
 
 

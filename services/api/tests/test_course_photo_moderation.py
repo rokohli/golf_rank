@@ -521,3 +521,40 @@ def test_queue_query_count_bounded_independently_of_page_size() -> None:
         assert len(queries) <= 4, f"Expected at most 4 queries, got {len(queries)}: {queries}"
     finally:
         event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+
+def test_feature_and_unfeature_clears_prior_rejection_reason() -> None:
+    """Verifies Finding 3: featuring or unfeaturing a photo clears any prior rejection
+    reason so audit UI does not display 'Featured by @user · rejection reason'."""
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id)
+
+    reject_res = client.post(
+        f"{BASE}/{image_id}/reject", json={"reason": "people in frame"}, headers=ADMIN
+    )
+    assert reject_res.status_code == 200
+    reject_body = reject_res.json()
+    assert reject_body["moderation_status"] == "rejected"
+    assert reject_body["moderation_reason"] == "people in frame"
+    assert reject_body["moderation_action"] == "rejected"
+
+    feature_res = client.post(
+        f"{BASE}/{image_id}/feature", json={"featured": True}, headers=ADMIN
+    )
+    assert feature_res.status_code == 200
+    feature_body = feature_res.json()
+    assert feature_body["moderation_status"] == "approved"
+    assert feature_body["image"]["is_hero"] is True
+    assert feature_body["moderation_action"] == "featured"
+    assert feature_body["moderation_reason"] is None
+
+    unfeature_res = client.post(
+        f"{BASE}/{image_id}/feature", json={"featured": False}, headers=ADMIN
+    )
+    assert unfeature_res.status_code == 200
+    unfeature_body = unfeature_res.json()
+    assert unfeature_body["moderation_status"] == "approved"
+    assert unfeature_body["image"]["is_hero"] is False
+    assert unfeature_body["moderation_action"] == "unfeatured"
+    assert unfeature_body["moderation_reason"] is None

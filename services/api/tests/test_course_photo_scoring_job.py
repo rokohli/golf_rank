@@ -333,10 +333,57 @@ def test_permanent_failure_classification() -> None:
         )
 
     assert is_permanent_scoring_failure(status_error(400)) is True
-    assert is_permanent_scoring_failure(status_error(404)) is True
+    assert is_permanent_scoring_failure(status_error(422)) is True
+    assert is_permanent_scoring_failure(status_error(401)) is False
+    assert is_permanent_scoring_failure(status_error(403)) is False
+    assert is_permanent_scoring_failure(status_error(404)) is False
     assert is_permanent_scoring_failure(status_error(429)) is False
     assert is_permanent_scoring_failure(status_error(500)) is False
     assert is_permanent_scoring_failure(httpx.ConnectError("down")) is False
+
+
+def test_complete_scoring_refreshes_concurrent_moderation_from_separate_session(session: Session) -> None:
+    """Verifies Finding 1: complete_scoring refreshes attributes from the database even
+    when the session identity map already holds a stale instance loaded during claim."""
+    session.add(User(id=42, provider_subject="dev:admin-42"))
+    session.commit()
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+
+    repo = CourseImageRepository()
+    claimed = repo.claim_for_scoring(session, image.id, max_attempts=3)
+    assert claimed is not None
+    claim_ts = claimed.scoring_claimed_at
+
+    # Admin rejects the photo in a separate session while scoring is in flight
+    with Session(session.get_bind()) as admin_session:
+        admin_image = admin_session.get(CourseImage, image.id)
+        assert admin_image is not None
+        repo.set_moderation(
+            admin_session,
+            admin_image,
+            status=CourseImageModeration.REJECTED,
+            moderated_by_user_id=42,
+            reason="admin rejected via another session",
+        )
+
+    # In session, image's cached in-memory attribute would still be pending without populate_existing/refresh
+    persisted = repo.complete_scoring(
+        session,
+        image.id,
+        claim_timestamp=claim_ts,
+        score=10,
+        reasons=["perfect"],
+        auto_approve_score=8.0,
+    )
+    assert persisted is False
+
+    session.refresh(image)
+    assert image.moderation_status == CourseImageModeration.REJECTED
+    assert image.moderated_by_user_id == 42
+    assert image.moderation_reason == "admin rejected via another session"
+    assert image.quality_score is None
 
 
 def test_human_rejection_during_scoring_takes_precedence(session: Session) -> None:

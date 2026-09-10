@@ -335,4 +335,37 @@ describe('Photo moderation', () => {
     expect(screen.getByText('Rejected by @dan · Blurry background')).toBeOnTheScreen()
     expect(screen.getByText('Approved automatically')).toBeOnTheScreen()
   })
+
+  it('discards action results when tab changes while action is in flight', async () => {
+    let resolveApprove!: (val: unknown) => void
+    const approvePromise = new Promise((resolve) => {
+      resolveApprove = resolve
+    })
+    mockApprove.mockImplementationOnce(() => approvePromise)
+
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 1 }, course_name: 'Pending Photo', moderation_status: 'pending' })],
+        next_cursor: null,
+      })
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Approved Photo', moderation_status: 'approved' })],
+        next_cursor: null,
+      })
+
+    render(<AdminPhotos />)
+    expect(await screen.findByText('Pending Photo')).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByText('Approve'))
+
+    fireEvent.press(screen.getByText('Approved'))
+    expect(await screen.findByText('Approved Photo')).toBeOnTheScreen()
+
+    resolveApprove(photo({ image: { ...photo().image, id: 1 }, course_name: 'Pending Photo', moderation_status: 'approved' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Pending Photo')).not.toBeOnTheScreen()
+    })
+    expect(screen.getByText('Approved Photo')).toBeOnTheScreen()
+  })
 })
