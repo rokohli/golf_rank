@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -326,3 +328,74 @@ def test_coordinate_change_invalidates_negative_cache(session):
     repo.invalidate_negative_cache(session, course.id)
 
     assert repo.get_negative_cache(session, course.id, "wikimedia") is None
+
+
+class _StubLock:
+    """Stands in for RedisLock: reports contention or Redis failure on demand."""
+
+    def __init__(self, *, acquired: bool = True, failing: bool = False) -> None:
+        self._acquired = acquired
+        self._failing = failing
+        self.failure_count = 0
+        self.calls = 0
+
+    @contextmanager
+    def try_lock(self, name: str, *, ttl_seconds: float):
+        self.calls += 1
+        if self._failing:
+            self.failure_count += 1
+            yield True   # fails open, exactly as RedisLock does
+            return
+        yield self._acquired
+
+
+def _service_with_lock(lock, provider) -> CourseImageService:
+    return CourseImageService(
+        settings=Settings(
+            wikimedia_live_lookup_enabled=True,
+            course_image_base_url="https://cdn.example/assets",
+        ),
+        wikimedia_provider=provider,
+        distributed_lock=lock,
+    )
+
+
+def test_another_process_holding_the_lock_skips_the_lookup(session: Session) -> None:
+    """Coalescing across workers: if another process is already resolving this
+    course, fall open to the cached result rather than duplicating the call."""
+    course = make_course(session)
+    provider = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
+    lock = _StubLock(acquired=False)
+    service = _service_with_lock(lock, provider)
+
+    result = service.resolve_hero_image(session, course)
+
+    assert provider.calls == 0
+    assert result.type == "NONE"
+    assert lock.calls == 1
+    assert service.metrics.wikimedia_distributed_lock_contended == 1
+
+
+def test_an_unavailable_redis_still_resolves(session: Session) -> None:
+    """A Redis outage must not stop enrichment -- the lock only deduplicates."""
+    course = make_course(session)
+    provider = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
+    lock = _StubLock(failing=True)
+    service = _service_with_lock(lock, provider)
+
+    service.resolve_hero_image(session, course)
+
+    assert provider.calls == 1
+    assert service.metrics.wikimedia_distributed_lock_unavailable == 1
+
+
+def test_holding_the_lock_resolves_normally(session: Session) -> None:
+    course = make_course(session)
+    provider = FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None))
+    service = _service_with_lock(_StubLock(acquired=True), provider)
+
+    service.resolve_hero_image(session, course)
+
+    assert provider.calls == 1
+    assert service.metrics.wikimedia_distributed_lock_contended == 0
+    assert service.metrics.wikimedia_distributed_lock_unavailable == 0

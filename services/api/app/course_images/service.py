@@ -18,11 +18,13 @@ import logging
 import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 from typing import Protocol
 
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
+from ..core.distributed_lock import RedisLock
 from ..domain import is_wikimedia_stale, storage_image_url
 from ..models import CourseImage, CourseImageSource
 from .providers.wikimedia import WikimediaImageProvider
@@ -58,6 +60,8 @@ class CourseImageMetrics:
         self.wikimedia_failures = 0
         self.wikimedia_concurrency_limited = 0
         self.wikimedia_lock_contended = 0
+        self.wikimedia_distributed_lock_contended = 0
+        self.wikimedia_distributed_lock_unavailable = 0
 
     def record_resolution(self, image_type: str, latency_seconds: float) -> None:
         with self._lock:
@@ -82,6 +86,8 @@ class CourseImageMetrics:
                 "wikimedia_failures": self.wikimedia_failures,
                 "wikimedia_concurrency_limited": self.wikimedia_concurrency_limited,
                 "wikimedia_lock_contended": self.wikimedia_lock_contended,
+                "wikimedia_distributed_lock_contended": self.wikimedia_distributed_lock_contended,
+                "wikimedia_distributed_lock_unavailable": self.wikimedia_distributed_lock_unavailable,
             }
 
 
@@ -112,6 +118,7 @@ class CourseImageService:
         repository: CourseImageRepository | None = None,
         wikimedia_provider: WikimediaImageProvider | None = None,
         metrics: CourseImageMetrics | None = None,
+        distributed_lock: RedisLock | None = None,
     ):
         self._settings = settings
         self._repository = repository or CourseImageRepository()
@@ -120,11 +127,12 @@ class CourseImageService:
             confidence_threshold=settings.wikimedia_confidence_threshold,
         )
         self.metrics = metrics or CourseImageMetrics()
-        # Per-process request coalescing: many concurrent viewers of a course
-        # that has never been looked up before shouldn't each fire an
-        # independent Wikimedia search. A distributed lock (e.g. via Redis,
-        # already used elsewhere for rate limiting) would coalesce across
-        # worker processes too -- flagged as a follow-up in the final report.
+        # Coalescing runs at two levels. The thread stripe below dedupes
+        # concurrent viewers within one process; RedisLock extends that across
+        # worker processes, which a threading.Lock cannot reach. Both are
+        # best-effort: if either is unavailable the lookup still happens, it
+        # just isn't deduplicated.
+        self._distributed = distributed_lock if distributed_lock is not None else RedisLock(settings)
         #
         # Fixed-size lock striping (rather than one lock per course_id) keeps
         # this bounded regardless of catalog size -- a per-course dict would
@@ -139,6 +147,22 @@ class CourseImageService:
 
     def _wikimedia_lock(self, course_id: int) -> threading.Lock:
         return self._wikimedia_locks[course_id % len(self._wikimedia_locks)]
+
+    @contextmanager
+    def _distributed_lock(self, course_id: int):
+        """Cross-process coalescing for one course's live lookup.
+
+        Yields True when Redis is unconfigured or unreachable: the lock only
+        deduplicates work, so its absence must never stop the lookup. The TTL
+        is twice the provider timeout so a crashed holder self-heals in about
+        the time the work itself would have taken.
+        """
+        ttl = self._settings.wikimedia_lookup_timeout_seconds * 2 + 1
+        before = self._distributed.failure_count
+        with self._distributed.try_lock(f"course-image-wikimedia:{course_id}", ttl_seconds=ttl) as acquired:
+            if self._distributed.failure_count > before:
+                self.metrics.increment("wikimedia_distributed_lock_unavailable")
+            yield acquired
 
     def resolve_hero_image(self, session: Session, course: HasCourse) -> CourseImageResult:
         started = time.monotonic()
@@ -231,103 +255,124 @@ class CourseImageService:
             self.metrics.increment("wikimedia_lock_contended")
             return cached_result
         try:
-            # Re-check after acquiring the lock: another thread may have just
-            # resolved (and committed) this course while we were waiting.
-            # `cached` above may already sit in this session's identity map --
-            # expire it so the re-query below actually reflects that other
-            # thread's commit instead of replaying the pre-lock snapshot
-            # (SQLAlchemy doesn't refresh already-loaded attributes on a
-            # plain re-select).
-            if cached is not None:
-                session.expire(cached)
-            cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
-            if stop:
-                return cached_result
-
-            # Release the pooled DB connection before blocking on Commons --
-            # `cached`/`course` attributes are already loaded above, and
-            # expire_on_commit=False keeps them readable after this. Without
-            # it, every concurrent cold lookup would hold a connection for
-            # the full external timeout, and a handful of them can exhaust
-            # the pool and stall unrelated requests. The in-process lock is
-            # still held, so no other thread can race this course's cache
-            # entries in the meantime; the next repository call below simply
-            # opens a fresh transaction/connection to write the outcome.
-            session.commit()
-
-            if not self._wikimedia_concurrency.acquire(blocking=False):
-                # Every lookup slot is already busy on outbound Commons
-                # HTTPS -- fail open immediately rather than queuing this
-                # thread behind them too, which is what actually pins the
-                # worker pool under concurrent cold-cache load.
-                self.metrics.increment("wikimedia_concurrency_limited")
-                return cached_result
-            try:
-                self.metrics.increment("wikimedia_lookups")
-                try:
-                    lookup = self._wikimedia_provider.lookup(course)
-                except Exception:
-                    # Fail open: a Wikimedia outage must never break the course
-                    # page, and a transient failure isn't cached (so we retry on
-                    # the next request rather than sitting behind a negative TTL).
-                    # A still-usable stale cache beats no image at all.
-                    logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
-                    self.metrics.increment("wikimedia_failures")
+            with self._distributed_lock(course.id) as acquired:
+                if not acquired:
+                    # Another worker process is already resolving this
+                    # course. Coalescing is best-effort, so fail open to
+                    # the cached result exactly as the stripe path above.
+                    self.metrics.increment("wikimedia_distributed_lock_contended")
                     return cached_result
-            finally:
-                self._wikimedia_concurrency.release()
-
-            if lookup.result is None:
-                if lookup.photo is not None:
-                    self.metrics.increment("wikimedia_low_confidence_rejections")
-                try:
-                    self._repository.set_negative_cache(
-                        session, course.id, WIKIMEDIA_PROVIDER_NAME,
-                        ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
-                    )
-                    if cached is not None:
-                        # An authoritative miss (unlike a transient exception) means
-                        # the stale row is no longer backed by a trustworthy match --
-                        # evict only the stale hero row so the negative cache actually
-                        # takes effect without destroying any other gallery photos.
-                        self._repository.delete_image(session, cached)
-                except Exception:
-                    # Caching the miss is best-effort: a write conflict here must
-                    # not turn an authoritative "no image" answer into a 500.
-                    logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
-                    session.rollback()
-                return None
-
-            self.metrics.increment("wikimedia_successes")
-            photo = lookup.photo
-            try:
-                if cached is not None:
-                    # Refreshing a stale cache entry -- update it in place to
-                    # preserve its position and keep the rest of the gallery intact.
-                    self._repository.update_wikimedia_image(
-                        session, cached,
-                        external_url=photo.url, thumbnail_url=photo.url,
-                        alt_text=f"{course.name} course photo",
-                        source_name=photo.source_name, source_url=photo.source_url,
-                        license_name=photo.license_name, license_url=photo.license_url,
-                        width=photo.width, height=photo.height,
-                    )
-                else:
-                    self._repository.add_wikimedia_image(
-                        session, course.id,
-                        external_url=photo.url, thumbnail_url=photo.url,
-                        alt_text=f"{course.name} course photo",
-                        source_name=photo.source_name, source_url=photo.source_url,
-                        license_name=photo.license_name, license_url=photo.license_url,
-                        width=photo.width, height=photo.height,
-                    )
-            except Exception:
-                # Persisting the cache row is best-effort -- a concurrent worker
-                # can hit uq_course_image_position or a stale-row update here.
-                # The lookup itself already succeeded, so still hand back a
-                # usable image URL instead of 500ing the course page.
-                logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
-                session.rollback()
-            return lookup.result
+                return self._resolve_wikimedia_locked(
+                    session, course, cached, cached_result
+                )
         finally:
             lock.release()
+
+    def _resolve_wikimedia_locked(
+        self, session: Session, course: HasCourse,
+        cached: CourseImage | None, cached_result: CourseImageResult | None,
+    ) -> CourseImageResult | None:
+        """The guarded half of the Wikimedia lookup, entered holding both the
+        per-process stripe lock and (when Redis is available) the
+        cross-process one.
+
+        Split out from _resolve_wikimedia only so the two locks can wrap it
+        without re-indenting the body; the logic is unchanged."""
+        # Re-check after acquiring the lock: another thread may have just
+        # resolved (and committed) this course while we were waiting.
+        # `cached` above may already sit in this session's identity map --
+        # expire it so the re-query below actually reflects that other
+        # thread's commit instead of replaying the pre-lock snapshot
+        # (SQLAlchemy doesn't refresh already-loaded attributes on a
+        # plain re-select).
+        if cached is not None:
+            session.expire(cached)
+        cached, cached_result, stop = self._wikimedia_cache_snapshot(session, course)
+        if stop:
+            return cached_result
+
+        # Release the pooled DB connection before blocking on Commons --
+        # `cached`/`course` attributes are already loaded above, and
+        # expire_on_commit=False keeps them readable after this. Without
+        # it, every concurrent cold lookup would hold a connection for
+        # the full external timeout, and a handful of them can exhaust
+        # the pool and stall unrelated requests. The in-process lock is
+        # still held, so no other thread can race this course's cache
+        # entries in the meantime; the next repository call below simply
+        # opens a fresh transaction/connection to write the outcome.
+        session.commit()
+
+        if not self._wikimedia_concurrency.acquire(blocking=False):
+            # Every lookup slot is already busy on outbound Commons
+            # HTTPS -- fail open immediately rather than queuing this
+            # thread behind them too, which is what actually pins the
+            # worker pool under concurrent cold-cache load.
+            self.metrics.increment("wikimedia_concurrency_limited")
+            return cached_result
+        try:
+            self.metrics.increment("wikimedia_lookups")
+            try:
+                lookup = self._wikimedia_provider.lookup(course)
+            except Exception:
+                # Fail open: a Wikimedia outage must never break the course
+                # page, and a transient failure isn't cached (so we retry on
+                # the next request rather than sitting behind a negative TTL).
+                # A still-usable stale cache beats no image at all.
+                logger.warning("course_image_wikimedia_lookup_failed course_id=%s", course.id, exc_info=True)
+                self.metrics.increment("wikimedia_failures")
+                return cached_result
+        finally:
+            self._wikimedia_concurrency.release()
+
+        if lookup.result is None:
+            if lookup.photo is not None:
+                self.metrics.increment("wikimedia_low_confidence_rejections")
+            try:
+                self._repository.set_negative_cache(
+                    session, course.id, WIKIMEDIA_PROVIDER_NAME,
+                    ttl_seconds=self._settings.wikimedia_cache_negative_ttl_seconds,
+                )
+                if cached is not None:
+                    # An authoritative miss (unlike a transient exception) means
+                    # the stale row is no longer backed by a trustworthy match --
+                    # evict only the stale hero row so the negative cache actually
+                    # takes effect without destroying any other gallery photos.
+                    self._repository.delete_image(session, cached)
+            except Exception:
+                # Caching the miss is best-effort: a write conflict here must
+                # not turn an authoritative "no image" answer into a 500.
+                logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+                session.rollback()
+            return None
+
+        self.metrics.increment("wikimedia_successes")
+        photo = lookup.photo
+        try:
+            if cached is not None:
+                # Refreshing a stale cache entry -- update it in place to
+                # preserve its position and keep the rest of the gallery intact.
+                self._repository.update_wikimedia_image(
+                    session, cached,
+                    external_url=photo.url, thumbnail_url=photo.url,
+                    alt_text=f"{course.name} course photo",
+                    source_name=photo.source_name, source_url=photo.source_url,
+                    license_name=photo.license_name, license_url=photo.license_url,
+                    width=photo.width, height=photo.height,
+                )
+            else:
+                self._repository.add_wikimedia_image(
+                    session, course.id,
+                    external_url=photo.url, thumbnail_url=photo.url,
+                    alt_text=f"{course.name} course photo",
+                    source_name=photo.source_name, source_url=photo.source_url,
+                    license_name=photo.license_name, license_url=photo.license_url,
+                    width=photo.width, height=photo.height,
+                )
+        except Exception:
+            # Persisting the cache row is best-effort -- a concurrent worker
+            # can hit uq_course_image_position or a stale-row update here.
+            # The lookup itself already succeeded, so still hand back a
+            # usable image URL instead of 500ing the course page.
+            logger.warning("course_image_wikimedia_cache_write_failed course_id=%s", course.id, exc_info=True)
+            session.rollback()
+        return lookup.result
