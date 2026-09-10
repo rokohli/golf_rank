@@ -515,4 +515,54 @@ describe('Photo moderation', () => {
     expect(await screen.findByText('Unfeatured by @newmod')).toBeOnTheScreen()
     expect(screen.getByText('Featured by @newmod')).toBeOnTheScreen()
   })
+
+  it('clears stale pagination loading state when changing tabs while append is in flight', async () => {
+    let resolveAppend!: (val: unknown) => void
+    const appendPromise = new Promise((resolve) => {
+      resolveAppend = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      // Initial pending load with a next_cursor to allow loadMore
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 1 }, course_name: 'Pending Photo 1' })],
+        next_cursor: 1,
+      })
+      // loadMore call that hangs in flight
+      .mockImplementationOnce(() => appendPromise)
+      // Approved tab load with no next_cursor
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Approved Photo 1', moderation_status: 'approved' })],
+        next_cursor: null,
+      })
+
+    render(<AdminPhotos />)
+    expect(await screen.findByText('Pending Photo 1')).toBeOnTheScreen()
+
+    // Trigger loadMore on Pending tab
+    const flatList = screen.UNSAFE_getByType(require('react-native').FlatList)
+    fireEvent(flatList, 'endReached')
+
+    // Now append is in flight and footer loader is visible
+    expect(await screen.findByLabelText('Loading more photos')).toBeOnTheScreen()
+
+    // Switch tabs to Approved while append is in flight
+    fireEvent.press(screen.getByText('Approved'))
+
+    // Approved tab arrives
+    expect(await screen.findByText('Approved Photo 1')).toBeOnTheScreen()
+
+    // Footer loader should NOT be visible on the approved tab
+    expect(screen.queryByLabelText('Loading more photos')).not.toBeOnTheScreen()
+
+    // Now resolve the stale append from the previous tab
+    resolveAppend({
+      items: [photo({ image: { ...photo().image, id: 3 }, course_name: 'Stale Appended Photo' })],
+      next_cursor: null,
+    })
+
+    // Footer loader must still not be present
+    expect(screen.queryByLabelText('Loading more photos')).not.toBeOnTheScreen()
+    expect(screen.queryByText('Stale Appended Photo')).not.toBeOnTheScreen()
+  })
 })

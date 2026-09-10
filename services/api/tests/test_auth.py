@@ -135,3 +135,27 @@ def test_enabled_ai_planner_requires_provider_key_and_positive_cost_controls() -
 
     with pytest.raises(ValueError, match="AI_PLANNER_DATA_TIER"):
         Settings(ai_planner_data_tier="unknown").validate_security()
+
+
+def test_course_photo_scoring_reference_course_ids_validation() -> None:
+    with pytest.raises(ValueError, match="COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must contain valid comma-separated integers"):
+        Settings(course_photo_scoring_reference_course_ids="210,abc").validate_security()
+
+    with pytest.raises(ValueError, match="COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS entries must be positive integers"):
+        Settings(course_photo_scoring_reference_course_ids="210,0").validate_security()
+
+    with pytest.raises(ValueError, match="COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS entries must be positive integers"):
+        Settings(course_photo_scoring_reference_course_ids="210,-1").validate_security()
+
+    with pytest.raises(ValueError, match="COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must not be empty"):
+        Settings(
+            course_photo_autoscore_on_confirm=True,
+            gemini_api_key="test-key",
+            course_photo_scoring_reference_course_ids="",
+        ).validate_security()
+
+    Settings(
+        course_photo_autoscore_on_confirm=True,
+        gemini_api_key="test-key",
+        course_photo_scoring_reference_course_ids="210, 213",
+    ).validate_security()

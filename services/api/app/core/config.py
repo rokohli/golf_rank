@@ -244,6 +244,21 @@ class Settings(BaseSettings):
         for name, value in positive_admin_settings.items():
             if value <= 0:
                 raise ValueError(f"{name} must be greater than zero")
+        try:
+            ref_course_ids = self.course_photo_scoring_reference_course_id_list
+        except ValueError as exc:
+            raise ValueError(
+                "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must contain valid comma-separated integers"
+            ) from exc
+        for course_id in ref_course_ids:
+            if course_id <= 0:
+                raise ValueError(
+                    "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS entries must be positive integers"
+                )
+        if self.course_photo_autoscore_on_confirm and not ref_course_ids:
+            raise ValueError(
+                "COURSE_PHOTO_SCORING_REFERENCE_COURSE_IDS must not be empty when course photo autoscoring is enabled"
+            )
 
     @property
     def allowed_host_list(self) -> list[str]:

@@ -48,7 +48,9 @@ export default function AdminPhotos() {
 
   const load = useCallback(async (nextStatus: Status) => {
     const reqId = ++requestIdRef.current
+    loadingMoreRef.current = false
     setLoading(true)
+    setLoadingMore(false)
     setError(null)
     setAppendError(null)
     try {
@@ -148,35 +150,39 @@ export default function AdminPhotos() {
     }
   }, [applyResult, getAuthHeaders])
 
-  const confirmDelete = (photo: AdminCoursePhoto) => {
-    Alert.alert(
-      'Delete this photo?',
-      `This permanently removes the photo from ${photo.course_name} and deletes the stored file. This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => { void run(photo.image.id, (headers) => deleteCoursePhoto(photo.image.id, headers)) },
-        },
-      ],
-    )
-  }
-
-  const confirmReject = (photo: AdminCoursePhoto) => {
+  const confirmReject = useCallback((photo: AdminCoursePhoto) => {
     Alert.alert(
       'Reject this photo?',
-      'It stays visible in the course gallery but can never become the course hero.',
+      'It will stay in the course gallery, but will never be chosen as the course hero.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Reject',
           style: 'destructive',
-          onPress: () => { void run(photo.image.id, (headers) => rejectCoursePhoto(photo.image.id, null, headers)) },
+          onPress: () => {
+            void run(photo.image.id, (headers) => rejectCoursePhoto(photo.image.id, null, headers))
+          },
         },
       ],
     )
-  }
+  }, [run])
+
+  const confirmDelete = useCallback((photo: AdminCoursePhoto) => {
+    Alert.alert(
+      'Delete this photo permanently?',
+      'It will be removed from the gallery and its stored file deleted. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void run(photo.image.id, (headers) => deleteCoursePhoto(photo.image.id, headers))
+          },
+        },
+      ],
+    )
+  }, [run])
 
   if (checkingAccess) {
     return <>
@@ -200,7 +206,7 @@ export default function AdminPhotos() {
 
   return <>
     <Stack.Screen options={{ headerShown: false }} />
-    <ProductScreen>
+    <ProductScreen scroll={false}>
       <ScreenHeader onBack={() => router.back()} title="Photo moderation" />
 
       <View style={styles.filters}>
@@ -221,9 +227,9 @@ export default function AdminPhotos() {
 
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
       {loading ? <ActivityIndicator accessibilityLabel="Loading photos" color={colors.pine} /> : null}
-      {!loading && photos.length === 0 ? <Text style={styles.empty}>No {status} photos.</Text> : null}
 
       <FlatList
+        ListEmptyComponent={!loading ? <Text style={styles.empty}>No {status} photos.</Text> : null}
         ListFooterComponent={
           loadingMore ? (
             <ActivityIndicator accessibilityLabel="Loading more photos" color={colors.pine} style={styles.footerLoader} />
@@ -253,7 +259,7 @@ export default function AdminPhotos() {
             photo={item}
           />
         )}
-        scrollEnabled={false}
+        style={styles.list}
       />
     </ProductScreen>
   </>
@@ -397,4 +403,5 @@ const styles = StyleSheet.create({
   appendErrorText: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   retryButton: { borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 6 },
   retryText: { color: colors.ink, fontSize: 12, fontWeight: '600' },
+  list: { flex: 1 },
 })
