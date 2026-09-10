@@ -15,7 +15,11 @@ from app.models import (
     CourseImageSource,
     User,
 )
-from scripts.score_pending_course_photos import main, photos_to_score
+from scripts.score_pending_course_photos import (
+    main,
+    photos_to_score,
+    reset_for_rescore,
+)
 
 SCORED_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -174,7 +178,7 @@ def test_rescore_includes_auto_approved_photos_without_moderator(session: Sessio
     assert human_rejected.id not in rescored_ids
 
 
-def test_rescore_resets_auto_approved_status_to_pending(session: Session) -> None:
+def test_rescore_resets_auto_approved_status_and_clears_prior_results(session: Session) -> None:
     course = _course(session)
     auto_approved = _photo(
         session, course, key="auto.jpg",
@@ -184,25 +188,20 @@ def test_rescore_resets_auto_approved_status_to_pending(session: Session) -> Non
         scored_at=SCORED_AT,
         attempts=2,
     )
+    auto_approved.quality_score = 9.0
+    auto_approved.quality_score_reasons = ["crisp framing"]
     pending_photo = _photo(
         session, course, key="pending.jpg",
         status=CourseImageModeration.PENDING,
         scored_at=SCORED_AT,
         attempts=3,
     )
-
-    pending, _ = photos_to_score(session, _settings(), rescore=True, course_ids=[course.id])
-    for image in pending:
-        image.scored_at = None
-        image.scoring_attempts = 0
-        if (
-            image.moderation_status == CourseImageModeration.APPROVED
-            and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
-            and image.moderated_by_user_id is None
-        ):
-            image.moderation_status = CourseImageModeration.PENDING
-            image.moderation_action = None
+    pending_photo.quality_score = 6.0
+    pending_photo.quality_score_reasons = ["grainy"]
     session.commit()
+
+    reset_for_rescore(session, auto_approved)
+    reset_for_rescore(session, pending_photo)
 
     session.refresh(auto_approved)
     session.refresh(pending_photo)
@@ -211,10 +210,46 @@ def test_rescore_resets_auto_approved_status_to_pending(session: Session) -> Non
     assert auto_approved.moderation_action is None
     assert auto_approved.scored_at is None
     assert auto_approved.scoring_attempts == 0
+    assert auto_approved.quality_score is None
+    assert auto_approved.quality_score_reasons is None
 
     assert pending_photo.moderation_status == CourseImageModeration.PENDING
     assert pending_photo.scored_at is None
     assert pending_photo.scoring_attempts == 0
+    assert pending_photo.quality_score is None
+    assert pending_photo.quality_score_reasons is None
+
+
+def test_rescore_does_not_demote_if_references_fail(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    course = _course(session)
+    auto_approved = _photo(
+        session, course, key="auto.jpg",
+        status=CourseImageModeration.APPROVED,
+        action=CourseImageModerationAction.AUTO_APPROVED,
+        moderated_by_user_id=None,
+        scored_at=SCORED_AT,
+    )
+    auto_approved.quality_score = 9.0
+    session.commit()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session():
+        yield session
+
+    monkeypatch.setattr("scripts.score_pending_course_photos.make_session_factory", lambda *a, **kw: fake_session)
+    monkeypatch.setattr("scripts.score_pending_course_photos.load_reference_images", lambda *a, **kw: [])
+    monkeypatch.setattr("scripts.score_pending_course_photos.Settings", lambda: _settings())
+    monkeypatch.setattr("sys.argv", ["score_pending_course_photos", "--rescore", "--course-ids", str(course.id)])
+
+    exit_code = main()
+    assert exit_code == 1
+
+    session.refresh(auto_approved)
+    assert auto_approved.moderation_status == CourseImageModeration.APPROVED
+    assert auto_approved.moderation_action == CourseImageModerationAction.AUTO_APPROVED
+    assert auto_approved.quality_score == 9.0
 
 
 def test_rescore_without_course_ids_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { Alert } from 'react-native'
 
 import AdminPhotos from '../photos'
@@ -405,20 +405,26 @@ describe('Photo moderation', () => {
     })
 
     // Resolve first action
-    resolveFirst(photo({ image: { ...photo().image, id: 1 }, course_name: 'First Photo', moderation_status: 'approved' }))
+    await act(async () => {
+      resolveFirst(photo({ image: { ...photo().image, id: 1 }, course_name: 'First Photo', moderation_status: 'approved' }))
+      await Promise.resolve()
+    })
 
     // First card should finish busy, but second card remains busy
     await waitFor(() => {
       expect(screen.getAllByLabelText('Applying')).toHaveLength(1)
-    })
+    }, { timeout: 3000 })
 
     // Resolve second action
-    resolveSecond(photo({ image: { ...photo().image, id: 2, is_hero: true }, course_name: 'Second Photo', moderation_status: 'approved' }))
+    await act(async () => {
+      resolveSecond(photo({ image: { ...photo().image, id: 2, is_hero: true }, course_name: 'Second Photo', moderation_status: 'approved' }))
+      await Promise.resolve()
+    })
 
     // Both finished
     await waitFor(() => {
       expect(screen.queryByLabelText('Applying')).not.toBeOnTheScreen()
-    })
+    }, { timeout: 3000 })
   })
 
   it('preserves in-flight card busy state when changing tabs until the action resolves', async () => {

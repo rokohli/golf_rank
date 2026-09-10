@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import httpx
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from app.core.config import Settings
 from app.course_images.repository import CourseImageRepository
@@ -127,6 +127,27 @@ def photos_to_score(
     return selected, skipped_count
 
 
+def reset_for_rescore(session: Session, image: CourseImage) -> None:
+    """Reset scoring state and prior results for a photo being rescored.
+
+    Clears scored_at, quality_score, quality_score_reasons, and resets scoring_attempts to 0.
+    For automatically approved photos (not moderated by a human), resets moderation_status to
+    PENDING and clears moderation_action.
+    """
+    image.scored_at = None
+    image.scoring_attempts = 0
+    image.quality_score = None
+    image.quality_score_reasons = None
+    if (
+        image.moderation_status == CourseImageModeration.APPROVED
+        and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
+        and image.moderated_by_user_id is None
+    ):
+        image.moderation_status = CourseImageModeration.PENDING
+        image.moderation_action = None
+    session.commit()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -176,23 +197,6 @@ def main() -> int:
             session, settings, course_ids=course_ids,
             rescore=args.rescore, limit=args.limit,
         )
-        if args.rescore and not args.dry_run:
-            for image in pending:
-                image.scored_at = None
-                # Reset alongside scored_at: leaving attempts at the ceiling
-                # would let this reselect the photo and then have
-                # claim_for_scoring refuse it, so the run would report work it
-                # silently never did.
-                image.scoring_attempts = 0
-                if (
-                    image.moderation_status == CourseImageModeration.APPROVED
-                    and image.moderation_action == CourseImageModerationAction.AUTO_APPROVED
-                    and image.moderated_by_user_id is None
-                ):
-                    image.moderation_status = CourseImageModeration.PENDING
-                    image.moderation_action = None
-            session.commit()
-
         if not pending:
             print(f"Nothing to score. ({skipped} skipped: course hero already featured)")
             return 0
@@ -212,7 +216,12 @@ def main() -> int:
                 print("No reference images available; cannot score without at least one.")
                 return 1
 
+            repository = CourseImageRepository()
             for image in pending:
+                if repository.has_featured_hero(session, image.course_id):
+                    continue
+                if args.rescore:
+                    reset_for_rescore(session, image)
                 if not should_score(session, settings, image):
                     continue
                 before = image.moderation_status
