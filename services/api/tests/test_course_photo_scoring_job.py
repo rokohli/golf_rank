@@ -299,10 +299,9 @@ def test_run_scoring_task_never_raises(session: Session) -> None:
     run_scoring_task(_App(), 1)
 
 
-def test_a_rejected_image_is_marked_permanently_failed(session: Session) -> None:
-    """A 400 with an image decoding/corruption error means the provider rejected this
-    specific image and will reject it identically forever. Marking scored_at
-    stops it consuming an attempt on every future sweep."""
+def test_a_rejected_image_stays_retryable_until_attempt_ceiling(session: Session) -> None:
+    """A 400 image error must remain retryable (scored_at stays None) because reference
+    images are bundled into the prompt and could be the source of the decode failure."""
     _reference_course(session)
     image = _photo(session, _course(session))
     client, _ = _client(
@@ -313,9 +312,10 @@ def test_a_rejected_image_is_marked_permanently_failed(session: Session) -> None
     _score(session, _settings(), image, client)
 
     assert image.quality_score is None
-    assert image.scored_at is not None
+    assert image.scored_at is None
     assert image.scoring_attempts == 1
-    assert should_score(session, _settings(), image) is False
+    assert image.scoring_claimed_at is None
+    assert should_score(session, _settings(), image) is True
 
 
 def test_a_generic_400_configuration_error_stays_retryable(session: Session) -> None:
@@ -357,25 +357,45 @@ def test_permanent_failure_classification() -> None:
             "boom", request=request, response=httpx.Response(code, text=text, request=request)
         )
 
-    # Photo-specific payload errors (corrupt/unsupported image) are permanent
-    assert is_permanent_scoring_failure(status_error(400, "Unable to process input image")) is True
-    assert is_permanent_scoring_failure(status_error(400, "Corrupt image file")) is True
-    assert is_permanent_scoring_failure(status_error(400, "Image decoding failed")) is True
-    assert is_permanent_scoring_failure(status_error(422, "Unsupported image mime type")) is True
-
-    # Generic or system configuration 400s must remain retryable (not permanent)
+    # All provider errors remain retryable because reference images and candidate
+    # are bundled together without attributing failure specifically to the candidate.
+    assert is_permanent_scoring_failure(status_error(400, "Unable to process input image")) is False
+    assert is_permanent_scoring_failure(status_error(400, "Corrupt image file")) is False
+    assert is_permanent_scoring_failure(status_error(400, "Image decoding failed")) is False
+    assert is_permanent_scoring_failure(status_error(422, "Unsupported image mime type")) is False
     assert is_permanent_scoring_failure(status_error(400, "Invalid JSON schema in request")) is False
     assert is_permanent_scoring_failure(status_error(400, "Unknown parameter 'temperature'")) is False
     assert is_permanent_scoring_failure(status_error(400, "")) is False
     assert is_permanent_scoring_failure(status_error(422, "Field required: prompt")) is False
-
-    # Authentication, quota, model name, and server errors must remain retryable
     assert is_permanent_scoring_failure(status_error(401)) is False
     assert is_permanent_scoring_failure(status_error(403)) is False
     assert is_permanent_scoring_failure(status_error(404)) is False
     assert is_permanent_scoring_failure(status_error(429)) is False
     assert is_permanent_scoring_failure(status_error(500)) is False
     assert is_permanent_scoring_failure(httpx.ConnectError("down")) is False
+
+
+def test_declined_claim_releases_row_lock_immediately(session: Session) -> None:
+    """Verifies that when claim_for_scoring declines a claim (e.g. active lease exists,
+    photo already scored, or hero locked), it rolls back the transaction so the
+    database row lock is released immediately instead of lingering in the session."""
+    _reference_course(session)
+    course = _course(session)
+    image = _photo(session, course)
+
+    repo = CourseImageRepository()
+
+    # Claim the photo in worker 1 session
+    with Session(session.get_bind()) as worker_1:
+        claimed_1 = repo.claim_for_scoring(worker_1, image.id, max_attempts=3)
+        assert claimed_1 is not None
+
+    # In worker 2 session, attempting to claim while active lease exists declines the claim
+    with Session(session.get_bind()) as worker_2:
+        claimed_2 = repo.claim_for_scoring(worker_2, image.id, max_attempts=3)
+        assert claimed_2 is None
+        # Transaction in worker_2 must be rolled back and not lingering
+        assert not worker_2.in_transaction()
 
 
 def test_claim_for_scoring_refreshes_preloaded_instance(session: Session) -> None:

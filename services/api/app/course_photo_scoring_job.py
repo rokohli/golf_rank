@@ -58,48 +58,21 @@ _reference_cache_lock = threading.Lock()
 SCORING_ERRORS = (PhotoScoringError, httpx.HTTPError, ValueError, KeyError)
 
 
-_IMAGE_FAILURE_SIGNATURES = (
-    "unable to process input image",
-    "image decode",
-    "image decoding",
-    "failed to decode",
-    "corrupt image",
-    "corrupted image",
-    "unsupported image",
-    "invalid image",
-    "cannot process image",
-    "inline_data",
-    "inlinedata",
-    "unsupported mime type",
-    "unsupported media type",
-    "image format",
-)
-
-
 def is_permanent_scoring_failure(error: Exception) -> bool:
     """Whether retrying this photo could ever succeed.
 
-    Only photo-specific payload errors (e.g. 400/422 when an image file is
-    corrupt, unsupported format, or degenerate) represent permanent image failures
-    that will never succeed on retry.
+    Because every scoring request sends both the candidate photo and the shared
+    reference images in a single multi-image payload, provider errors (such as
+    HTTP 400/422 image decoding or invalid argument errors) cannot be disambiguated
+    between a defective candidate and a defective or misconfigured shared reference
+    image. Stamping scored_at on a shared reference failure would permanently strand
+    the entire backlog from future sweeps.
 
-    Provider/configuration errors -- 400 with invalid schema/parameter/model config,
-    401/403 (invalid or revoked API key, project permissions/quota), and 404
-    (bad or retired configured model name) -- are system/configuration failures that
-    affect the entire scorer rather than the photo. They must remain retryable so photos
-    are not permanently failed before the configuration is fixed.
-
-    Everything else -- timeouts, 5xx, 429, a transport error, an unparseable
-    response -- is worth another attempt later.
+    All provider errors are therefore kept retryable so transient provider issues,
+    configuration bugs, and bad reference images do not permanently discard
+    unscored photos. A genuinely defective photo will simply exhaust its attempt
+    budget (course_photo_scoring_max_attempts) and be skipped by the normal sweep.
     """
-    if isinstance(error, httpx.HTTPStatusError):
-        status = error.response.status_code
-        if status in {400, 422}:
-            try:
-                body_text = error.response.text.lower()
-            except Exception:
-                return False
-            return any(sig in body_text for sig in _IMAGE_FAILURE_SIGNATURES)
     return False
 
 

@@ -122,7 +122,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.rescore and not args.course_ids:
+    course_ids: list[int] | None = None
+    if args.course_ids is not None:
+        try:
+            course_ids = [int(part) for part in args.course_ids.split(",") if part.strip()]
+        except ValueError:
+            print(f"Invalid --course-ids: {args.course_ids!r} (must be comma-separated integers).")
+            return 1
+        if not course_ids:
+            print("--course-ids must contain at least one course id.")
+            return 1
+
+    if args.rescore and not course_ids:
         # Without a scope this would re-spend a provider call on the entire
         # backlog, which is never what someone means by "rescore".
         print("--rescore requires --course-ids.")
@@ -135,11 +146,6 @@ def main() -> int:
     if not settings.course_image_base_url:
         print("COURSE_IMAGE_BASE_URL is required to fetch photos for scoring.")
         return 1
-
-    course_ids = (
-        [int(part) for part in args.course_ids.split(",") if part.strip()]
-        if args.course_ids else None
-    )
 
     engine = make_engine(settings.database_url, pool_size=1, max_overflow=0)
     session_factory = make_session_factory(

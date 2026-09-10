@@ -352,6 +352,7 @@ class CourseImageRepository:
 
         image = next((img for img in tier_images if img.id == image_id), None)
         if image is None:
+            session.rollback()
             return None
 
         now = datetime.now(timezone.utc)
@@ -418,12 +419,16 @@ class CourseImageRepository:
             return None
         session.refresh(image)
         if image.moderation_status != CourseImageModeration.PENDING:
+            session.rollback()
             return None
         if image.scored_at is not None:
+            session.rollback()
             return None
         if (image.scoring_attempts or 0) >= max_attempts:
+            session.rollback()
             return None
         if self.has_featured_hero(session, image.course_id):
+            session.rollback()
             return None
 
         now = datetime.now(timezone.utc)
@@ -434,6 +439,7 @@ class CourseImageRepository:
                 else image.scoring_claimed_at.replace(tzinfo=timezone.utc)
             )
             if (now - claimed_at).total_seconds() < lease_seconds:
+                session.rollback()
                 return None
 
         image.scoring_attempts = (image.scoring_attempts or 0) + 1
@@ -476,6 +482,7 @@ class CourseImageRepository:
 
         # Verify claim ownership
         if image.scoring_claimed_at != claim_timestamp:
+            session.rollback()
             return False
 
         # Check eligibility and precedence: if human moderated or hero locked
@@ -518,6 +525,8 @@ class CourseImageRepository:
         if image is not None and image.scoring_claimed_at == claim_timestamp:
             image.scoring_claimed_at = None
             session.commit()
+        else:
+            session.rollback()
 
     def record_permanent_score_failure(
         self, session: Session, image_id: int, *, claim_timestamp: datetime,
@@ -538,6 +547,8 @@ class CourseImageRepository:
             image.scoring_claimed_at = None
             image.quality_score = None
             session.commit()
+        else:
+            session.rollback()
 
     def record_score(
         self, session: Session, image: CourseImage, *, score: float, reasons: list[str],

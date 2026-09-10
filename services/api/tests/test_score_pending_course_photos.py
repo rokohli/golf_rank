@@ -127,6 +127,21 @@ def test_rescore_without_course_ids_exits_nonzero(monkeypatch: pytest.MonkeyPatc
     assert main() == 1
 
 
+def test_rescore_with_empty_or_whitespace_course_ids_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A syntactically present but empty course scope like ',' or whitespace must not bypass the scope requirement."""
+    monkeypatch.setattr("sys.argv", ["score_pending_course_photos", "--rescore", "--course-ids", ","])
+    assert main() == 1
+
+    monkeypatch.setattr("sys.argv", ["score_pending_course_photos", "--rescore", "--course-ids", "   "])
+    assert main() == 1
+
+
+def test_invalid_course_ids_format_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-integer tokens in --course-ids must be rejected cleanly."""
+    monkeypatch.setattr("sys.argv", ["score_pending_course_photos", "--course-ids", "abc,123"])
+    assert main() == 1
+
+
 def test_exits_nonzero_without_a_gemini_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["score_pending_course_photos"])
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
