@@ -359,7 +359,14 @@ class CourseImageRepository:
         if featured:
             for sibling in tier_images:
                 if sibling.id != image.id:
-                    sibling.is_hero = False
+                    if sibling.is_hero:
+                        sibling.is_hero = False
+                        sibling.moderated_by_user_id = moderator_user_id
+                        sibling.moderated_at = now
+                        sibling.moderation_reason = None
+                        sibling.moderation_action = CourseImageModerationAction.UNFEATURED
+                    else:
+                        sibling.is_hero = False
             image.is_hero = True
             image.moderation_status = CourseImageModeration.APPROVED
             image.moderated_by_user_id = moderator_user_id

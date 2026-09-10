@@ -99,7 +99,11 @@ def score_course_photo(
         json=payload,
     )
     response.raise_for_status()
-    output_text = _gemini_output_text(response.json())
+    try:
+        raw_body = response.json()
+    except Exception as exc:
+        raise PhotoScoringError("invalid_json_envelope") from exc
+    output_text = _gemini_output_text(raw_body)
     try:
         parsed = json.loads(output_text)
     except Exception as exc:
@@ -130,15 +134,27 @@ def score_course_photo(
     return PhotoScore(score=raw_score, reasons=validated_reasons)
 
 
-def _gemini_output_text(body: dict) -> str:
-    prompt_feedback = body.get("promptFeedback") or {}
-    if prompt_feedback.get("blockReason"):
+def _gemini_output_text(body: object) -> str:
+    if not isinstance(body, dict):
+        raise PhotoScoringError("invalid_response_envelope")
+    prompt_feedback = body.get("promptFeedback")
+    if isinstance(prompt_feedback, dict) and prompt_feedback.get("blockReason"):
         raise PhotoScoringError("provider_refusal")
-    for candidate in body.get("candidates", []):
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list):
+        raise PhotoScoringError("missing_output")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
         if candidate.get("finishReason") not in {None, "STOP"}:
             raise PhotoScoringError("incomplete_response")
-        content = candidate.get("content") or {}
-        for part in content.get("parts", []):
-            if isinstance(part.get("text"), str):
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
                 return part["text"]
     raise PhotoScoringError("missing_output")

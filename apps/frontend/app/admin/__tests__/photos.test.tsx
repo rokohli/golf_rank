@@ -420,4 +420,99 @@ describe('Photo moderation', () => {
       expect(screen.queryByLabelText('Applying')).not.toBeOnTheScreen()
     })
   })
+
+  it('preserves in-flight card busy state when changing tabs until the action resolves', async () => {
+    let resolveApprove!: (val: unknown) => void
+    const approvePromise = new Promise((resolve) => {
+      resolveApprove = resolve
+    })
+    mockApprove.mockImplementationOnce(() => approvePromise)
+
+    let resolveApprovedTab!: (val: unknown) => void
+    const approvedTabPromise = new Promise((resolve) => {
+      resolveApprovedTab = resolve
+    })
+
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({
+        items: [photo({ image: { ...photo().image, id: 1 }, course_name: 'Photo In Flight' })],
+        next_cursor: null,
+      })
+      .mockImplementationOnce(() => approvedTabPromise)
+
+    render(<AdminPhotos />)
+    expect(await screen.findByText('Photo In Flight')).toBeOnTheScreen()
+
+    // Start in-flight approve action on card 1
+    fireEvent.press(screen.getByText('Approve'))
+    expect(screen.getByLabelText('Applying')).toBeOnTheScreen()
+
+    // Switch tab to Approved while approve action is in-flight and tab fetch is pending
+    fireEvent.press(screen.getByText('Approved'))
+
+    // The photo card should still be busy (not reset by load) while still visible
+    expect(screen.getByLabelText('Applying')).toBeOnTheScreen()
+
+    // Resolve the in-flight action
+    resolveApprove(photo({ image: { ...photo().image, id: 1 }, moderation_status: 'approved' }))
+
+    // Finish tab load
+    resolveApprovedTab({
+      items: [photo({ image: { ...photo().image, id: 2 }, course_name: 'Approved Photo' })],
+      next_cursor: null,
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Photo In Flight')).not.toBeOnTheScreen()
+      expect(screen.getByText('Approved Photo')).toBeOnTheScreen()
+    })
+  })
+
+  it('updates sibling hero to unfeatured with audit text when featuring another photo', async () => {
+    mockGetAdminCoursePhotos
+      .mockResolvedValueOnce({ items: [], next_cursor: null })
+      .mockResolvedValueOnce({
+        items: [
+          photo({
+            image: { ...photo().image, id: 1, is_hero: true },
+            course_id: 7,
+            course_name: 'Pasatiempo',
+            moderation_status: 'approved',
+            moderation_action: 'featured',
+            moderated_by_username: 'oldmod',
+          }),
+          photo({
+            image: { ...photo().image, id: 2, is_hero: false },
+            course_id: 7,
+            course_name: 'Pasatiempo',
+            moderation_status: 'approved',
+            moderation_action: 'approved',
+            moderated_by_username: 'oldmod',
+          }),
+        ],
+        next_cursor: null,
+      })
+    mockSetFeatured.mockResolvedValueOnce(
+      photo({
+        image: { ...photo().image, id: 2, is_hero: true },
+        course_id: 7,
+        course_name: 'Pasatiempo',
+        moderation_status: 'approved',
+        moderation_action: 'featured',
+        moderated_by_username: 'newmod',
+        moderated_at: '2026-09-09T21:00:00Z',
+      })
+    )
+
+    render(<AdminPhotos />)
+    fireEvent.press(screen.getByText('Approved'))
+    expect(await screen.findByText('Featured by @oldmod')).toBeOnTheScreen()
+
+    // Find Feature button for photo 2
+    fireEvent.press(screen.getByText('Feature'))
+
+    // After resolving, photo 1 should now display 'Unfeatured by @newmod'
+    expect(await screen.findByText('Unfeatured by @newmod')).toBeOnTheScreen()
+    expect(screen.getByText('Featured by @newmod')).toBeOnTheScreen()
+  })
 })

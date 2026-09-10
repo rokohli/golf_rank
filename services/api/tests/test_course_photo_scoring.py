@@ -473,3 +473,40 @@ def test_score_course_photo_rejects_invalid_reasons() -> None:
                 image_content_type="image/jpeg",
                 reference_images=[],
             )
+
+
+def test_score_course_photo_handles_malformed_envelope_and_json() -> None:
+    import pytest
+
+    malformed_responses = [
+        # Non-JSON body
+        httpx.Response(200, text="<html>502 Bad Gateway</html>", headers={"content-type": "text/html"}),
+        # Top-level list
+        httpx.Response(200, json=[{"candidates": []}]),
+        # candidates not a list
+        httpx.Response(200, json={"candidates": "invalid"}),
+        # candidates containing non-dict items
+        httpx.Response(200, json={"candidates": ["not-a-dict", 123]}),
+        # candidate with non-dict content
+        httpx.Response(200, json={"candidates": [{"content": "string-content"}]}),
+        # parts not a list
+        httpx.Response(200, json={"candidates": [{"content": {"parts": "not-a-list"}}]}),
+        # parts containing non-dict items
+        httpx.Response(200, json={"candidates": [{"content": {"parts": ["not-a-dict", 123]}}]}),
+        # promptFeedback is not a dict
+        httpx.Response(200, json={"promptFeedback": "blocked", "candidates": []}),
+    ]
+
+    for resp in malformed_responses:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return resp
+
+        with pytest.raises(PhotoScoringError):
+            score_course_photo(
+                _client(handler),
+                api_key="test-key",
+                model="gemini-2.5-flash-lite",
+                image_data=b"img",
+                image_content_type="image/jpeg",
+                reference_images=[],
+            )

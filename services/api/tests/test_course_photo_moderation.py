@@ -7,6 +7,7 @@ from app.models import (
     Course,
     CourseImage,
     CourseImageModeration,
+    CourseImageModerationAction,
     CourseImageSource,
     FailedObjectDeletion,
     Profile,
@@ -302,6 +303,8 @@ def test_feature_approves_and_clears_siblings_in_the_same_tier() -> None:
     first = _add_photo(client, course_id, status=CourseImageModeration.APPROVED,
                        is_hero=True, key="first.jpg")
     second = _add_photo(client, course_id, key="second.jpg")
+    third = _add_photo(client, course_id, status=CourseImageModeration.APPROVED,
+                       is_hero=False, key="third.jpg")
 
     body = client.post(f"{BASE}/{second}/feature", json={"featured": True}, headers=ADMIN).json()
 
@@ -309,7 +312,18 @@ def test_feature_approves_and_clears_siblings_in_the_same_tier() -> None:
     # PENDING row that approved_images filters out -- a silent no-op.
     assert body["moderation_status"] == "approved"
     assert body["image"]["is_hero"] is True
-    assert _photo(client, first).is_hero is False
+    first_row = _photo(client, first)
+    assert first_row.is_hero is False
+    assert first_row.moderation_action == CourseImageModerationAction.UNFEATURED
+    assert first_row.moderated_at is not None
+    assert first_row.moderated_by_user_id is not None
+    assert first_row.moderation_reason is None
+
+    # Non-hero sibling is untouched in its audit action
+    third_row = _photo(client, third)
+    assert third_row.is_hero is False
+    assert third_row.moderation_action != CourseImageModerationAction.UNFEATURED
+
 
 
 def test_feature_does_not_touch_another_tiers_hero() -> None:

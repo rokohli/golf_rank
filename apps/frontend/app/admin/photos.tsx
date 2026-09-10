@@ -51,7 +51,6 @@ export default function AdminPhotos() {
     setLoading(true)
     setError(null)
     setAppendError(null)
-    setBusyIds(new Set())
     try {
       const page = await getAdminCoursePhotos(nextStatus, null, await getAuthHeaders())
       if (reqId !== requestIdRef.current) return
@@ -73,10 +72,10 @@ export default function AdminPhotos() {
 
   const loadMore = useCallback(async () => {
     if (cursor === null || loading || loadingMoreRef.current) return
+    const reqId = requestIdRef.current
     loadingMoreRef.current = true
     setLoadingMore(true)
     setAppendError(null)
-    const reqId = requestIdRef.current
     try {
       const page = await getAdminCoursePhotos(status, cursor, await getAuthHeaders())
       if (reqId !== requestIdRef.current) return
@@ -113,6 +112,10 @@ export default function AdminPhotos() {
           return {
             ...photo,
             image: { ...photo.image, is_hero: false },
+            moderation_action: 'unfeatured',
+            moderated_by_username: updated.moderated_by_username,
+            moderated_at: updated.moderated_at,
+            moderation_reason: null,
           }
         }
         return photo
