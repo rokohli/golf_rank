@@ -20,7 +20,7 @@ from .models import (
     UserCourseRating,
 )
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
-from .rounds import _companion_blocked_ids, _event_data, _refresh_course_state
+from .rounds import _companion_blocked_ids, _event_data, _owner_blocked_ids, _refresh_course_state
 from .schemas import (
     CourseOut,
     CourseRatingIn,
@@ -59,6 +59,7 @@ def _state(
     round_ = None
     note = None
     companions = []
+    owner_blocked_ids: set[int] = set()
     if user_id is not None:
         identity_ids = course_identity_ids(session, course)
         rating = session.scalar(
@@ -83,6 +84,7 @@ def _state(
                         .order_by(RoundCompanion.id)
                     ).all()
                 )
+                owner_blocked_ids = _owner_blocked_ids(session, round_.user_id)
     return CourseRatingStateOut(
         course=_course_with_aggregate(course, average, count),
         personal_rating=rating.rating if rating else None,
@@ -105,7 +107,16 @@ def _state(
         ),
         companions=[
             {
-                "friend_user_id": companion.friend_user_id,
+                # Redact a since-blocked companion the same way _round_out
+                # does -- otherwise the client round-trips a friend_user_id
+                # that /me/follows no longer shows, and any later details
+                # edit hits patch_rating_details's blocked-companion 422
+                # with no UI path to drop it.
+                "friend_user_id": (
+                    None
+                    if companion.friend_user_id in owner_blocked_ids
+                    else companion.friend_user_id
+                ),
                 "guest_name": companion.guest_name,
             }
             for companion in companions

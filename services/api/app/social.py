@@ -506,14 +506,32 @@ def get_user_round_summary(
         visibilities = ("public", "friends") if user_id in followed_ids else ()
 
     base = select(Round).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
-    total, average, best, distinct = session.execute(
+    total, average, best = session.execute(
         select(
             func.count(Round.id),
             func.avg(Round.score),
             func.min(Round.score),
-            func.count(func.distinct(Round.course_id)),
         ).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
     ).one()
+    # Canonicalize before counting: a round logged against a source course
+    # before reconciliation and another logged against its canonical course
+    # afterward are the same course to _round_out and get_user_courses, so a
+    # raw distinct(course_id) count would overstate "Courses: N" relative to
+    # what the profile actually renders.
+    raw_course_ids = set(
+        session.scalars(
+            select(Round.course_id)
+            .where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+            .distinct()
+        ).all()
+    )
+    canonical_course_ids: set[int] = set()
+    for course_id in raw_course_ids:
+        try:
+            canonical_course_ids.add(require_course(session, course_id).id)
+        except HTTPException:
+            continue
+    distinct = len(canonical_course_ids)
     this_year = session.scalar(
         select(func.count(Round.id)).where(
             Round.user_id == user_id,
