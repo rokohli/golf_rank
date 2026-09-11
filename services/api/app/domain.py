@@ -268,6 +268,22 @@ def _batch_uploader_usernames(session: Session | None, user_ids: set[int]) -> di
 batch_uploader_usernames = _batch_uploader_usernames
 
 
+def preload_round_visibility(session: Session, courses) -> None:
+    """Warm the round-visibility cache for a whole page of courses in one
+    query. Each course's images normally carry a disjoint set of round ids,
+    so without this, course_card_hero_data/course_image_data calling
+    _batch_round_visibility per course still issues one query per card --
+    call this once, before serializing a list/search page, with every course
+    on the page."""
+    round_ids = {
+        image.round_id
+        for course in courses
+        for image in (getattr(course, "images", None) or [])
+        if image.round_id is not None
+    }
+    _batch_round_visibility(session, round_ids)
+
+
 def _batch_round_visibility(session: Session | None, round_ids: set[int]) -> dict[int, str]:
     """Round.visibility by id, memoized on the session for the life of the
     request. course_card_hero_data and course_image_data each call this once

@@ -14,7 +14,15 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
 from .core.config import Settings
 from .db import get_session
-from .domain import course_data, require_course, require_user, round_image_data, round_image_data_bulk, stored_user
+from .domain import (
+    course_data,
+    preload_round_visibility,
+    require_course,
+    require_user,
+    round_image_data,
+    round_image_data_bulk,
+    stored_user,
+)
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -608,6 +616,8 @@ def get_user_courses(
     page = resolved[offset:offset + limit]
     if not page:
         return []
+
+    preload_round_visibility(session, page)
 
     # A rating can still be stored against a source course_id that predates
     # its reconciliation, same as the state rows above -- query every
