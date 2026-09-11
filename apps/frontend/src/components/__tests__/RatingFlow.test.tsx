@@ -101,12 +101,12 @@ describe('RatingFlow', () => {
     expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
   })
 
-  it('shares a new rating with friends by default', async () => {
+  it('shares a new rating with followers by default', async () => {
     render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
     await chooseTierAndOpenRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
-    expect(screen.getByLabelText('Share with friends').props.value).toBe(true)
+    expect(screen.getByLabelText('Share with followers').props.value).toBe(true)
   })
 
   it('respects an existing private round instead of overriding it with the new-rating default', async () => {
@@ -114,7 +114,7 @@ describe('RatingFlow', () => {
     await openExistingRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
-    expect(screen.getByLabelText('Share with friends').props.value).toBe(false)
+    expect(screen.getByLabelText('Share with followers').props.value).toBe(false)
   })
 
   it.each([

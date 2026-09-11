@@ -92,7 +92,7 @@ export function RatingFlow({
     initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
     initialFriendIds,
     initialGuests,
-    initialRating.round ? initialRating.round.visibility === 'friends' : true,
+    initialRating.round ? initialRating.round.visibility !== 'private' : true,
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -112,7 +112,7 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
-  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round ? initialRating.round.visibility === 'friends' : true)
+  const [shareWithFollowers, setShareWithFollowers] = useState(initialRating.round ? initialRating.round.visibility !== 'private' : true)
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -240,7 +240,7 @@ export function RatingFlow({
     onClose()
   }
 
-  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
+  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFollowers)
   const visibleFriends = useMemo(() => {
     const normalized = friendQuery.trim().toLocaleLowerCase()
     if (normalized) return friends.filter((friend) => `${friend.display_name} ${friend.username ?? ''}`.toLocaleLowerCase().includes(normalized)).slice(0, 6)
@@ -427,7 +427,7 @@ export function RatingFlow({
                     const selected = friendIds.includes(friend.id)
                     return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
                   })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
-                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with friends</Text><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
+                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with followers</Text><Switch accessibilityLabel="Share with followers" onValueChange={setShareWithFollowers} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFollowers ? colors.pine : '#FFFFFF'} value={shareWithFollowers} /></View>
                 </View> : null}
                 <RoundRow
                   disabled={photoUploadInFlight || totalPhotoCount >= MAX_PHOTOS_PER_ROUND}
@@ -529,13 +529,13 @@ function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label:
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionButton, disabled && styles.disabled, pressed && !disabled && styles.actionPressed]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
 }
 
-function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFriends: boolean): RatingDetailsInput {
+function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFollowers: boolean): RatingDetailsInput {
   return {
     note: note.trim() || null,
     favorite_hole: favoriteHole.trim() ? Number(favoriteHole) : null,
     friend_user_ids: friendIds,
     guest_names: guests.map((guest) => guest.name),
-    visibility: shareWithFriends ? 'friends' : 'private',
+    visibility: shareWithFollowers ? 'public' : 'private',
   }
 }
 

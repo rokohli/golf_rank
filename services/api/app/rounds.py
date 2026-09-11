@@ -22,6 +22,7 @@ from .models import (
     RoundNote,
     TierAssignment,
     User,
+    UserBlock,
     UserCourseState,
 )
 from .schemas import CourseOut
@@ -135,7 +136,26 @@ class CourseStateOut(BaseModel):
     last_played_on: date | None
 
 
-def _round_out(session: Session, round_: Round) -> RoundOut:
+def _owner_blocked_ids(session: Session, round_owner_id: int) -> set[int]:
+    """Every user blocked with the round owner, in either direction -- a
+    companion in this set never has their name surfaced through that owner's
+    round, regardless of who else is allowed to view it (a block is that
+    companion's own choice to sever the association, not a per-viewer
+    decision). Computed once per request and reused across every round being
+    serialized for the same owner (see list_rounds), instead of re-querying
+    per round."""
+    outgoing = session.scalars(select(UserBlock.blocked_id).where(UserBlock.blocker_id == round_owner_id)).all()
+    incoming = session.scalars(select(UserBlock.blocker_id).where(UserBlock.blocked_id == round_owner_id)).all()
+    return set(outgoing) | set(incoming)
+
+
+def _companion_blocked_ids(session: Session, round_owner_id: int, companion_ids: set[int]) -> set[int]:
+    if not companion_ids:
+        return set()
+    return _owner_blocked_ids(session, round_owner_id) & companion_ids
+
+
+def _round_out(session: Session, round_: Round, *, owner_blocked_ids: set[int] | None = None) -> RoundOut:
     course = require_course(session, round_.course_id)
     note = session.get(RoundNote, round_.id)
     assert course is not None
@@ -144,17 +164,19 @@ def _round_out(session: Session, round_: Round) -> RoundOut:
         .where(RoundCompanion.round_id == round_.id)
         .order_by(RoundCompanion.id)
     ).all()
+    if owner_blocked_ids is None:
+        owner_blocked_ids = _owner_blocked_ids(session, round_.user_id)
     companion_output: list[RoundCompanionOut] = []
     for companion in companions:
         display_name = None
-        if companion.friend_user_id is not None:
+        if companion.friend_user_id is not None and companion.friend_user_id not in owner_blocked_ids:
             preferences = session.get(OnboardingPreference, companion.friend_user_id)
             onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
             display_name = " ".join(
                 item for item in (onboarding.get("first_name"), onboarding.get("last_name")) if item
             ).strip() or f"Golfer {companion.friend_user_id}"
         companion_output.append(RoundCompanionOut(
-            friend_user_id=companion.friend_user_id,
+            friend_user_id=None if companion.friend_user_id in owner_blocked_ids else companion.friend_user_id,
             display_name=display_name,
             guest_name=companion.guest_name,
         ))
@@ -185,7 +207,8 @@ def _validate_friend_ids(session: Session, user_id: int, friend_user_ids: list[i
             Follow.followed_id.in_(friend_ids),
         )
     ).all())
-    if user_ids != set(friend_ids) or followed_ids != set(friend_ids):
+    blocked_ids = _companion_blocked_ids(session, user_id, set(friend_ids))
+    if user_ids != set(friend_ids) or followed_ids != set(friend_ids) or blocked_ids:
         raise HTTPException(422, "All friend_user_ids must be followed users")
     return friend_ids
 
@@ -336,7 +359,8 @@ def list_rounds(
         .offset(offset)
         .limit(limit)
     ).all()
-    return [_round_out(session, item) for item in rounds]
+    owner_blocked_ids = _owner_blocked_ids(session, user.id)
+    return [_round_out(session, item, owner_blocked_ids=owner_blocked_ids) for item in rounds]
 
 
 @router.get("/summary", response_model=RoundSummaryOut)
@@ -412,8 +436,6 @@ def update_round(
     )
     if round_ is None:
         raise HTTPException(404, "Round not found")
-    if payload.visibility == "public" and round_.is_rating_round:
-        raise HTTPException(422, "Rating-owned rounds cannot be public")
     if "played_on" in payload.model_fields_set and payload.played_on is not None:
         round_.played_on = payload.played_on
     if "score" in payload.model_fields_set:

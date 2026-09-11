@@ -21,6 +21,7 @@ from .models import (
     TierAssignment,
     User,
     UserBlock,
+    UserMute,
     UserCourseRating,
 )
 from .schemas import (
@@ -85,13 +86,23 @@ def _with_current_course_data(session: Session, entries: list[dict]) -> list[dic
     ]
 
 
-def _with_round_stats(session: Session, user_id: int, entries: list[dict]) -> list[dict]:
+def _with_round_stats(
+    session: Session,
+    user_id: int,
+    entries: list[dict],
+    *,
+    visibilities: tuple[str, ...] = ("private", "friends", "public"),
+) -> list[dict]:
     course_ids = [entry["course"]["id"] for entry in entries]
     if not course_ids:
         return entries
     rows = session.execute(
         select(Round.course_id, func.count(Round.id), func.min(Round.score))
-        .where(Round.user_id == user_id, Round.course_id.in_(course_ids))
+        .where(
+            Round.user_id == user_id,
+            Round.course_id.in_(course_ids),
+            Round.visibility.in_(visibilities),
+        )
         .group_by(Round.course_id)
     ).all()
     stats = {course_id: (int(count), int(best) if best is not None else None) for course_id, count, best in rows}
@@ -113,6 +124,13 @@ def _blocked_ids(session: Session, user_id: int) -> set[int]:
         select(UserBlock.blocker_id).where(UserBlock.blocked_id == user_id)
     ).all()
     return set(blocked) | set(blockers)
+
+
+def _muted_ids(session: Session, user_id: int) -> set[int]:
+    """Mute is reciprocal for audience selection, matching social.py's rule."""
+    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
+    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
+    return set(outgoing) | set(incoming)
 
 
 def _friend_identity(session: Session, user: User) -> FriendRankingUserOut:
@@ -597,7 +615,7 @@ def get_friend_rankings(
     followers = set(session.scalars(
         select(Follow.follower_id).where(Follow.followed_id == stored.id)
     ).all())
-    friend_ids = sorted((following & followers) - _blocked_ids(session, stored.id))
+    friend_ids = sorted((following & followers) - _blocked_ids(session, stored.id) - _muted_ids(session, stored.id))
     output: list[FriendRankingOut] = []
     for friend_id in friend_ids:
         friend = session.get(User, friend_id)
@@ -624,6 +642,7 @@ def get_friend_rankings(
                             session,
                             _adapt_snapshot_entries(latest.ranking_data.get("entries", [])),
                         ),
+                        visibilities=("public", "friends"),
                     ),
                 )
                 if not entry.get("incomplete")

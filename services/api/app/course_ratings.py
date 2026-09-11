@@ -20,7 +20,7 @@ from .models import (
     UserCourseRating,
 )
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
-from .rounds import _event_data, _refresh_course_state
+from .rounds import _companion_blocked_ids, _event_data, _refresh_course_state
 from .schemas import (
     CourseOut,
     CourseRatingIn,
@@ -455,7 +455,8 @@ def patch_rating_details(
                 )
             ).all()
         )
-        if user_ids != set(friend_ids) or followed_ids != set(friend_ids):
+        blocked_ids = _companion_blocked_ids(session, user.id, set(friend_ids))
+        if user_ids != set(friend_ids) or followed_ids != set(friend_ids) or blocked_ids:
             raise HTTPException(422, "All friend_user_ids must be followed users")
 
     guest_names = list(dict.fromkeys(name.strip() for name in payload.guest_names))

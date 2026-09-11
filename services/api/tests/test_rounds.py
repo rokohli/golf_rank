@@ -255,6 +255,52 @@ def test_round_rejects_companion_who_is_not_followed() -> None:
     assert response.json()["detail"] == "All friend_user_ids must be followed users"
 
 
+def test_round_rejects_tagging_a_blocked_companion() -> None:
+    client = TestClient(create_app())
+    _profile(client, ALICE, "Alice", "aliceblockedtag")
+    _profile(client, BOB, "Bob", "bobblockedtag")
+    bob_id = client.get("/api/v1/users", headers=ALICE, params={"q": "bobblockedtag"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=BOB, params={"q": "aliceblockedtag"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=ALICE).status_code == 200
+    assert client.put(f"/api/v1/me/blocks/{alice_id}", headers=BOB).status_code == 204
+
+    response = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 1, "played_on": "2026-07-01", "friend_user_ids": [bob_id]},
+    )
+    assert response.status_code == 422
+
+
+def test_round_companion_name_is_redacted_once_blocked() -> None:
+    client = TestClient(create_app())
+    _profile(client, ALICE, "Alice", "aliceredact")
+    _profile(client, BOB, "Bob", "bobredact")
+    bob_id = client.get("/api/v1/users", headers=ALICE, params={"q": "bobredact"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=BOB, params={"q": "aliceredact"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=ALICE).status_code == 200
+
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 1, "played_on": "2026-07-01", "friend_user_ids": [bob_id]},
+    )
+    assert created.status_code == 201
+    assert created.json()["companions"] == [
+        {"friend_user_id": bob_id, "display_name": "Bob Golfer", "guest_name": None},
+    ]
+
+    # Bob later blocks Alice -- the already-tagged companion entry on Alice's
+    # existing round must stop surfacing his identity, not just future tags.
+    assert client.put(f"/api/v1/me/blocks/{alice_id}", headers=BOB).status_code == 204
+
+    fetched = client.get(f"/api/v1/me/rounds/{created.json()['id']}", headers=ALICE)
+    assert fetched.status_code == 200
+    assert fetched.json()["companions"] == [
+        {"friend_user_id": None, "display_name": None, "guest_name": None},
+    ]
+
+
 def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
     app = create_app()
     client = TestClient(app)
@@ -444,7 +490,7 @@ def test_deleting_round_records_a_failed_object_deletion_for_retry() -> None:
         assert failure.context == "round_delete"
 
 
-def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() -> None:
+def test_rating_owned_round_can_be_made_public_through_generic_round_api() -> None:
     app = create_app()
     client = TestClient(app)
     rating = client.put(
@@ -495,15 +541,16 @@ def test_rating_owned_round_cannot_be_made_public_through_generic_round_api() ->
         assert retained_round is not None
         assert retained_round.is_rating_round is True
 
-    rejected = client.patch(
+    # A rating round can be shared publicly -- the rating flow's own "share
+    # with followers" toggle already sets this same visibility value, so the
+    # generic round editor must accept it too rather than rejecting it.
+    made_public = client.patch(
         f"/api/v1/me/rounds/{round_id}",
         headers=ALICE,
         json={"visibility": "public"},
     )
-    assert rejected.status_code == 422
-    retained = client.get(f"/api/v1/me/rounds/{round_id}", headers=ALICE)
-    assert retained.status_code == 200
-    assert retained.json()["visibility"] == "private"
+    assert made_public.status_code == 200
+    assert made_public.json()["visibility"] == "public"
 
     ordinary = client.post(
         "/api/v1/me/rounds",

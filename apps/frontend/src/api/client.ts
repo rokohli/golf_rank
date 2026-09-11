@@ -32,6 +32,7 @@ import {
   SavedList,
   TierPlacement,
   PublicProfile,
+  UserCourseVisit,
   UserSummary,
   BlockedUser,
   MutedUser,
@@ -522,6 +523,18 @@ export async function searchUsers(query: string, headers: ApiHeaders): Promise<U
 export async function getUserProfile(userId: number, headers: ApiHeaders): Promise<PublicProfile> {
   const response = await fetch(`${baseUrl}/api/v1/users/${userId}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load this profile. Please try again.')
+  return response.json()
+}
+
+export async function getUserRoundSummary(userId: number, headers: ApiHeaders): Promise<RoundSummary> {
+  const response = await fetch(`${baseUrl}/api/v1/users/${userId}/rounds/summary`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load round statistics. Please try again.')
+  return response.json()
+}
+
+export async function getUserCourses(userId: number, headers: ApiHeaders): Promise<UserCourseVisit[]> {
+  const response = await fetch(`${baseUrl}/api/v1/users/${userId}/courses`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load courses played. Please try again.')
   return response.json()
 }
 

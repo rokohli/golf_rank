@@ -29,7 +29,9 @@ from .models import (
     Round,
     RoundNote,
     UserCourseRating,
+    UserCourseState,
 )
+from .rounds import RoundSummaryOut, _round_out
 from .schemas import (
     CourseOut,
     FriendCourseThoughtOut,
@@ -37,6 +39,7 @@ from .schemas import (
     FriendsCourseThoughtsOut,
     ContactLinkIn,
     ContactLinkStatusOut,
+    UserCourseVisitOut,
 )
 from .domain import course_identity_ids
 
@@ -297,7 +300,7 @@ def course_friend_thoughts(
             ActivityEvent.actor_user_id.in_(friend_ids),
             ActivityEvent.subject_type == "rating_round",
             ActivityEvent.subject_id.in_(rating_round_ids),
-            ActivityEvent.visibility == "friends",
+            ActivityEvent.visibility.in_(("friends", "public")),
         )
         .order_by(ActivityEvent.id.desc())
     ).all():
@@ -313,7 +316,8 @@ def course_friend_thoughts(
         round_ = rounds.get((rating.round_id, friend.id, rating.course_id))
         note = None
         favorite_hole = None
-        if round_ is not None and round_.visibility == "friends":
+        round_shared = round_ is not None and round_.visibility in ("friends", "public")
+        if round_shared:
             stored_note = notes.get(round_.id)
             note = stored_note.body if stored_note else None
             favorite_hole = round_.favorite_hole
@@ -323,7 +327,7 @@ def course_friend_thoughts(
             ),
             # A previously shared rating activity is not a target for a later
             # private round; the current round's visibility remains authoritative.
-            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_ is not None and round_.visibility == "friends" else None,
+            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_shared else None,
             rating=rating.rating,
             tier=rating.tier,
             note=note,
@@ -470,6 +474,126 @@ def get_user_profile(
         is_mutual=is_following and is_followed_by,
         is_muted=user_id in muted_ids,
     )
+
+
+@router.get("/api/v1/users/{user_id}/rounds/summary", response_model=RoundSummaryOut)
+def get_user_round_summary(
+    user_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> RoundSummaryOut:
+    """Round stats for another golfer, scoped to what the viewer is allowed to see.
+
+    The viewer following the target -- mutual isn't required -- unlocks their
+    non-private round stats: a private round never leaves the owner's own
+    profile, but public and friends-tagged rounds both count once the viewer
+    follows them. A total stranger (including someone the target follows but
+    who doesn't follow back) sees nothing. The coarser "has this person
+    played/rated a course" signal is meant to be open to anyone regardless of
+    follow status -- that signal is served by a different endpoint.
+    """
+    viewer = require_user(session, current)
+    target = session.get(User, user_id)
+    if target is None or user_id in _blocked_ids(session, viewer.id):
+        raise HTTPException(404, "User not found")
+
+    is_mutual = False
+    if user_id == viewer.id:
+        visibilities = ("private", "friends", "public")
+    else:
+        followed_ids, mutual_ids = _relationship_sets(session, viewer.id)
+        is_mutual = user_id in mutual_ids
+        visibilities = ("public", "friends") if user_id in followed_ids else ()
+
+    base = select(Round).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+    total, average, best, distinct = session.execute(
+        select(
+            func.count(Round.id),
+            func.avg(Round.score),
+            func.min(Round.score),
+            func.count(func.distinct(Round.course_id)),
+        ).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+    ).one()
+    this_year = session.scalar(
+        select(func.count(Round.id)).where(
+            Round.user_id == user_id,
+            Round.visibility.in_(visibilities),
+            func.extract("year", Round.played_on) == datetime.now().year,
+        )
+    ) or 0
+    latest = session.scalar(base.order_by(Round.played_on.desc(), Round.id.desc()).limit(1))
+    latest_out = _round_out(session, latest) if latest is not None else None
+    if latest_out is not None and user_id != viewer.id and latest_out.visibility == "friends" and not is_mutual:
+        # A one-way follower unlocks the *aggregate* stats for a friends-tagged
+        # round, but the round's own detail (note, favorite hole, real
+        # companion names) stays behind the mutual-friendship bar everywhere
+        # else in the app (see course_friend_thoughts) -- this must match.
+        latest_out = latest_out.model_copy(update={"note": None, "favorite_hole": None, "companions": []})
+    return RoundSummaryOut(
+        total_rounds=int(total),
+        rounds_this_year=int(this_year),
+        average_score=round(float(average), 1) if average is not None else None,
+        best_score=best,
+        distinct_courses=int(distinct),
+        latest_round=latest_out,
+    )
+
+
+@router.get("/api/v1/users/{user_id}/courses", response_model=list[UserCourseVisitOut])
+def get_user_courses(
+    user_id: int,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[UserCourseVisitOut]:
+    """The courses a golfer has played and what they rated them -- open to any
+    signed-in viewer, unlike /rounds/summary above. A rating is a course-level
+    judgment, not a round detail: it's exposed here the same way it already is
+    in course_friend_thoughts, independent of the backing round's own
+    visibility (which governs score/date/notes, not the bare fact of having
+    played/rated).
+    """
+    viewer = require_user(session, current)
+    target = session.get(User, user_id)
+    if target is None or (user_id != viewer.id and user_id in _blocked_ids(session, viewer.id)):
+        raise HTTPException(404, "User not found")
+
+    states = session.scalars(
+        select(UserCourseState)
+        .where(UserCourseState.user_id == user_id, UserCourseState.has_played.is_(True))
+        .order_by(UserCourseState.last_played_on.desc(), UserCourseState.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    course_ids = [state.course_id for state in states]
+    if not course_ids:
+        return []
+    courses = {
+        course.id: course
+        for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()
+    }
+    ratings = {
+        rating.course_id: rating
+        for rating in session.scalars(
+            select(UserCourseRating).where(
+                UserCourseRating.user_id == user_id, UserCourseRating.course_id.in_(course_ids)
+            )
+        ).all()
+    }
+    output: list[UserCourseVisitOut] = []
+    for state in states:
+        course = courses.get(state.course_id)
+        if course is None:
+            continue
+        rating = ratings.get(state.course_id)
+        output.append(UserCourseVisitOut(
+            course=course_data(course),
+            has_played=True,
+            rating=rating.rating if rating else None,
+            tier=rating.tier if rating else None,
+        ))
+    return output
 
 
 @router.put("/api/v1/me/follows/{target_user_id}", response_model=FollowOut)

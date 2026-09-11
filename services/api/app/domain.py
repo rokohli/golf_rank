@@ -17,6 +17,7 @@ from .models import (
     DeletedIdentity,
     FailedObjectDeletion,
     Profile,
+    Round,
     User,
 )
 
@@ -261,22 +262,39 @@ def _batch_uploader_usernames(session: Session | None, user_ids: set[int]) -> di
 batch_uploader_usernames = _batch_uploader_usernames
 
 
+def _batch_round_visibility(session: Session | None, round_ids: set[int]) -> dict[int, str]:
+    if session is None or not round_ids:
+        return {}
+    return dict(session.execute(select(Round.id, Round.visibility).where(Round.id.in_(round_ids))).all())
+
+
 def course_image_data(course: Course) -> list[dict]:
     """All of a course's photos, regardless of moderation_status -- moderation
     only gates hero-image eligibility (see CourseImageRepository.approved_images,
     used independently by CourseImageService.resolve_hero_image), never whether
     a photo appears in the course's own gallery. Wikimedia is excluded here: it
     only ever serves as a hero-image fallback (CourseImageService._resolve),
-    never as a gallery photo."""
+    never as a gallery photo.
+
+    This gallery has no per-viewer context (it backs the unauthenticated course
+    detail endpoint too), so a round-linked photo can only be included once its
+    round is "public" -- private and friends-only rounds never contribute a
+    photo here, regardless of who is asking."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     usernames = _batch_uploader_usernames(
         session,
         {image.uploaded_by_user_id for image in course.images if image.uploaded_by_user_id is not None},
     )
+    round_visibility = _batch_round_visibility(
+        session,
+        {image.round_id for image in course.images if image.round_id is not None},
+    )
     output = []
     for image in course.images:
         if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
+            continue
+        if image.round_id is not None and round_visibility.get(image.round_id) != "public":
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:
