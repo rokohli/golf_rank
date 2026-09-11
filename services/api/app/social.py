@@ -535,13 +535,7 @@ def get_user_round_summary(
             .distinct()
         ).all()
     )
-    canonical_course_ids: set[int] = set()
-    for course_id in raw_course_ids:
-        try:
-            canonical_course_ids.add(require_course(session, course_id).id)
-        except HTTPException:
-            continue
-    distinct = len(canonical_course_ids)
+    distinct = len({course.id for course in require_courses(session, raw_course_ids).values()})
     this_year = session.scalar(
         select(func.count(Round.id)).where(
             Round.user_id == user_id,
