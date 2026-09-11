@@ -168,9 +168,15 @@ def course_card_hero_data(course: Course) -> dict:
     )
 
     images = getattr(course, "images", None) or []
+    round_visibility = _batch_round_visibility(
+        session,
+        {image.round_id for image in images if image.round_id is not None},
+    )
     approved_with_url: list[tuple[CourseImage, str]] = []
     for image in images:
         if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
+        if image.round_id is not None and round_visibility.get(image.round_id) != "public":
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if not url:

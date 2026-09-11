@@ -559,20 +559,38 @@ def get_user_courses(
     if target is None or (user_id != viewer.id and user_id in _blocked_ids(session, viewer.id)):
         raise HTTPException(404, "User not found")
 
-    states = session.scalars(
+    # Canonicalize (and dedupe) before pagination: a UserCourseState created
+    # before its source course's reconciliation was confirmed still points at
+    # the now-hidden source row. Resolving through require_course -- same as
+    # list_course_states -- avoids showing a stale identity, and doing it
+    # ahead of offset/limit keeps a source/canonical pair that both resolve
+    # to one course from appearing twice or from displacing another course
+    # off the page.
+    all_states = session.scalars(
         select(UserCourseState)
         .where(UserCourseState.user_id == user_id, UserCourseState.has_played.is_(True))
         .order_by(UserCourseState.last_played_on.desc(), UserCourseState.id.desc())
-        .offset(offset)
-        .limit(limit)
     ).all()
-    course_ids = [state.course_id for state in states]
-    if not course_ids:
+    if not all_states:
         return []
-    courses = {
-        course.id: course
-        for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()
-    }
+
+    seen_course_ids: set[int] = set()
+    resolved: list[Course] = []
+    for state in all_states:
+        try:
+            course = require_course(session, state.course_id)
+        except HTTPException:
+            continue
+        if course.id in seen_course_ids:
+            continue
+        seen_course_ids.add(course.id)
+        resolved.append(course)
+
+    page = resolved[offset:offset + limit]
+    if not page:
+        return []
+
+    course_ids = [course.id for course in page]
     ratings = {
         rating.course_id: rating
         for rating in session.scalars(
@@ -582,11 +600,8 @@ def get_user_courses(
         ).all()
     }
     output: list[UserCourseVisitOut] = []
-    for state in states:
-        course = courses.get(state.course_id)
-        if course is None:
-            continue
-        rating = ratings.get(state.course_id)
+    for course in page:
+        rating = ratings.get(course.id)
         output.append(UserCourseVisitOut(
             course=course_data(course),
             has_played=True,
