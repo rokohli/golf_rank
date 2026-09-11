@@ -18,6 +18,7 @@ from .domain import (
     course_data,
     preload_round_visibility,
     require_course,
+    require_courses,
     require_user,
     round_image_data,
     round_image_data_bulk,
@@ -588,11 +589,13 @@ def get_user_courses(
 
     # Canonicalize (and dedupe) before pagination: a UserCourseState created
     # before its source course's reconciliation was confirmed still points at
-    # the now-hidden source row. Resolving through require_course -- same as
-    # list_course_states -- avoids showing a stale identity, and doing it
-    # ahead of offset/limit keeps a source/canonical pair that both resolve
-    # to one course from appearing twice or from displacing another course
-    # off the page.
+    # the now-hidden source row. Resolving through require_courses -- batched,
+    # unlike list_course_states's per-row require_course -- avoids showing a
+    # stale identity without making every page (including a Load More
+    # request) redo an O(total played courses) resolution, and doing it ahead
+    # of offset/limit keeps a source/canonical pair that both resolve to one
+    # course from appearing twice or from displacing another course off the
+    # page.
     all_states = session.scalars(
         select(UserCourseState)
         .where(UserCourseState.user_id == user_id, UserCourseState.has_played.is_(True))
@@ -601,14 +604,12 @@ def get_user_courses(
     if not all_states:
         return []
 
+    canonical_by_state_course_id = require_courses(session, {state.course_id for state in all_states})
     seen_course_ids: set[int] = set()
     resolved: list[Course] = []
     for state in all_states:
-        try:
-            course = require_course(session, state.course_id)
-        except HTTPException:
-            continue
-        if course.id in seen_course_ids:
+        course = canonical_by_state_course_id.get(state.course_id)
+        if course is None or course.id in seen_course_ids:
             continue
         seen_course_ids.add(course.id)
         resolved.append(course)
@@ -915,6 +916,13 @@ def activity_feed(
             event.subject_id for event in events if event.subject_type in ("round", "rating_round")
         }
         photos_by_round = round_image_data_bulk(session, round_ids)
+        # Two passes: first filter to the events that will actually be
+        # serialized and compute their data/course_id, then batch-resolve
+        # and preload every course in this batch before any course_data()
+        # call -- otherwise each event's course brings its own round-visibility
+        # query the same way course search's cards did before preloading.
+        surviving: list[tuple[ActivityEvent, User, dict]] = []
+        batch_course_ids: set[int] = set()
         for event in events:
             if cursor_boundary and (
                 event.created_at > cursor_boundary[0]
@@ -929,16 +937,20 @@ def activity_feed(
             actor = session.get(User, event.actor_user_id)
             if actor is None:
                 continue
-            course = None
             data = _activity_data(session, event, photos_by_round)
             course_id = data.get("course_id")
             if isinstance(course_id, int):
-                try:
-                    stored_course = require_course(session, course_id)
-                except HTTPException:
-                    stored_course = None
-                if stored_course is not None:
-                    course = course_data(stored_course)
+                batch_course_ids.add(course_id)
+            surviving.append((event, actor, data))
+            if len(surviving) > limit:
+                break
+
+        courses_by_id = require_courses(session, batch_course_ids)
+        preload_round_visibility(session, courses_by_id.values())
+        for event, actor, data in surviving:
+            course_id = data.get("course_id")
+            stored_course = courses_by_id.get(course_id) if isinstance(course_id, int) else None
+            course = course_data(stored_course) if stored_course is not None else None
             reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,

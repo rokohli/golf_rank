@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, require_course, stored_user
+from .domain import course_data, preload_round_visibility, require_course, stored_user
 from .models import (
     Comparison,
     Course,
@@ -70,6 +70,7 @@ def _current_course_payloads(session: Session, payloads: list[dict]) -> list[dic
         if course_ids
         else {}
     )
+    preload_round_visibility(session, courses.values())
     return [
         course_data(courses[payload["id"]])
         if payload["id"] in courses
@@ -404,6 +405,7 @@ def _stage_snapshot(
         course.id: course
         for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()
     } if course_ids else {}
+    preload_round_visibility(session, courses.values())
     counts = _comparison_counts(session, user_id)
     # Incomplete (onboarding-placeholder) assignments occupy a tier slot but must not
     # shift the personal_rating of the user's actual, finished courses in that tier —

@@ -78,6 +78,54 @@ def require_course(session: Session, course_id: int) -> Course:
     return canonical
 
 
+def require_courses(session: Session, course_ids) -> dict[int, Course]:
+    """Batched require_course: canonicalizes many course ids in a fixed
+    number of queries instead of up to two per id. A course search/profile
+    page can carry up to 100+ course ids (e.g. get_user_courses's per-state
+    resolution before pagination) -- one require_course call per id there
+    makes even a limit=1 request touch every played course. An id that
+    doesn't resolve to an existing course is simply omitted, matching
+    require_course's 404 by absence rather than by raising per id."""
+    course_ids = set(course_ids)
+    if not course_ids:
+        return {}
+    courses = {course.id: course for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()}
+    needing_lookup = [course for course in courses.values() if course.source_course_id is not None]
+    canonical_id_by_course_id: dict[int, int] = {}
+    if needing_lookup:
+        keys = {(course.source, course.source_course_id) for course in needing_lookup}
+        recon_rows = session.execute(
+            select(
+                CourseReconciliation.source,
+                CourseReconciliation.source_course_id,
+                CourseReconciliation.canonical_course_id,
+            ).where(
+                tuple_(CourseReconciliation.source, CourseReconciliation.source_course_id).in_(keys),
+                CourseReconciliation.match_status == "confirmed",
+            )
+        ).all()
+        recon_map = {(source, source_course_id): canonical_id for source, source_course_id, canonical_id in recon_rows}
+        for course in needing_lookup:
+            canonical_id = recon_map.get((course.source, course.source_course_id))
+            if canonical_id is not None and canonical_id != course.id:
+                canonical_id_by_course_id[course.id] = canonical_id
+        missing_canonical_ids = {
+            canonical_id for canonical_id in canonical_id_by_course_id.values() if canonical_id not in courses
+        }
+        if missing_canonical_ids:
+            for extra in session.scalars(select(Course).where(Course.id.in_(missing_canonical_ids))).all():
+                courses[extra.id] = extra
+    result: dict[int, Course] = {}
+    for course_id in course_ids:
+        course = courses.get(course_id)
+        if course is None:
+            continue
+        canonical_id = canonical_id_by_course_id.get(course_id)
+        canonical = courses.get(canonical_id) if canonical_id is not None else None
+        result[course_id] = canonical if canonical is not None else course
+    return result
+
+
 def canonical_courses_only():
     """SQL predicate that hides source rows mapped to another canonical course."""
 
