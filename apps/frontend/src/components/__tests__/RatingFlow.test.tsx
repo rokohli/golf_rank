@@ -132,6 +132,24 @@ describe('RatingFlow', () => {
     await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' })))
   })
 
+  it('retries the pending details save for a new rating after saveRating already succeeded', async () => {
+    const saveDetails = jest.fn()
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ ...existingRating, personal_rating: 9.1 })
+    const inputProps = props({ getCandidate: jest.fn().mockResolvedValue(null), saveDetails })
+    render(<RatingFlow {...inputProps} />)
+    await chooseTierAndOpenRound()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText('Network unavailable')).toBeOnTheScreen()
+    expect(inputProps.saveRating).toHaveBeenCalledTimes(1)
+
+    fireEvent.press(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(saveDetails).toHaveBeenCalledTimes(2))
+    expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
+  })
+
   it.each([
     ['Pebble Beach Golf Links', 'course_a'],
     ['Spyglass Hill', 'course_b'],

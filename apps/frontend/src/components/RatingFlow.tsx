@@ -119,6 +119,14 @@ export function RatingFlow({
   const [guestMessage, setGuestMessage] = useState<string | null>(null)
   const [existingPhotos, setExistingPhotos] = useState<CourseImage[]>(initialRating.round?.photos ?? [])
   const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
+  // Once saveRating succeeds for a brand-new rating, ratingState.round is set
+  // and isNewRound flips false on the next render -- if saveDetails then
+  // fails, a bare isNewRound/detailsChanged retry gate would silently skip
+  // the retry (detailsChanged is still false too, since nothing else
+  // changed) and leave the round stuck private despite the error promising
+  // Continue would retry it. This survives across that re-render so the
+  // retry still runs saveDetails.
+  const [detailsSavePending, setDetailsSavePending] = useState(false)
   const savingRef = useRef(false)
   const totalPhotoCount = existingPhotos.length + stagedPhotos.length
   const photoUploadInFlight = stagedPhotos.some((photo) => photo.status === 'uploading')
@@ -263,16 +271,23 @@ export function RatingFlow({
     if (!tier || !playedOn || !roundValid || !favoriteHoleValid) return
     setError(null)
     if (coreUnchanged && ratingState.personal_rating != null) {
-      if (!detailsChanged && !stagedPhotos.length) {
+      // A retry after persistRating's saveRating succeeded but saveDetails
+      // failed lands here on the next Continue press -- coreBaseline and
+      // ratingState.personal_rating are already updated from that saveRating
+      // call, so this is the branch that runs, not persistRating again.
+      // detailsSavePending (set by persistRating's catch) keeps that retry
+      // from being skipped just because nothing else changed.
+      if (!detailsChanged && !stagedPhotos.length && !detailsSavePending) {
         setStage('reveal')
         return
       }
       setBusy(true)
       try {
-        if (detailsChanged) {
+        if (detailsChanged || detailsSavePending) {
           const saved = await saveDetails(currentDetails)
           setRatingState(saved)
           setDetailsBaseline(currentDetails)
+          setDetailsSavePending(false)
         }
         if (ratingState.round?.id) await finalizePhotos(ratingState.round.id)
         setStage('reveal')
@@ -332,14 +347,16 @@ export function RatingFlow({
       return
     }
 
-    if (detailsChanged || isNewRound) {
+    if (detailsChanged || isNewRound || detailsSavePending) {
       try {
         saved = await saveDetails(currentDetails)
         setRatingState(saved)
         setDetailsBaseline(currentDetails)
+        setDetailsSavePending(false)
       } catch (reason) {
         setError(errorMessage(reason, 'Your rating was saved, but the round details were not. Tap Continue to retry.'))
         setStage('round')
+        setDetailsSavePending(true)
         savingRef.current = false
         setBusy(false)
         return
