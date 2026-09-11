@@ -9,7 +9,15 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, course_identity_ids, require_course, require_user, stored_user
+from .domain import (
+    course_data,
+    course_identity_ids,
+    preload_round_visibility,
+    require_course,
+    require_courses,
+    require_user,
+    stored_user,
+)
 from .models import ActivityEvent, Course, SavedCourse, SavedList
 from .schemas import CourseOut
 
@@ -65,12 +73,11 @@ def _list_out(session: Session, saved_list: SavedList) -> SavedListOut:
         .where(SavedCourse.list_id == saved_list.id)
         .order_by(SavedCourse.created_at.desc(), SavedCourse.id.desc())
     ).all()
+    courses_by_id = require_courses(session, {saved.course_id for saved in saved_courses})
+    preload_round_visibility(session, courses_by_id.values())
     output_courses: list[SavedCourseOut] = []
     for saved in saved_courses:
-        try:
-            course = require_course(session, saved.course_id)
-        except HTTPException:
-            course = None
+        course = courses_by_id.get(saved.course_id)
         if course is not None:
             output_courses.append(
                 SavedCourseOut(

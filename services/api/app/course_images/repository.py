@@ -11,6 +11,7 @@ from ..models import (
     CourseImageModerationAction,
     CourseImageNegativeCache,
     CourseImageSource,
+    Round,
 )
 
 IDEAL_HERO_ASPECT_RATIO = 16 / 9
@@ -51,12 +52,18 @@ def _rank_key(image: CourseImage):
 
 class CourseImageRepository:
     def approved_images(self, session: Session, course_id: int, source_type: str) -> list[CourseImage]:
-        """All APPROVED rows in one source tier, best candidate first."""
+        """All APPROVED rows in one source tier, best candidate first. A
+        round-linked image is only eligible once its round is public -- a
+        private or friends-only round must never surface as a course's
+        public hero image, mirroring course_image_data's gallery filter."""
         candidates = session.scalars(
-            select(CourseImage).where(
+            select(CourseImage)
+            .outerjoin(Round, Round.id == CourseImage.round_id)
+            .where(
                 CourseImage.course_id == course_id,
                 CourseImage.source_type == source_type,
                 CourseImage.moderation_status == CourseImageModeration.APPROVED,
+                (CourseImage.round_id.is_(None)) | (Round.visibility == "public"),
             )
         ).all()
         return sorted(candidates, key=_rank_key)

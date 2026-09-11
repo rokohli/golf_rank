@@ -92,7 +92,7 @@ export function RatingFlow({
     initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
     initialFriendIds,
     initialGuests,
-    initialRating.round ? initialRating.round.visibility === 'friends' : true,
+    initialRating.round ? initialRating.round.visibility !== 'private' : true,
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -112,13 +112,21 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
-  const [shareWithFriends, setShareWithFriends] = useState(initialRating.round ? initialRating.round.visibility === 'friends' : true)
+  const [shareWithFollowers, setShareWithFollowers] = useState(initialRating.round ? initialRating.round.visibility !== 'private' : true)
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guestMessage, setGuestMessage] = useState<string | null>(null)
   const [existingPhotos, setExistingPhotos] = useState<CourseImage[]>(initialRating.round?.photos ?? [])
   const [stagedPhotos, setStagedPhotos] = useState<StagedPhoto[]>([])
+  // Once saveRating succeeds for a brand-new rating, ratingState.round is set
+  // and isNewRound flips false on the next render -- if saveDetails then
+  // fails, a bare isNewRound/detailsChanged retry gate would silently skip
+  // the retry (detailsChanged is still false too, since nothing else
+  // changed) and leave the round stuck private despite the error promising
+  // Continue would retry it. This survives across that re-render so the
+  // retry still runs saveDetails.
+  const [detailsSavePending, setDetailsSavePending] = useState(false)
   const savingRef = useRef(false)
   const totalPhotoCount = existingPhotos.length + stagedPhotos.length
   const photoUploadInFlight = stagedPhotos.some((photo) => photo.status === 'uploading')
@@ -240,7 +248,7 @@ export function RatingFlow({
     onClose()
   }
 
-  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFriends)
+  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFollowers)
   const visibleFriends = useMemo(() => {
     const normalized = friendQuery.trim().toLocaleLowerCase()
     if (normalized) return friends.filter((friend) => `${friend.display_name} ${friend.username ?? ''}`.toLocaleLowerCase().includes(normalized)).slice(0, 6)
@@ -263,16 +271,23 @@ export function RatingFlow({
     if (!tier || !playedOn || !roundValid || !favoriteHoleValid) return
     setError(null)
     if (coreUnchanged && ratingState.personal_rating != null) {
-      if (!detailsChanged && !stagedPhotos.length) {
+      // A retry after persistRating's saveRating succeeded but saveDetails
+      // failed lands here on the next Continue press -- coreBaseline and
+      // ratingState.personal_rating are already updated from that saveRating
+      // call, so this is the branch that runs, not persistRating again.
+      // detailsSavePending (set by persistRating's catch) keeps that retry
+      // from being skipped just because nothing else changed.
+      if (!detailsChanged && !stagedPhotos.length && !detailsSavePending) {
         setStage('reveal')
         return
       }
       setBusy(true)
       try {
-        if (detailsChanged) {
+        if (detailsChanged || detailsSavePending) {
           const saved = await saveDetails(currentDetails)
           setRatingState(saved)
           setDetailsBaseline(currentDetails)
+          setDetailsSavePending(false)
         }
         if (ratingState.round?.id) await finalizePhotos(ratingState.round.id)
         setStage('reveal')
@@ -303,6 +318,17 @@ export function RatingFlow({
 
   async function persistRating(comparisonCourseId: number | null, result: ComparisonResult | null, alreadyBusy = false) {
     if (!tier || !playedOn || savingRef.current) return
+    // saveRating (PUT /course-ratings/{course_id}) always creates a brand-new
+    // Round with visibility="private" when the user has no existing round for
+    // this course (services/api/app/course_ratings.py) -- a re-rate of an
+    // existing round leaves that round's own visibility untouched. So a
+    // first-time rating needs saveDetails to run unconditionally to persist
+    // the "Share with followers" switch's actual value; gating it on
+    // detailsChanged would only fix it when the switch happens to differ from
+    // its own default. Re-rating an existing round keeps the detailsChanged
+    // gate, so an unrelated tier/score change alone can't broaden that
+    // round's visibility.
+    const isNewRound = !ratingState.round
     savingRef.current = true
     setError(null)
     if (!alreadyBusy) setBusy(true)
@@ -321,14 +347,16 @@ export function RatingFlow({
       return
     }
 
-    if (detailsChanged) {
+    if (detailsChanged || isNewRound || detailsSavePending) {
       try {
         saved = await saveDetails(currentDetails)
         setRatingState(saved)
         setDetailsBaseline(currentDetails)
+        setDetailsSavePending(false)
       } catch (reason) {
         setError(errorMessage(reason, 'Your rating was saved, but the round details were not. Tap Continue to retry.'))
         setStage('round')
+        setDetailsSavePending(true)
         savingRef.current = false
         setBusy(false)
         return
@@ -427,7 +455,7 @@ export function RatingFlow({
                     const selected = friendIds.includes(friend.id)
                     return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
                   })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
-                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with friends</Text><Switch accessibilityLabel="Share with friends" onValueChange={setShareWithFriends} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFriends ? colors.pine : '#FFFFFF'} value={shareWithFriends} /></View>
+                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with followers</Text><Switch accessibilityLabel="Share with followers" onValueChange={setShareWithFollowers} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFollowers ? colors.pine : '#FFFFFF'} value={shareWithFollowers} /></View>
                 </View> : null}
                 <RoundRow
                   disabled={photoUploadInFlight || totalPhotoCount >= MAX_PHOTOS_PER_ROUND}
@@ -529,13 +557,13 @@ function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label:
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionButton, disabled && styles.disabled, pressed && !disabled && styles.actionPressed]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
 }
 
-function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFriends: boolean): RatingDetailsInput {
+function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFollowers: boolean): RatingDetailsInput {
   return {
     note: note.trim() || null,
     favorite_hole: favoriteHole.trim() ? Number(favoriteHole) : null,
     friend_user_ids: friendIds,
     guest_names: guests.map((guest) => guest.name),
-    visibility: shareWithFriends ? 'friends' : 'private',
+    visibility: shareWithFollowers ? 'public' : 'private',
   }
 }
 

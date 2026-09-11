@@ -282,10 +282,19 @@ def test_confirm_links_round_id_and_appears_on_feed_regardless_of_moderation() -
     state = client.get(f"/api/v1/me/course-ratings/{course_id}", headers=HEADERS).json()
     assert [photo["id"] for photo in state["round"]["photos"]] == [body["id"]]
 
-    # Moderation gates hero eligibility only -- the pending photo is still
-    # visible in the course's own gallery.
+    # The rating round defaults to private -- its photo must not leak into the
+    # course's own (unauthenticated) gallery while it stays that way.
     detail = client.get(f"/api/v1/courses/{course_id}")
-    assert any(image["id"] == body["id"] for image in detail.json()["images"])
+    assert not any(image["id"] == body["id"] for image in detail.json()["images"])
+
+    # Once the golfer shares the round, moderation gates hero eligibility only
+    # -- the still-PENDING photo becomes visible in the course's own gallery.
+    assert client.patch(
+        f"/api/v1/me/course-ratings/{course_id}/details", headers=HEADERS,
+        json={"visibility": "public"},
+    ).status_code == 200
+    shared_detail = client.get(f"/api/v1/courses/{course_id}")
+    assert any(image["id"] == body["id"] for image in shared_detail.json()["images"])
 
 
 def test_confirm_rejects_round_id_belonging_to_another_user() -> None:

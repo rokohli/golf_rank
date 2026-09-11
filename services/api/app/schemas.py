@@ -253,7 +253,7 @@ class RatingDetailsPatch(BaseModel):
     favorite_hole: int | None = Field(default=None, ge=1, le=18)
     friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
     guest_names: list[str] = Field(default_factory=list, max_length=20)
-    visibility: Literal["private", "friends"] = "private"
+    visibility: Literal["private", "friends", "public"] = "private"
 
     @field_validator("guest_names")
     @classmethod
@@ -272,7 +272,7 @@ class RatingRoundOut(BaseModel):
     score: int | None
     note: str | None
     favorite_hole: int | None
-    visibility: Literal["private", "friends"]
+    visibility: Literal["private", "friends", "public"]
     photos: list[CourseImageOut] = Field(default_factory=list)
 
 
@@ -365,3 +365,15 @@ class FriendsCourseThoughtsOut(BaseModel):
     average_rating: float | None = None
     rating_count: int = 0
     entries: list[FriendCourseThoughtOut] = Field(default_factory=list)
+
+
+class UserCourseVisitOut(BaseModel):
+    """The coarse, always-open signal that a golfer has played a course and
+    what they rated it -- deliberately decoupled from round-level visibility,
+    which governs the round's own specifics (score, date, notes), not the bare
+    fact of having played/rated. Available to any signed-in viewer."""
+
+    course: CourseOut
+    has_played: bool
+    rating: float | None = Field(default=None, ge=1, le=10)
+    tier: RankingTier | None = None

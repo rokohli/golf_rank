@@ -452,6 +452,115 @@ def test_get_user_profile_self_and_blocked() -> None:
     assert client.get("/api/v1/users/999999", headers=alice).status_code == 404
 
 
+def test_get_user_round_summary_respects_visibility() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:round-summary-alice", "Alice", "roundsummaryalice")
+    bob = _profile(client, "dev:round-summary-bob", "Bob", "roundsummarybob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "roundsummarybob"}).json()[0]["id"]
+
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 90, "visibility": "private"},
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 1, "played_on": "2026-07-02", "score": 88, "visibility": "public"},
+    ).status_code == 201
+
+    # A stranger with no follow relationship sees nothing at all -- "public"
+    # means visible to followers, not to anyone with an account.
+    stranger_summary = client.get(f"/api/v1/users/{bob_id}/rounds/summary", headers=alice).json()
+    assert stranger_summary["total_rounds"] == 0
+    assert stranger_summary["latest_round"] is None
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    # Following (not mutual): the public round is visible; private never is.
+    summary = client.get(f"/api/v1/users/{bob_id}/rounds/summary", headers=alice).json()
+    assert summary["total_rounds"] == 1
+    assert summary["latest_round"]["score"] == 88
+    assert summary["latest_round"]["visibility"] == "public"
+
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={
+            "course_id": 2, "played_on": "2026-07-03", "score": 82, "visibility": "friends",
+            "note": "Great back nine", "favorite_hole": 14,
+        },
+    ).status_code == 201
+
+    # Still just following, not mutual: a friends-tagged round now also counts
+    # toward the aggregate stats -- following (in either direction) is the only
+    # threshold for stats, private is the only tier that never leaves the
+    # owner's own profile. But the round's own detail (note, favorite hole)
+    # stays behind the mutual-friendship bar, same as everywhere else that
+    # reveals "friends"-tagged content -- a one-way follower isn't a friend.
+    following_summary = client.get(f"/api/v1/users/{bob_id}/rounds/summary", headers=alice).json()
+    assert following_summary["total_rounds"] == 2
+    assert following_summary["distinct_courses"] == 2
+    assert following_summary["latest_round"]["score"] == 82
+    assert following_summary["latest_round"]["visibility"] == "friends"
+    assert following_summary["latest_round"]["note"] is None
+    assert following_summary["latest_round"]["favorite_hole"] is None
+
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "roundsummaryalice"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+
+    # Now mutual: the note and favorite hole are revealed.
+    mutual_summary = client.get(f"/api/v1/users/{bob_id}/rounds/summary", headers=alice).json()
+    assert mutual_summary["latest_round"]["note"] == "Great back nine"
+    assert mutual_summary["latest_round"]["favorite_hole"] == 14
+
+
+def test_get_user_round_summary_blocked_returns_404() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:round-summary-block-alice", "Alice", "roundsummaryblockalice")
+    bob = _profile(client, "dev:round-summary-block-bob", "Bob", "roundsummaryblockbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "roundsummaryblockbob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.get(f"/api/v1/users/{bob_id}/rounds/summary", headers=alice).status_code == 404
+
+
+def test_get_user_courses_is_open_to_any_signed_in_viewer_regardless_of_round_visibility() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:user-courses-alice", "Alice", "usercoursesalice")
+    bob = _profile(client, "dev:user-courses-bob", "Bob", "usercoursesbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "usercoursesbob"}).json()[0]["id"]
+
+    # A plain round, never rated, kept private -- "has played" is still visible.
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 90, "visibility": "private"},
+    ).status_code == 201
+    # A rated course. Rating rounds default to private and this test never
+    # shares it -- the rating itself is still visible to a total stranger.
+    assert client.put(
+        "/api/v1/me/course-ratings/2", headers=bob,
+        json={"tier": "green", "played_on": "2026-07-02", "score": 80},
+    ).status_code == 200
+
+    # Alice is a total stranger to Bob: not following, not blocked.
+    courses = client.get(f"/api/v1/users/{bob_id}/courses", headers=alice).json()
+    by_course_id = {entry["course"]["id"]: entry for entry in courses}
+    assert by_course_id[1]["has_played"] is True
+    assert by_course_id[1]["rating"] is None
+    assert by_course_id[1]["tier"] is None
+    assert by_course_id[2]["has_played"] is True
+    assert by_course_id[2]["rating"] is not None
+    assert by_course_id[2]["tier"] == "green"
+
+
+def test_get_user_courses_blocked_returns_404() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:user-courses-block-alice", "Alice", "usercoursesblockalice")
+    bob = _profile(client, "dev:user-courses-block-bob", "Bob", "usercoursesblockbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "usercoursesblockbob"}).json()[0]["id"]
+
+    assert client.put(f"/api/v1/me/blocks/{bob_id}", headers=alice).status_code == 204
+    assert client.get(f"/api/v1/users/{bob_id}/courses", headers=alice).status_code == 404
+
+
 def test_legacy_profile_visibility_is_ignored_for_search_and_shared_posts() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:privacy-alice", "Alice", "privacyalice")

@@ -52,8 +52,13 @@ function props(overrides: Partial<RatingFlowProps> = {}): RatingFlowProps {
     initialRating: emptyRating,
     friends: [{ id: 22, display_name: 'Morgan Golfer', username: 'morgan' }],
     getCandidate: jest.fn().mockResolvedValue({ ...course, id: 2, name: 'Spyglass Hill' }),
+    // A first-time rating now always follows saveRating with saveDetails
+    // (RatingFlow's isNewRound branch), so the two need to agree on the
+    // rating a test expects to see on the reveal screen -- a real backend's
+    // saveDetails response wouldn't disagree with saveRating's about the
+    // rating itself.
     saveRating: jest.fn().mockResolvedValue({ ...existingRating, personal_rating: 9.1 }),
-    saveDetails: jest.fn().mockResolvedValue(existingRating),
+    saveDetails: jest.fn().mockResolvedValue({ ...existingRating, personal_rating: 9.1 }),
     startPhotoUpload: jest.fn().mockResolvedValue({ storageKey: 'course-photos/1/staged.jpg' }),
     confirmPhotoUpload: jest.fn().mockResolvedValue({ id: 99, source_type: 'user' }),
     discardPhotoUpload: jest.fn().mockResolvedValue(undefined),
@@ -101,12 +106,12 @@ describe('RatingFlow', () => {
     expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
   })
 
-  it('shares a new rating with friends by default', async () => {
+  it('shares a new rating with followers by default', async () => {
     render(<RatingFlow {...props({ getCandidate: jest.fn().mockResolvedValue(null) })} />)
     await chooseTierAndOpenRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
-    expect(screen.getByLabelText('Share with friends').props.value).toBe(true)
+    expect(screen.getByLabelText('Share with followers').props.value).toBe(true)
   })
 
   it('respects an existing private round instead of overriding it with the new-rating default', async () => {
@@ -114,7 +119,35 @@ describe('RatingFlow', () => {
     await openExistingRound()
 
     fireEvent.press(screen.getByRole('button', { name: 'Friends' }))
-    expect(screen.getByLabelText('Share with friends').props.value).toBe(false)
+    expect(screen.getByLabelText('Share with followers').props.value).toBe(false)
+  })
+
+  it('persists the default follower visibility for a new rating even when no other detail changed', async () => {
+    const inputProps = props({ getCandidate: jest.fn().mockResolvedValue(null) })
+    render(<RatingFlow {...inputProps} />)
+    await chooseTierAndOpenRound()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.saveRating).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' })))
+  })
+
+  it('retries the pending details save for a new rating after saveRating already succeeded', async () => {
+    const saveDetails = jest.fn()
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ ...existingRating, personal_rating: 9.1 })
+    const inputProps = props({ getCandidate: jest.fn().mockResolvedValue(null), saveDetails })
+    render(<RatingFlow {...inputProps} />)
+    await chooseTierAndOpenRound()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText('Network unavailable')).toBeOnTheScreen()
+    expect(inputProps.saveRating).toHaveBeenCalledTimes(1)
+
+    fireEvent.press(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(saveDetails).toHaveBeenCalledTimes(2))
+    expect(await screen.findByLabelText('Your rating is 9.1 out of 10')).toBeOnTheScreen()
   })
 
   it.each([
@@ -144,7 +177,8 @@ describe('RatingFlow', () => {
     const saveRating = jest.fn()
       .mockRejectedValueOnce(new Error('Network unavailable'))
       .mockResolvedValueOnce({ ...existingRating, personal_rating: 8.9 })
-    render(<RatingFlow {...props({ saveRating })} />)
+    const saveDetails = jest.fn().mockResolvedValue({ ...existingRating, personal_rating: 8.9 })
+    render(<RatingFlow {...props({ saveRating, saveDetails })} />)
     await chooseTierAndOpenRound()
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByText('Spyglass Hill')
@@ -198,7 +232,7 @@ describe('RatingFlow', () => {
   })
 
   it('keeps only the date summary visible and saves edited details before reveal', async () => {
-    const inputProps = props({ initialRating: existingRating })
+    const inputProps = props({ initialRating: existingRating, saveDetails: jest.fn().mockResolvedValue(existingRating) })
     render(<RatingFlow {...inputProps} />)
     await openExistingRound()
 
@@ -215,7 +249,7 @@ describe('RatingFlow', () => {
   })
 
   it('saves collected round details after a new rating and before showing the reveal', async () => {
-    const inputProps = props()
+    const inputProps = props({ saveDetails: jest.fn().mockResolvedValue(existingRating) })
     render(<RatingFlow {...inputProps} />)
     await chooseTierAndOpenRound()
     fireEvent.press(screen.getByRole('button', { name: 'Notes' }))

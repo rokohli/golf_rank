@@ -156,7 +156,7 @@ export type RatingDetailsInput = {
   favorite_hole: number | null
   friend_user_ids: number[]
   guest_names: string[]
-  visibility: 'private' | 'friends'
+  visibility: 'private' | 'friends' | 'public'
 }
 
 export type CourseRatingState = {
@@ -172,7 +172,7 @@ export type CourseRatingState = {
     score: number | null
     note: string | null
     favorite_hole: number | null
-    visibility: 'private' | 'friends'
+    visibility: 'private' | 'friends' | 'public'
     photos: CourseImage[]
   } | null
   companions: {
@@ -336,6 +336,13 @@ export type RoundSummary = {
   best_score: number | null
   distinct_courses: number
   latest_round: GolfRound | null
+}
+
+export type UserCourseVisit = {
+  course: Course
+  has_played: boolean
+  rating: number | null
+  tier: RankingTier | null
 }
 
 export type RankingComparison = {

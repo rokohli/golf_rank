@@ -36,6 +36,7 @@ from .domain import (
     course_identity_ids,
     delete_permanent_objects,
     lock_identity_transaction,
+    preload_round_visibility,
     require_course,
     require_user,
 )
@@ -544,6 +545,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             len(rows), q, country, admin1, city, region, radius_miles, access, difficulty,
             max_green_fee,
         )
+        preload_round_visibility(session, (stored_course for stored_course, _, _ in rows))
         return [
             {
                 **course_data(stored_course),

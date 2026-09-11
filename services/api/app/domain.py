@@ -17,6 +17,7 @@ from .models import (
     DeletedIdentity,
     FailedObjectDeletion,
     Profile,
+    Round,
     User,
 )
 
@@ -75,6 +76,54 @@ def require_course(session: Session, course_id: int) -> Course:
     if canonical is None:
         raise HTTPException(404, "Course not found")
     return canonical
+
+
+def require_courses(session: Session, course_ids) -> dict[int, Course]:
+    """Batched require_course: canonicalizes many course ids in a fixed
+    number of queries instead of up to two per id. A course search/profile
+    page can carry up to 100+ course ids (e.g. get_user_courses's per-state
+    resolution before pagination) -- one require_course call per id there
+    makes even a limit=1 request touch every played course. An id that
+    doesn't resolve to an existing course is simply omitted, matching
+    require_course's 404 by absence rather than by raising per id."""
+    course_ids = set(course_ids)
+    if not course_ids:
+        return {}
+    courses = {course.id: course for course in session.scalars(select(Course).where(Course.id.in_(course_ids))).all()}
+    needing_lookup = [course for course in courses.values() if course.source_course_id is not None]
+    canonical_id_by_course_id: dict[int, int] = {}
+    if needing_lookup:
+        keys = {(course.source, course.source_course_id) for course in needing_lookup}
+        recon_rows = session.execute(
+            select(
+                CourseReconciliation.source,
+                CourseReconciliation.source_course_id,
+                CourseReconciliation.canonical_course_id,
+            ).where(
+                tuple_(CourseReconciliation.source, CourseReconciliation.source_course_id).in_(keys),
+                CourseReconciliation.match_status == "confirmed",
+            )
+        ).all()
+        recon_map = {(source, source_course_id): canonical_id for source, source_course_id, canonical_id in recon_rows}
+        for course in needing_lookup:
+            canonical_id = recon_map.get((course.source, course.source_course_id))
+            if canonical_id is not None and canonical_id != course.id:
+                canonical_id_by_course_id[course.id] = canonical_id
+        missing_canonical_ids = {
+            canonical_id for canonical_id in canonical_id_by_course_id.values() if canonical_id not in courses
+        }
+        if missing_canonical_ids:
+            for extra in session.scalars(select(Course).where(Course.id.in_(missing_canonical_ids))).all():
+                courses[extra.id] = extra
+    result: dict[int, Course] = {}
+    for course_id in course_ids:
+        course = courses.get(course_id)
+        if course is None:
+            continue
+        canonical_id = canonical_id_by_course_id.get(course_id)
+        canonical = courses.get(canonical_id) if canonical_id is not None else None
+        result[course_id] = canonical if canonical is not None else course
+    return result
 
 
 def canonical_courses_only():
@@ -167,9 +216,15 @@ def course_card_hero_data(course: Course) -> dict:
     )
 
     images = getattr(course, "images", None) or []
+    round_visibility = _batch_round_visibility(
+        session,
+        {image.round_id for image in images if image.round_id is not None},
+    )
     approved_with_url: list[tuple[CourseImage, str]] = []
     for image in images:
         if image.moderation_status != CourseImageModeration.APPROVED:
+            continue
+        if image.round_id is not None and round_visibility.get(image.round_id) != "public":
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if not url:
@@ -261,22 +316,66 @@ def _batch_uploader_usernames(session: Session | None, user_ids: set[int]) -> di
 batch_uploader_usernames = _batch_uploader_usernames
 
 
+def preload_round_visibility(session: Session, courses) -> None:
+    """Warm the round-visibility cache for a whole page of courses in one
+    query. Each course's images normally carry a disjoint set of round ids,
+    so without this, course_card_hero_data/course_image_data calling
+    _batch_round_visibility per course still issues one query per card --
+    call this once, before serializing a list/search page, with every course
+    on the page."""
+    round_ids = {
+        image.round_id
+        for course in courses
+        for image in (getattr(course, "images", None) or [])
+        if image.round_id is not None
+    }
+    _batch_round_visibility(session, round_ids)
+
+
+def _batch_round_visibility(session: Session | None, round_ids: set[int]) -> dict[int, str]:
+    """Round.visibility by id, memoized on the session for the life of the
+    request. course_card_hero_data and course_image_data each call this once
+    per course, and a course list/search page serializes up to 100 courses --
+    without the cache that's up to 200 round-visibility queries per page.
+    Caching on session.info (already used for course_image_base_url etc.)
+    means only round ids not seen yet on this request hit the database,
+    regardless of how many cards or call sites ask for them."""
+    if session is None or not round_ids:
+        return {}
+    cache: dict[int, str] = session.info.setdefault("round_visibility_cache", {})
+    missing = round_ids - cache.keys()
+    if missing:
+        cache.update(session.execute(select(Round.id, Round.visibility).where(Round.id.in_(missing))).all())
+    return {round_id: cache[round_id] for round_id in round_ids if round_id in cache}
+
+
 def course_image_data(course: Course) -> list[dict]:
     """All of a course's photos, regardless of moderation_status -- moderation
     only gates hero-image eligibility (see CourseImageRepository.approved_images,
     used independently by CourseImageService.resolve_hero_image), never whether
     a photo appears in the course's own gallery. Wikimedia is excluded here: it
     only ever serves as a hero-image fallback (CourseImageService._resolve),
-    never as a gallery photo."""
+    never as a gallery photo.
+
+    This gallery has no per-viewer context (it backs the unauthenticated course
+    detail endpoint too), so a round-linked photo can only be included once its
+    round is "public" -- private and friends-only rounds never contribute a
+    photo here, regardless of who is asking."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     usernames = _batch_uploader_usernames(
         session,
         {image.uploaded_by_user_id for image in course.images if image.uploaded_by_user_id is not None},
     )
+    round_visibility = _batch_round_visibility(
+        session,
+        {image.round_id for image in course.images if image.round_id is not None},
+    )
     output = []
     for image in course.images:
         if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
+            continue
+        if image.round_id is not None and round_visibility.get(image.round_id) != "public":
             continue
         url = image.external_url or storage_image_url(image_base_url, image.storage_key)
         if url is None:

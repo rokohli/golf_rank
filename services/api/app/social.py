@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import re
+from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -13,7 +14,16 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user, get_settings, verified_identifiers
 from .core.config import Settings
 from .db import get_session
-from .domain import course_data, require_course, require_user, round_image_data, round_image_data_bulk, stored_user
+from .domain import (
+    course_data,
+    preload_round_visibility,
+    require_course,
+    require_courses,
+    require_user,
+    round_image_data,
+    round_image_data_bulk,
+    stored_user,
+)
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -29,7 +39,9 @@ from .models import (
     Round,
     RoundNote,
     UserCourseRating,
+    UserCourseState,
 )
+from .rounds import RoundSummaryOut, _round_out
 from .schemas import (
     CourseOut,
     FriendCourseThoughtOut,
@@ -37,6 +49,7 @@ from .schemas import (
     FriendsCourseThoughtsOut,
     ContactLinkIn,
     ContactLinkStatusOut,
+    UserCourseVisitOut,
 )
 from .domain import course_identity_ids
 
@@ -297,7 +310,7 @@ def course_friend_thoughts(
             ActivityEvent.actor_user_id.in_(friend_ids),
             ActivityEvent.subject_type == "rating_round",
             ActivityEvent.subject_id.in_(rating_round_ids),
-            ActivityEvent.visibility == "friends",
+            ActivityEvent.visibility.in_(("friends", "public")),
         )
         .order_by(ActivityEvent.id.desc())
     ).all():
@@ -313,7 +326,8 @@ def course_friend_thoughts(
         round_ = rounds.get((rating.round_id, friend.id, rating.course_id))
         note = None
         favorite_hole = None
-        if round_ is not None and round_.visibility == "friends":
+        round_shared = round_ is not None and round_.visibility in ("friends", "public")
+        if round_shared:
             stored_note = notes.get(round_.id)
             note = stored_note.body if stored_note else None
             favorite_hole = round_.favorite_hole
@@ -323,7 +337,7 @@ def course_friend_thoughts(
             ),
             # A previously shared rating activity is not a target for a later
             # private round; the current round's visibility remains authoritative.
-            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_ is not None and round_.visibility == "friends" else None,
+            activity_id=activity_ids.get((friend.id, rating.round_id)) if round_shared else None,
             rating=rating.rating,
             tier=rating.tier,
             note=note,
@@ -470,6 +484,170 @@ def get_user_profile(
         is_mutual=is_following and is_followed_by,
         is_muted=user_id in muted_ids,
     )
+
+
+@router.get("/api/v1/users/{user_id}/rounds/summary", response_model=RoundSummaryOut)
+def get_user_round_summary(
+    user_id: int,
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> RoundSummaryOut:
+    """Round stats for another golfer, scoped to what the viewer is allowed to see.
+
+    The viewer following the target -- mutual isn't required -- unlocks their
+    non-private round stats: a private round never leaves the owner's own
+    profile, but public and friends-tagged rounds both count once the viewer
+    follows them. A total stranger (including someone the target follows but
+    who doesn't follow back) sees nothing. The coarser "has this person
+    played/rated a course" signal is meant to be open to anyone regardless of
+    follow status -- that signal is served by a different endpoint.
+    """
+    viewer = require_user(session, current)
+    target = session.get(User, user_id)
+    if target is None or user_id in _blocked_ids(session, viewer.id):
+        raise HTTPException(404, "User not found")
+
+    is_mutual = False
+    if user_id == viewer.id:
+        visibilities = ("private", "friends", "public")
+    else:
+        followed_ids, mutual_ids = _relationship_sets(session, viewer.id)
+        is_mutual = user_id in mutual_ids
+        visibilities = ("public", "friends") if user_id in followed_ids else ()
+
+    base = select(Round).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+    total, average, best = session.execute(
+        select(
+            func.count(Round.id),
+            func.avg(Round.score),
+            func.min(Round.score),
+        ).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+    ).one()
+    # Canonicalize before counting: a round logged against a source course
+    # before reconciliation and another logged against its canonical course
+    # afterward are the same course to _round_out and get_user_courses, so a
+    # raw distinct(course_id) count would overstate "Courses: N" relative to
+    # what the profile actually renders.
+    raw_course_ids = set(
+        session.scalars(
+            select(Round.course_id)
+            .where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+            .distinct()
+        ).all()
+    )
+    distinct = len({course.id for course in require_courses(session, raw_course_ids).values()})
+    this_year = session.scalar(
+        select(func.count(Round.id)).where(
+            Round.user_id == user_id,
+            Round.visibility.in_(visibilities),
+            func.extract("year", Round.played_on) == datetime.now().year,
+        )
+    ) or 0
+    latest = session.scalar(base.order_by(Round.played_on.desc(), Round.id.desc()).limit(1))
+    latest_out = _round_out(session, latest) if latest is not None else None
+    if latest_out is not None and user_id != viewer.id and latest_out.visibility == "friends" and not is_mutual:
+        # A one-way follower unlocks the *aggregate* stats for a friends-tagged
+        # round, but the round's own detail (note, favorite hole, real
+        # companion names) stays behind the mutual-friendship bar everywhere
+        # else in the app (see course_friend_thoughts) -- this must match.
+        latest_out = latest_out.model_copy(update={"note": None, "favorite_hole": None, "companions": []})
+    return RoundSummaryOut(
+        total_rounds=int(total),
+        rounds_this_year=int(this_year),
+        average_score=round(float(average), 1) if average is not None else None,
+        best_score=best,
+        distinct_courses=int(distinct),
+        latest_round=latest_out,
+    )
+
+
+@router.get("/api/v1/users/{user_id}/courses", response_model=list[UserCourseVisitOut])
+def get_user_courses(
+    user_id: int,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[UserCourseVisitOut]:
+    """The courses a golfer has played and what they rated them -- open to any
+    signed-in viewer, unlike /rounds/summary above. A rating is a course-level
+    judgment, not a round detail: it's exposed here the same way it already is
+    in course_friend_thoughts, independent of the backing round's own
+    visibility (which governs score/date/notes, not the bare fact of having
+    played/rated).
+    """
+    viewer = require_user(session, current)
+    target = session.get(User, user_id)
+    if target is None or (user_id != viewer.id and user_id in _blocked_ids(session, viewer.id)):
+        raise HTTPException(404, "User not found")
+
+    # Canonicalize (and dedupe) before pagination: a UserCourseState created
+    # before its source course's reconciliation was confirmed still points at
+    # the now-hidden source row. Resolving through require_courses -- batched,
+    # unlike list_course_states's per-row require_course -- avoids showing a
+    # stale identity without making every page (including a Load More
+    # request) redo an O(total played courses) resolution, and doing it ahead
+    # of offset/limit keeps a source/canonical pair that both resolve to one
+    # course from appearing twice or from displacing another course off the
+    # page.
+    all_states = session.scalars(
+        select(UserCourseState)
+        .where(UserCourseState.user_id == user_id, UserCourseState.has_played.is_(True))
+        .order_by(UserCourseState.last_played_on.desc(), UserCourseState.id.desc())
+    ).all()
+    if not all_states:
+        return []
+
+    canonical_by_state_course_id = require_courses(session, {state.course_id for state in all_states})
+    seen_course_ids: set[int] = set()
+    resolved: list[Course] = []
+    for state in all_states:
+        course = canonical_by_state_course_id.get(state.course_id)
+        if course is None or course.id in seen_course_ids:
+            continue
+        seen_course_ids.add(course.id)
+        resolved.append(course)
+
+    page = resolved[offset:offset + limit]
+    if not page:
+        return []
+
+    preload_round_visibility(session, page)
+
+    # A rating can still be stored against a source course_id that predates
+    # its reconciliation, same as the state rows above -- query every
+    # identity id for each canonicalized course (course_identity_ids, as
+    # _state already does in course_ratings.py) rather than the exact
+    # canonical id alone, or a rating recorded before reconciliation would
+    # show the visit as unrated.
+    identity_to_canonical: dict[int, int] = {}
+    for course in page:
+        for alias_id in course_identity_ids(session, course):
+            identity_to_canonical[alias_id] = course.id
+
+    ratings_by_canonical: dict[int, list[UserCourseRating]] = defaultdict(list)
+    for rating in session.scalars(
+        select(UserCourseRating)
+        .where(UserCourseRating.user_id == user_id, UserCourseRating.course_id.in_(identity_to_canonical))
+        .order_by(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc())
+    ).all():
+        canonical_id = identity_to_canonical.get(rating.course_id)
+        if canonical_id is not None:
+            ratings_by_canonical[canonical_id].append(rating)
+    ratings = {
+        canonical_id: max(candidates, key=lambda r: r.course_id == canonical_id)
+        for canonical_id, candidates in ratings_by_canonical.items()
+    }
+    output: list[UserCourseVisitOut] = []
+    for course in page:
+        rating = ratings.get(course.id)
+        output.append(UserCourseVisitOut(
+            course=course_data(course),
+            has_played=True,
+            rating=rating.rating if rating else None,
+            tier=rating.tier if rating else None,
+        ))
+    return output
 
 
 @router.put("/api/v1/me/follows/{target_user_id}", response_model=FollowOut)
@@ -732,6 +910,13 @@ def activity_feed(
             event.subject_id for event in events if event.subject_type in ("round", "rating_round")
         }
         photos_by_round = round_image_data_bulk(session, round_ids)
+        # Two passes: first filter to the events that will actually be
+        # serialized and compute their data/course_id, then batch-resolve
+        # and preload every course in this batch before any course_data()
+        # call -- otherwise each event's course brings its own round-visibility
+        # query the same way course search's cards did before preloading.
+        surviving: list[tuple[ActivityEvent, User, dict]] = []
+        batch_course_ids: set[int] = set()
         for event in events:
             if cursor_boundary and (
                 event.created_at > cursor_boundary[0]
@@ -746,16 +931,20 @@ def activity_feed(
             actor = session.get(User, event.actor_user_id)
             if actor is None:
                 continue
-            course = None
             data = _activity_data(session, event, photos_by_round)
             course_id = data.get("course_id")
             if isinstance(course_id, int):
-                try:
-                    stored_course = require_course(session, course_id)
-                except HTTPException:
-                    stored_course = None
-                if stored_course is not None:
-                    course = course_data(stored_course)
+                batch_course_ids.add(course_id)
+            surviving.append((event, actor, data))
+            if len(surviving) > limit:
+                break
+
+        courses_by_id = require_courses(session, batch_course_ids)
+        preload_round_visibility(session, courses_by_id.values())
+        for event, actor, data in surviving:
+            course_id = data.get("course_id")
+            stored_course = courses_by_id.get(course_id) if isinstance(course_id, int) else None
+            course = course_data(stored_course) if stored_course is not None else None
             reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,

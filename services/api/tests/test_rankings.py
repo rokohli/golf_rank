@@ -206,6 +206,79 @@ def test_friends_rankings_exclude_one_way_follows_and_blocks() -> None:
     assert client.get("/api/v1/me/rankings/friends", headers=alice_headers).json() == []
 
 
+def test_friends_rankings_exclude_private_round_stats() -> None:
+    app = create_app()
+    client = TestClient(app)
+    alice_headers = {"X-Development-Subject": "dev:alice-round-privacy"}
+    bob_headers = {"X-Development-Subject": "dev:bob-round-privacy"}
+    assert client.put(
+        "/api/v1/me/rankings/tiers", headers=alice_headers,
+        json={"assignments": [{"course_id": 3, "tier": "green"}]},
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=bob_headers,
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
+    ).status_code == 200
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob_headers,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 65, "visibility": "private"},
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/me/rounds", headers=bob_headers,
+        json={"course_id": 1, "played_on": "2026-07-02", "score": 90, "visibility": "friends"},
+    ).status_code == 201
+
+    with app.state.session_factory() as session:
+        alice = session.scalar(select(User).where(User.provider_subject == "dev:alice-round-privacy"))
+        bob = session.scalar(select(User).where(User.provider_subject == "dev:bob-round-privacy"))
+        assert alice is not None and bob is not None
+        session.add_all([
+            Follow(follower_id=alice.id, followed_id=bob.id),
+            Follow(follower_id=bob.id, followed_id=alice.id),
+        ])
+        session.commit()
+
+    friend = client.get("/api/v1/me/rankings/friends", headers=alice_headers).json()[0]
+    # Bob's best score of 65 came from a round he marked private -- a mutual
+    # friend must never see it, even though the mutual-friendship gate itself
+    # passes.
+    assert friend["entries"][0]["round_count"] == 1
+    assert friend["entries"][0]["best_score"] == 90
+
+
+def test_friends_rankings_exclude_muted_friend() -> None:
+    app = create_app()
+    client = TestClient(app)
+    alice_headers = {"X-Development-Subject": "dev:alice-mute-rank"}
+    bob_headers = {"X-Development-Subject": "dev:bob-mute-rank"}
+    assert client.put(
+        "/api/v1/me/rankings/tiers", headers=alice_headers,
+        json={"assignments": [{"course_id": 3, "tier": "green"}]},
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/me/rankings/tiers",
+        headers=bob_headers,
+        json={"assignments": [{"course_id": 1, "tier": "green"}]},
+    ).status_code == 200
+
+    with app.state.session_factory() as session:
+        alice = session.scalar(select(User).where(User.provider_subject == "dev:alice-mute-rank"))
+        bob = session.scalar(select(User).where(User.provider_subject == "dev:bob-mute-rank"))
+        assert alice is not None and bob is not None
+        bob_id = bob.id
+        session.add_all([
+            Follow(follower_id=alice.id, followed_id=bob.id),
+            Follow(follower_id=bob.id, followed_id=alice.id),
+        ])
+        session.commit()
+
+    assert len(client.get("/api/v1/me/rankings/friends", headers=alice_headers).json()) == 1
+
+    assert client.put(f"/api/v1/me/mutes/{bob_id}", headers=alice_headers).status_code == 204
+    assert client.get("/api/v1/me/rankings/friends", headers=alice_headers).json() == []
+
+
 def test_decisive_comparison_reorders_within_tier_and_versions_snapshot() -> None:
     client = TestClient(create_app())
     client.put(
