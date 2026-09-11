@@ -532,8 +532,17 @@ export async function getUserRoundSummary(userId: number, headers: ApiHeaders): 
   return response.json()
 }
 
-export async function getUserCourses(userId: number, headers: ApiHeaders): Promise<UserCourseVisit[]> {
-  const response = await fetch(`${baseUrl}/api/v1/users/${userId}/courses`, { headers })
+export async function getUserCourses(
+  userId: number,
+  headers: ApiHeaders,
+  filters: { limit?: number; offset?: number } = {},
+): Promise<UserCourseVisit[]> {
+  const params = new URLSearchParams()
+  for (const key of ['limit', 'offset'] as const) {
+    if (filters[key] !== undefined) params.set(key, String(filters[key]))
+  }
+  const query = params.toString()
+  const response = await fetch(`${baseUrl}/api/v1/users/${userId}/courses${query ? `?${query}` : ''}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load courses played. Please try again.')
   return response.json()
 }

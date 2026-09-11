@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import re
+from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -608,14 +609,29 @@ def get_user_courses(
     if not page:
         return []
 
-    course_ids = [course.id for course in page]
+    # A rating can still be stored against a source course_id that predates
+    # its reconciliation, same as the state rows above -- query every
+    # identity id for each canonicalized course (course_identity_ids, as
+    # _state already does in course_ratings.py) rather than the exact
+    # canonical id alone, or a rating recorded before reconciliation would
+    # show the visit as unrated.
+    identity_to_canonical: dict[int, int] = {}
+    for course in page:
+        for alias_id in course_identity_ids(session, course):
+            identity_to_canonical[alias_id] = course.id
+
+    ratings_by_canonical: dict[int, list[UserCourseRating]] = defaultdict(list)
+    for rating in session.scalars(
+        select(UserCourseRating)
+        .where(UserCourseRating.user_id == user_id, UserCourseRating.course_id.in_(identity_to_canonical))
+        .order_by(UserCourseRating.updated_at.desc(), UserCourseRating.id.desc())
+    ).all():
+        canonical_id = identity_to_canonical.get(rating.course_id)
+        if canonical_id is not None:
+            ratings_by_canonical[canonical_id].append(rating)
     ratings = {
-        rating.course_id: rating
-        for rating in session.scalars(
-            select(UserCourseRating).where(
-                UserCourseRating.user_id == user_id, UserCourseRating.course_id.in_(course_ids)
-            )
-        ).all()
+        canonical_id: max(candidates, key=lambda r: r.course_id == canonical_id)
+        for canonical_id, candidates in ratings_by_canonical.items()
     }
     output: list[UserCourseVisitOut] = []
     for course in page:

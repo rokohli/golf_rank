@@ -269,9 +269,20 @@ batch_uploader_usernames = _batch_uploader_usernames
 
 
 def _batch_round_visibility(session: Session | None, round_ids: set[int]) -> dict[int, str]:
+    """Round.visibility by id, memoized on the session for the life of the
+    request. course_card_hero_data and course_image_data each call this once
+    per course, and a course list/search page serializes up to 100 courses --
+    without the cache that's up to 200 round-visibility queries per page.
+    Caching on session.info (already used for course_image_base_url etc.)
+    means only round ids not seen yet on this request hit the database,
+    regardless of how many cards or call sites ask for them."""
     if session is None or not round_ids:
         return {}
-    return dict(session.execute(select(Round.id, Round.visibility).where(Round.id.in_(round_ids))).all())
+    cache: dict[int, str] = session.info.setdefault("round_visibility_cache", {})
+    missing = round_ids - cache.keys()
+    if missing:
+        cache.update(session.execute(select(Round.id, Round.visibility).where(Round.id.in_(missing))).all())
+    return {round_id: cache[round_id] for round_id in round_ids if round_id in cache}
 
 
 def course_image_data(course: Course) -> list[dict]:

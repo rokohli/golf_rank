@@ -17,6 +17,8 @@ type ActionSheet =
   | { kind: 'confirm'; action: ProfileAction }
   | null
 
+const coursesPageSize = 50
+
 export default function UserProfileScreen() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -24,6 +26,8 @@ export default function UserProfileScreen() {
   const [profile, setProfile] = useState<PublicProfile | null>(null)
   const [summary, setSummary] = useState<RoundSummary | null>(null)
   const [courses, setCourses] = useState<UserCourseVisit[] | null>(null)
+  const [coursesHasMore, setCoursesHasMore] = useState(false)
+  const [coursesLoadingMore, setCoursesLoadingMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,6 +53,7 @@ export default function UserProfileScreen() {
       setProfile(nextProfile)
       setSummary(null)
       setCourses(null)
+      setCoursesHasMore(false)
       try {
         setSummary(await getUserRoundSummary(userId, headers))
       } catch {
@@ -56,7 +61,9 @@ export default function UserProfileScreen() {
         // failure here should not blank out an otherwise-loaded profile.
       }
       try {
-        setCourses(await getUserCourses(userId, headers))
+        const nextCourses = await getUserCourses(userId, headers, { limit: coursesPageSize })
+        setCourses(nextCourses)
+        setCoursesHasMore(nextCourses.length === coursesPageSize)
       } catch {
         // Same as above: courses-played is a secondary enhancement.
       }
@@ -64,6 +71,7 @@ export default function UserProfileScreen() {
       setProfile(null)
       setSummary(null)
       setCourses(null)
+      setCoursesHasMore(false)
       setError(message(reason, 'Unable to load this profile.'))
     } finally {
       setLoading(false)
@@ -71,6 +79,21 @@ export default function UserProfileScreen() {
   }, [getAuthHeaders, router, userId])
 
   useEffect(() => { void load() }, [load])
+
+  async function loadMoreCourses() {
+    if (coursesLoadingMore || !coursesHasMore) return
+    setCoursesLoadingMore(true)
+    try {
+      const headers = await getAuthHeaders()
+      const next = await getUserCourses(userId, headers, { limit: coursesPageSize, offset: courses?.length ?? 0 })
+      setCourses((current) => [...(current ?? []), ...next])
+      setCoursesHasMore(next.length === coursesPageSize)
+    } catch (reason) {
+      setError(message(reason, 'Unable to load more courses.'))
+    } finally {
+      setCoursesLoadingMore(false)
+    }
+  }
 
   const toggleFollow = async () => {
     if (!profile) return
@@ -191,6 +214,7 @@ export default function UserProfileScreen() {
         {courses && courses.length ? <>
           <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Courses played</Text></View>
           {courses.map((entry) => <CoursePlayedRow key={entry.course.id} entry={entry} onPress={() => router.push(`/course/${entry.course.id}` as never)} />)}
+          {coursesHasMore ? <Pressable accessibilityRole="button" disabled={coursesLoadingMore} onPress={() => void loadMoreCourses()} style={styles.more}>{coursesLoadingMore ? <ActivityIndicator color={colors.pine} size="small" /> : <Text style={styles.moreText}>Load more</Text>}</Pressable> : null}
         </> : null}
       </> : null}
     </ProductScreen>
@@ -316,6 +340,8 @@ const styles = StyleSheet.create({
   mutedNote: { color: colors.muted, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   sectionHeader: { paddingTop: 6 },
   sectionTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 18 },
+  more: { alignItems: 'center', padding: 14 },
+  moreText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
   recent: { alignItems: 'center', flexDirection: 'row', gap: 11, paddingTop: 10 },
   recentImage: { borderRadius: 8, overflow: 'hidden', width: 82 },
   recentCopy: { flex: 1, gap: 4 },
