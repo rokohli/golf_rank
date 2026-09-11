@@ -303,6 +303,17 @@ export function RatingFlow({
 
   async function persistRating(comparisonCourseId: number | null, result: ComparisonResult | null, alreadyBusy = false) {
     if (!tier || !playedOn || savingRef.current) return
+    // saveRating (PUT /course-ratings/{course_id}) always creates a brand-new
+    // Round with visibility="private" when the user has no existing round for
+    // this course (services/api/app/course_ratings.py) -- a re-rate of an
+    // existing round leaves that round's own visibility untouched. So a
+    // first-time rating needs saveDetails to run unconditionally to persist
+    // the "Share with followers" switch's actual value; gating it on
+    // detailsChanged would only fix it when the switch happens to differ from
+    // its own default. Re-rating an existing round keeps the detailsChanged
+    // gate, so an unrelated tier/score change alone can't broaden that
+    // round's visibility.
+    const isNewRound = !ratingState.round
     savingRef.current = true
     setError(null)
     if (!alreadyBusy) setBusy(true)
@@ -321,7 +332,7 @@ export function RatingFlow({
       return
     }
 
-    if (detailsChanged) {
+    if (detailsChanged || isNewRound) {
       try {
         saved = await saveDetails(currentDetails)
         setRatingState(saved)
