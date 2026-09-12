@@ -33,6 +33,7 @@ import {
   TierPlacement,
   PublicProfile,
   UserCourseVisit,
+  UserSearchResult,
   UserSummary,
   BlockedUser,
   MutedUser,
@@ -514,7 +515,7 @@ export async function deleteLinkedContacts(headers: ApiHeaders): Promise<void> {
   if (!response.ok) throw await responseError(response, 'Unable to remove linked contacts. Please try again.')
 }
 
-export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSummary[]> {
+export async function searchUsers(query: string, headers: ApiHeaders): Promise<UserSearchResult[]> {
   const response = await fetch(`${baseUrl}/api/v1/users?q=${encodeURIComponent(query)}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to search golfers. Please try again.')
   return response.json()

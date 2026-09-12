@@ -1186,3 +1186,49 @@ def test_canonical_profile_username_is_used_in_social_summaries() -> None:
     assert results[0]["username"] == "canonical_handle"
     assert results[0]["id"] == target.id
 
+
+def test_search_users_works_for_a_caller_who_has_not_finished_onboarding() -> None:
+    """A freshly authenticated device has no local User row until onboarding
+    submits (or it follows someone) -- search must provision that row on
+    demand like follow_user already does, instead of 404ing on the caller
+    and being mistaken for the searched-for person not existing."""
+    app = create_app()
+    client = TestClient(app)
+    _profile(client, "dev:not-onboarded-target", "Rohan", "rohank")
+    new_caller_headers = {"X-Development-Subject": "dev:not-onboarded-caller"}
+
+    with app.state.session_factory() as session:
+        assert session.scalar(select(User).where(User.provider_subject == "dev:not-onboarded-caller")) is None
+
+    # Two searches in a row: on-demand provisioning must not fail the second
+    # time just because the first request's flushed row was never committed.
+    for _ in range(2):
+        search = client.get("/api/v1/users", headers=new_caller_headers, params={"q": "rohank"})
+        assert search.status_code == 200
+        results = search.json()
+        assert len(results) == 1
+        assert results[0]["username"] == "rohank"
+
+
+def test_search_results_report_whether_the_caller_already_follows_them() -> None:
+    """Search results must carry is_following so a client can show the right
+    state after a follow, a screen change, and a repeat search -- without it,
+    every fresh render/search looks like the follow never happened."""
+    app = create_app()
+    client = TestClient(app)
+    alice = _profile(client, "dev:search-follow-alice", "Alice", "searchfollowalice")
+    bob = _profile(client, "dev:search-follow-bob", "Bob", "searchfollowbob")
+
+    before = client.get("/api/v1/users", headers=alice, params={"q": "searchfollowbob"}).json()
+    assert before[0]["is_following"] is False
+
+    bob_id = before[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    after = client.get("/api/v1/users", headers=alice, params={"q": "searchfollowbob"}).json()
+    assert after[0]["is_following"] is True
+
+    # Unrelated viewers must not see alice's follow reflected back at them.
+    unrelated = client.get("/api/v1/users", headers=bob, params={"q": "searchfollowalice"}).json()
+    assert unrelated[0]["is_following"] is False
+

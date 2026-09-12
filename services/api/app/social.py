@@ -76,6 +76,10 @@ class PublicProfileOut(UserSummaryOut):
     is_muted: bool = False
 
 
+class UserSearchResultOut(UserSummaryOut):
+    is_following: bool = False
+
+
 class FollowOut(BaseModel):
     user: UserSummaryOut
     is_mutual: bool
@@ -434,22 +438,23 @@ def _reaction_state(session: Session, event_id: int, user_id: int) -> tuple[int,
     return count, reacted
 
 
-@router.get("/api/v1/users", response_model=list[UserSummaryOut])
+@router.get("/api/v1/users", response_model=list[UserSearchResultOut])
 def search_users(
     q: str = Query(min_length=1, max_length=80),
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-) -> list[UserSummaryOut]:
-    current_record = require_user(session, current)
+) -> list[UserSearchResultOut]:
+    current_record = require_user(session, current, create=True)
     excluded = _blocked_ids(session, current_record.id) | {current_record.id}
+    followed_ids, _mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
-    results: list[UserSummaryOut] = []
+    results: list[UserSearchResultOut] = []
     for user in users:
         summary = _summary(session, user)
         haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
         if needle in haystack:
-            results.append(summary)
+            results.append(UserSearchResultOut(**summary.model_dump(), is_following=user.id in followed_ids))
         if len(results) == 25:
             break
     return results
