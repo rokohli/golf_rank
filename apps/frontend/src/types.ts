@@ -210,6 +210,10 @@ export type UserSummary = FriendSummary & {
   following_count: number
 }
 
+export type UserSearchResult = UserSummary & {
+  is_following: boolean
+}
+
 export type PublicProfile = UserSummary & {
   is_self: boolean
   is_following: boolean

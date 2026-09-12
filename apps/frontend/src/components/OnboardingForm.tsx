@@ -1,10 +1,12 @@
 import * as SecureStore from 'expo-secure-store'
 import { Feather, Ionicons } from '@expo/vector-icons'
+import * as Contacts from 'expo-contacts'
 import * as ImagePicker from 'expo-image-picker'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, Animated, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Animated, Image, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { Course, OnboardingPreferences } from '../types'
+import { contactIdentifiers } from '../contactIdentifiers'
+import { Course, OnboardingPreferences, UserSearchResult } from '../types'
 
 type Difficulty = OnboardingPreferences['difficulty']
 type Access = OnboardingPreferences['access']
@@ -60,6 +62,9 @@ type OnboardingFormProps = {
   onExit?: () => void
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
   updatePhoto?: (file: string) => Promise<void>
+  linkContacts?: (identifiers: string[]) => Promise<void>
+  searchUsers?: (query: string) => Promise<UserSearchResult[]>
+  followUser?: (userId: number) => Promise<void>
 }
 
 const DRAFT_KEY = 'golfrank_onboarding_draft'
@@ -247,7 +252,7 @@ function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, qu
   return { results, searching, searchError }
 }
 
-export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto }: OnboardingFormProps) {
+export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
   const [courseQuery, setCourseQuery] = useState('')
@@ -486,7 +491,15 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
             onSkip={next}
           />
         ) : step === 'friends' ? (
-          <FriendsStep draft={draft} onChange={patchDraft} onNext={next} onSkip={next} />
+          <FriendsStep
+            draft={draft}
+            onChange={patchDraft}
+            onNext={next}
+            onSkip={next}
+            linkContacts={linkContacts}
+            searchUsers={searchUsers}
+            followUser={followUser}
+          />
         ) : step === 'preferences' ? (
           <PreferenceStep selected={draft.preferences} onToggle={(value) => toggleList('preferences', value)} onNext={next} />
         ) : step === 'planning' ? (
@@ -894,31 +907,182 @@ function DreamCoursesStep({
   )
 }
 
+const FRIEND_SEARCH_MIN_CHARS = 2
+
+function useUserSearch(searchUsers: ((query: string) => Promise<UserSearchResult[]>) | undefined, query: string) {
+  const [results, setResults] = useState<UserSearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const requestId = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+    requestId.current += 1
+  }, [])
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    requestId.current += 1
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    if (!searchUsers || trimmed.length < FRIEND_SEARCH_MIN_CHARS) {
+      setResults([])
+      setSearching(false)
+      setSearchError(null)
+      return
+    }
+
+    const currentRequest = requestId.current
+    timer.current = setTimeout(() => {
+      void (async () => {
+        setSearching(true)
+        setSearchError(null)
+        try {
+          const users = await searchUsers(trimmed)
+          if (currentRequest !== requestId.current) return
+          setResults(users)
+        } catch (reason) {
+          if (currentRequest !== requestId.current) return
+          setResults([])
+          setSearchError(reason instanceof Error ? reason.message : 'Unable to search golfers.')
+        } finally {
+          if (currentRequest === requestId.current) setSearching(false)
+        }
+      })()
+    }, 300)
+
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [query, searchUsers])
+
+  return { results, searching, searchError }
+}
+
 function FriendsStep({
   draft,
   onChange,
   onNext,
   onSkip,
+  linkContacts,
+  searchUsers,
+  followUser,
 }: {
   draft: OnboardingDraft
   onChange: (patch: Partial<OnboardingDraft>) => void
   onNext: () => void
   onSkip: () => void
+  linkContacts?: (identifiers: string[]) => Promise<void>
+  searchUsers?: (query: string) => Promise<UserSearchResult[]>
+  followUser?: (userId: number) => Promise<void>
 }) {
+  const [importing, setImporting] = useState(false)
+  const [imported, setImported] = useState(false)
+  const [contactError, setContactError] = useState<string | null>(null)
+  const [followedIds, setFollowedIds] = useState<number[]>([])
+  const [busyUserId, setBusyUserId] = useState<number | null>(null)
+  const [followError, setFollowError] = useState<string | null>(null)
+  const { results, searching, searchError } = useUserSearch(searchUsers, draft.friendSearch)
+  const advanced = useRef(false)
+
+  const advanceOnce = (action: () => void = onNext) => {
+    if (advanced.current) return
+    advanced.current = true
+    action()
+  }
+
+  const importContacts = async () => {
+    setImporting(true)
+    setContactError(null)
+    try {
+      const permission = await Contacts.requestPermissionsAsync()
+      if (permission.status !== 'granted') throw new Error('Contacts permission is needed to find friends who join Fairway.')
+      const result = await Contacts.getContactsAsync({ fields: [Contacts.Fields.Emails, Contacts.Fields.PhoneNumbers] })
+      const identifiers = contactIdentifiers(result.data)
+      await linkContacts?.(identifiers)
+      setImported(true)
+      advanceOnce()
+    } catch (reason) {
+      setContactError(reason instanceof Error ? reason.message : 'Unable to import contacts.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const inviteFriends = async () => {
+    try {
+      const result = await Share.share({ message: 'Join me on Fairway to rank golf courses and compare rounds.' })
+      if (result.action !== Share.dismissedAction) advanceOnce()
+    } catch (reason) {
+      setContactError(reason instanceof Error ? reason.message : 'Unable to open the invite sheet.')
+    }
+  }
+
+  const follow = async (user: UserSearchResult) => {
+    setBusyUserId(user.id)
+    setFollowError(null)
+    try {
+      await followUser?.(user.id)
+      setFollowedIds((current) => (current.includes(user.id) ? current : [...current, user.id]))
+    } catch (reason) {
+      setFollowError(reason instanceof Error ? reason.message : `Unable to follow ${user.display_name}.`)
+    } finally {
+      setBusyUserId(null)
+    }
+  }
+
+  const trimmedQuery = draft.friendSearch.trim()
+
   return (
     <View style={styles.step}>
       <Heading title="Find your friends" subtitle="See where your friends play, compare scores, and rank together." />
-      <View style={styles.avatarRow}>
-        {['AK', 'RM', 'JL', 'SP'].map((label) => (
-          <View key={label} style={styles.avatarSmall}>
-            <Text style={styles.avatarSmallText}>{label}</Text>
-          </View>
-        ))}
-      </View>
       <Field label="Search usernames" value={draft.friendSearch} onChangeText={(friendSearch) => onChange({ friendSearch })} placeholder="@username" autoCapitalize="none" />
-      <SecondaryButton label="Import Contacts" onPress={onNext} />
-      <SecondaryButton label="Invite Friends" onPress={onNext} />
-      <InlineButton label="Skip" onPress={onSkip} />
+      {searching ? (
+        <View style={styles.searchStatusRow}>
+          <ActivityIndicator accessibilityLabel="Searching golfers" color="#214D3B" />
+          <Text style={styles.searchStatusText}>Searching golfers…</Text>
+        </View>
+      ) : searchError ? (
+        <Text accessibilityRole="alert" style={styles.errorText}>{searchError}</Text>
+      ) : trimmedQuery.length >= FRIEND_SEARCH_MIN_CHARS && results.length === 0 ? (
+        <Text style={styles.searchStatusText}>No golfers matched that search.</Text>
+      ) : null}
+      {results.length ? (
+        <View style={styles.listStack}>
+          {results.map((user) => {
+            const isFollowed = user.is_following || followedIds.includes(user.id)
+            return (
+              <View key={user.id} style={styles.friendRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.courseName}>{user.display_name}</Text>
+                  <Text style={styles.courseLocation}>{user.username ? `@${user.username}` : user.home_region ?? 'Golfer'}</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={isFollowed ? `Following ${user.display_name}` : `Follow ${user.display_name}`}
+                  accessibilityState={{ disabled: isFollowed || busyUserId === user.id }}
+                  disabled={isFollowed || busyUserId === user.id}
+                  onPress={() => void follow(user)}
+                  style={[styles.followChip, isFollowed && styles.followedChip]}
+                >
+                  {busyUserId === user.id
+                    ? <ActivityIndicator color="#214D3B" size="small" />
+                    : <Text style={[styles.followChipText, isFollowed && styles.followedChipText]}>{isFollowed ? 'Following' : 'Follow'}</Text>}
+                </Pressable>
+              </View>
+            )
+          })}
+        </View>
+      ) : null}
+      {followError ? <Text accessibilityRole="alert" style={styles.errorText}>{followError}</Text> : null}
+      <SecondaryButton label={importing ? 'Importing…' : imported ? 'Contacts imported' : 'Import Contacts'} onPress={() => void importContacts()} disabled={importing} />
+      <SecondaryButton label="Invite Friends" onPress={() => void inviteFriends()} disabled={importing} />
+      {contactError ? <Text accessibilityRole="alert" style={styles.errorText}>{contactError}</Text> : null}
+      <PrimaryButton label="Continue" onPress={() => advanceOnce(onNext)} disabled={importing} />
+      <InlineButton label="Skip" onPress={() => advanceOnce(onSkip)} disabled={importing} />
     </View>
   )
 }
@@ -1092,9 +1256,15 @@ function PrimaryButton({ label, onPress, disabled = false }: { label: string; on
   )
 }
 
-function SecondaryButton({ label, onPress }: { label: string; onPress: () => void }) {
+function SecondaryButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.secondaryButton, pressed && styles.softPressed]}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [styles.secondaryButton, disabled && styles.disabledButton, pressed && !disabled && styles.softPressed]}
+    >
       <Text style={styles.secondaryText}>{label}</Text>
     </Pressable>
   )
@@ -1444,6 +1614,39 @@ const styles = StyleSheet.create({
   listStack: {
     gap: 10,
   },
+  friendRow: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7E2',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 62,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  followChip: {
+    alignItems: 'center',
+    borderColor: '#214D3B',
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minWidth: 78,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  followedChip: {
+    backgroundColor: '#EDF1ED',
+  },
+  followChipText: {
+    color: '#214D3B',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  followedChipText: {
+    color: '#5E625F',
+  },
   courseButton: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -1535,26 +1738,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'center',
-  },
-  avatarRow: {
-    flexDirection: 'row',
-    paddingVertical: 8,
-  },
-  avatarSmall: {
-    alignItems: 'center',
-    backgroundColor: '#214D3B',
-    borderColor: '#FBFAF7',
-    borderRadius: 24,
-    borderWidth: 2,
-    height: 48,
-    justifyContent: 'center',
-    marginRight: -8,
-    width: 48,
-  },
-  avatarSmallText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '900',
   },
   chipWrap: {
     flexDirection: 'row',

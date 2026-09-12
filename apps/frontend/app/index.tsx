@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
-import { ApiResponseError, checkUsernameAvailable, getProfile, savePreferences, searchCourses } from '../src/api/client'
+import { ApiResponseError, checkUsernameAvailable, followUser, getProfile, savePreferences, searchCourses, searchUsers, syncLinkedContacts } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { OnboardingForm } from '../src/components/OnboardingForm'
@@ -59,6 +59,21 @@ export default function Index() {
     [getAuthHeaders],
   )
 
+  const linkOnboardingContacts = useCallback(
+    async (identifiers: string[]) => syncLinkedContacts({ contact_identifiers: identifiers }, await getAuthHeaders()),
+    [getAuthHeaders],
+  )
+
+  const searchOnboardingUsers = useCallback(
+    async (query: string) => searchUsers(query, await getAuthHeaders()),
+    [getAuthHeaders],
+  )
+
+  const followOnboardingUser = useCallback(
+    async (userId: number) => { await followUser(userId, await getAuthHeaders()) },
+    [getAuthHeaders],
+  )
+
   if (profileState === 'checking') {
     return (
       <SafeAreaView style={styles.statusScreen}>
@@ -100,6 +115,9 @@ export default function Index() {
             submit={submitOnboarding}
             saveProfile={updateUserProfile}
             updatePhoto={updateProfileImage}
+            linkContacts={linkOnboardingContacts}
+            searchUsers={searchOnboardingUsers}
+            followUser={followOnboardingUser}
             onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}
           />

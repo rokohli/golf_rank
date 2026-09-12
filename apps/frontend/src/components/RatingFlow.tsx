@@ -10,7 +10,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -26,6 +25,7 @@ import {
   RatingCandidate,
   RatingDetailsInput,
   RatingTier,
+  RoundVisibility,
 } from '../types'
 import { CoursePhotoContentType } from '../api/client'
 import { MAX_PHOTOS_PER_ROUND, isRetryableConfirmFailure, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
@@ -92,7 +92,7 @@ export function RatingFlow({
     initialRating.round?.favorite_hole == null ? '' : String(initialRating.round.favorite_hole),
     initialFriendIds,
     initialGuests,
-    initialRating.round ? initialRating.round.visibility !== 'private' : true,
+    initialRating.round?.visibility ?? 'public',
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -112,7 +112,7 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
-  const [shareWithFollowers, setShareWithFollowers] = useState(initialRating.round ? initialRating.round.visibility !== 'private' : true)
+  const [visibility, setVisibility] = useState<RoundVisibility>(initialRating.round?.visibility ?? 'public')
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -248,7 +248,7 @@ export function RatingFlow({
     onClose()
   }
 
-  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, shareWithFollowers)
+  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, visibility)
   const visibleFriends = useMemo(() => {
     const normalized = friendQuery.trim().toLocaleLowerCase()
     if (normalized) return friends.filter((friend) => `${friend.display_name} ${friend.username ?? ''}`.toLocaleLowerCase().includes(normalized)).slice(0, 6)
@@ -323,11 +323,11 @@ export function RatingFlow({
     // this course (services/api/app/course_ratings.py) -- a re-rate of an
     // existing round leaves that round's own visibility untouched. So a
     // first-time rating needs saveDetails to run unconditionally to persist
-    // the "Share with followers" switch's actual value; gating it on
-    // detailsChanged would only fix it when the switch happens to differ from
-    // its own default. Re-rating an existing round keeps the detailsChanged
-    // gate, so an unrelated tier/score change alone can't broaden that
-    // round's visibility.
+    // the visibility picker's actual value; gating it on detailsChanged would
+    // only fix it when the picker happens to differ from its own default.
+    // Re-rating an existing round keeps the detailsChanged gate, so an
+    // unrelated tier/score change alone can't broaden that round's
+    // visibility.
     const isNewRound = !ratingState.round
     savingRef.current = true
     setError(null)
@@ -455,7 +455,23 @@ export function RatingFlow({
                     const selected = friendIds.includes(friend.id)
                     return <Pressable key={friend.id} accessibilityLabel={`${selected ? 'Remove' : 'Select'} ${friend.display_name}`} accessibilityRole="button" onPress={() => setFriendIds((current) => selected ? current.filter((id) => id !== friend.id) : [...current, friend.id])} style={[styles.friendChip, selected && styles.friendChipSelected]}><Text style={[styles.friendChipText, selected && styles.friendChipTextSelected]}>{friend.display_name}</Text></Pressable>
                   })}</View> : <Text style={styles.help}>No friends added yet.</Text>}
-                  <View style={styles.switchRow}><Text style={styles.shareLabel}>Share with followers</Text><Switch accessibilityLabel="Share with followers" onValueChange={setShareWithFollowers} trackColor={{ false: colors.line, true: colors.pineSoft }} thumbColor={shareWithFollowers ? colors.pine : '#FFFFFF'} value={shareWithFollowers} /></View>
+                  <View style={styles.switchRow}>
+                    <Text style={styles.shareLabel}>Who can see this round</Text>
+                    <View style={styles.visibilityOptions}>
+                      {(['private', 'friends', 'public'] as RoundVisibility[]).map((value) => (
+                        <Pressable
+                          key={value}
+                          accessibilityLabel={`Set visibility to ${value}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: visibility === value }}
+                          onPress={() => setVisibility(value)}
+                          style={[styles.visibilityChoice, visibility === value && styles.visibilityActive]}
+                        >
+                          <Text style={[styles.visibilityText, visibility === value && styles.visibilityTextActive]}>{capitalize(value)}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
                 </View> : null}
                 <RoundRow
                   disabled={photoUploadInFlight || totalPhotoCount >= MAX_PHOTOS_PER_ROUND}
@@ -557,13 +573,13 @@ function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label:
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionButton, disabled && styles.disabled, pressed && !disabled && styles.actionPressed]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
 }
 
-function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], shareWithFollowers: boolean): RatingDetailsInput {
+function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], visibility: RoundVisibility): RatingDetailsInput {
   return {
     note: note.trim() || null,
     favorite_hole: favoriteHole.trim() ? Number(favoriteHole) : null,
     friend_user_ids: friendIds,
     guest_names: guests.map((guest) => guest.name),
-    visibility: shareWithFollowers ? 'public' : 'private',
+    visibility,
   }
 }
 
@@ -605,6 +621,10 @@ function tierName(tier: RatingTier | null) {
 
 function shortCourseName(name: string) {
   return name.replace(/\s+(Golf Links|Golf Club)$/i, '')
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
 const styles = StyleSheet.create({
@@ -651,8 +671,13 @@ const styles = StyleSheet.create({
   friendChipSelected: { backgroundColor: colors.pine, borderColor: colors.pine },
   friendChipText: { color: colors.ink, fontSize: 11, fontWeight: '700' },
   friendChipTextSelected: { color: '#FFFFFF' },
-  switchRow: { alignItems: 'center', borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8 },
+  switchRow: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, gap: 8, paddingTop: 8 },
   shareLabel: { color: colors.ink, fontSize: 12, fontWeight: '700' },
+  visibilityOptions: { flexDirection: 'row', gap: 7 },
+  visibilityChoice: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: 18, borderWidth: 1, flex: 1, paddingVertical: 9 },
+  visibilityActive: { backgroundColor: colors.pine, borderColor: colors.pine },
+  visibilityText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
+  visibilityTextActive: { color: '#FFF' },
   help: { color: colors.muted, fontSize: 11, lineHeight: 16 },
   error: { color: colors.error, fontSize: 12, lineHeight: 18, textAlign: 'center' },
   message: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },

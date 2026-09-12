@@ -561,6 +561,51 @@ def test_get_user_courses_blocked_returns_404() -> None:
     assert client.get(f"/api/v1/users/{bob_id}/courses", headers=alice).status_code == 404
 
 
+def test_get_user_courses_query_count_does_not_scale_with_page_size() -> None:
+    """course_identity_ids_bulk batches the alias lookup across the whole
+    page; a per-course course_identity_ids call there would issue two extra
+    queries per course, so a bigger page would need proportionally more
+    queries instead of the same fixed handful."""
+    app = create_app()
+    client = TestClient(app)
+    alice = _profile(client, "dev:user-courses-query-alice", "Alice", "usercoursesqueryalice")
+    bob = _profile(client, "dev:user-courses-query-bob", "Bob", "usercoursesquerybob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "usercoursesquerybob"}).json()[0]["id"]
+
+    course_ids = list(range(1001, 1021))
+    with app.state.session_factory() as session:
+        for course_id in course_ids:
+            session.add(Course(id=course_id, name=f"Query Course {course_id}", region="Monterey, CA", latitude=36.6, longitude=-121.9, source="seed", source_course_id=f"query-{course_id}"))
+        session.commit()
+    for index, course_id in enumerate(course_ids):
+        assert client.post(
+            "/api/v1/me/rounds", headers=bob,
+            json={"course_id": course_id, "played_on": f"2026-07-{index + 1:02d}", "score": 90, "visibility": "public"},
+        ).status_code == 201
+
+    def select_count(limit: int) -> tuple[int, list]:
+        statements: list[str] = []
+
+        def capture_select(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(app.state.engine, "before_cursor_execute", capture_select)
+        try:
+            response = client.get(f"/api/v1/users/{bob_id}/courses", headers=alice, params={"limit": limit})
+        finally:
+            event.remove(app.state.engine, "before_cursor_execute", capture_select)
+        assert response.status_code == 200
+        return len(statements), response.json()
+
+    one_count, one = select_count(1)
+    full_count, full = select_count(len(course_ids))
+
+    assert len(one) == 1
+    assert len(full) == len(course_ids)
+    assert full_count <= one_count + 1
+
+
 def test_legacy_profile_visibility_is_ignored_for_search_and_shared_posts() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:privacy-alice", "Alice", "privacyalice")
@@ -1054,6 +1099,29 @@ def test_linked_contact_status_and_removal_are_owner_scoped() -> None:
     }
 
 
+def test_link_contacts_works_for_a_caller_who_has_not_finished_onboarding() -> None:
+    """A freshly authenticated device has no local User row until onboarding
+    submits (or it follows/searches someone) -- syncing contacts must
+    provision that row on demand like search_users and follow_user already
+    do, instead of 404ing during the onboarding contact-import step."""
+    client = TestClient(create_app())
+    new_caller_headers = {"X-Development-Subject": "dev:not-onboarded-contact-caller"}
+
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(User).where(User.provider_subject == "dev:not-onboarded-contact-caller")) is None
+
+    response = client.put(
+        "/api/v1/me/contacts",
+        headers=new_caller_headers,
+        json={"contact_identifiers": ["bob@example.com"]},
+    )
+    assert response.status_code == 204
+    assert client.get("/api/v1/me/contacts", headers=new_caller_headers).json() == {
+        "linked": True,
+        "contact_count": 1,
+    }
+
+
 def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:cursor-notification-alice", "Alice", "cursoralice")
@@ -1185,4 +1253,50 @@ def test_canonical_profile_username_is_used_in_social_summaries() -> None:
     assert len(results) == 1
     assert results[0]["username"] == "canonical_handle"
     assert results[0]["id"] == target.id
+
+
+def test_search_users_works_for_a_caller_who_has_not_finished_onboarding() -> None:
+    """A freshly authenticated device has no local User row until onboarding
+    submits (or it follows someone) -- search must provision that row on
+    demand like follow_user already does, instead of 404ing on the caller
+    and being mistaken for the searched-for person not existing."""
+    app = create_app()
+    client = TestClient(app)
+    _profile(client, "dev:not-onboarded-target", "Rohan", "rohank")
+    new_caller_headers = {"X-Development-Subject": "dev:not-onboarded-caller"}
+
+    with app.state.session_factory() as session:
+        assert session.scalar(select(User).where(User.provider_subject == "dev:not-onboarded-caller")) is None
+
+    # Two searches in a row: on-demand provisioning must not fail the second
+    # time just because the first request's flushed row was never committed.
+    for _ in range(2):
+        search = client.get("/api/v1/users", headers=new_caller_headers, params={"q": "rohank"})
+        assert search.status_code == 200
+        results = search.json()
+        assert len(results) == 1
+        assert results[0]["username"] == "rohank"
+
+
+def test_search_results_report_whether_the_caller_already_follows_them() -> None:
+    """Search results must carry is_following so a client can show the right
+    state after a follow, a screen change, and a repeat search -- without it,
+    every fresh render/search looks like the follow never happened."""
+    app = create_app()
+    client = TestClient(app)
+    alice = _profile(client, "dev:search-follow-alice", "Alice", "searchfollowalice")
+    bob = _profile(client, "dev:search-follow-bob", "Bob", "searchfollowbob")
+
+    before = client.get("/api/v1/users", headers=alice, params={"q": "searchfollowbob"}).json()
+    assert before[0]["is_following"] is False
+
+    bob_id = before[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    after = client.get("/api/v1/users", headers=alice, params={"q": "searchfollowbob"}).json()
+    assert after[0]["is_following"] is True
+
+    # Unrelated viewers must not see alice's follow reflected back at them.
+    unrelated = client.get("/api/v1/users", headers=bob, params={"q": "searchfollowalice"}).json()
+    assert unrelated[0]["is_following"] is False
 

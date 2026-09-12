@@ -19,6 +19,8 @@ from .models import (
     Profile,
     Round,
     User,
+    UserBlock,
+    UserMute,
 )
 
 
@@ -55,6 +57,20 @@ def require_user(session: Session, current: CurrentUser, *, create: bool = False
     if user is None:
         raise HTTPException(404, "User not found")
     return user
+
+
+def blocked_ids(session: Session, user_id: int) -> set[int]:
+    """A block is mutual for audience purposes: either direction excludes."""
+    outgoing = session.scalars(select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)).all()
+    incoming = session.scalars(select(UserBlock.blocker_id).where(UserBlock.blocked_id == user_id)).all()
+    return set(outgoing) | set(incoming)
+
+
+def muted_ids(session: Session, user_id: int) -> set[int]:
+    """Mute is reciprocal for audience selection: neither direction is social consent."""
+    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
+    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
+    return set(outgoing) | set(incoming)
 
 
 def require_course(session: Session, course_id: int) -> Course:
@@ -154,6 +170,44 @@ def course_identity_ids(session: Session, course: Course) -> set[int]:
         tuple_(Course.source, Course.source_course_id).in_(alias_identities)
     )).all())
     return {course.id, *aliases}
+
+
+def course_identity_ids_bulk(session: Session, courses) -> dict[int, set[int]]:
+    """Batched course_identity_ids: resolves aliases for many canonical
+    courses in two queries total instead of two per course. A courses-played
+    page can carry up to 100 canonical courses -- calling course_identity_ids
+    once per course there would double that page's query count."""
+    courses = list(courses)
+    result: dict[int, set[int]] = {course.id: {course.id} for course in courses}
+    if not courses:
+        return result
+    canonical_ids = set(result)
+    alias_identities = session.execute(
+        select(
+            CourseReconciliation.canonical_course_id,
+            CourseReconciliation.source,
+            CourseReconciliation.source_course_id,
+        ).where(
+            CourseReconciliation.canonical_course_id.in_(canonical_ids),
+            CourseReconciliation.match_status == "confirmed",
+        )
+    ).all()
+    if not alias_identities:
+        return result
+    keys = {(source, source_course_id) for _, source, source_course_id in alias_identities}
+    alias_id_by_key = {
+        (source, source_course_id): course_id
+        for course_id, source, source_course_id in session.execute(
+            select(Course.id, Course.source, Course.source_course_id).where(
+                tuple_(Course.source, Course.source_course_id).in_(keys)
+            )
+        ).all()
+    }
+    for canonical_id, source, source_course_id in alias_identities:
+        alias_id = alias_id_by_key.get((source, source_course_id))
+        if alias_id is not None:
+            result[canonical_id].add(alias_id)
+    return result
 
 
 def is_wikimedia_negative_cached(course: Course) -> bool:
