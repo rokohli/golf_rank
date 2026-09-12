@@ -722,7 +722,7 @@ def link_contacts(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> Response:
-    user = require_user(session, current)
+    user = require_user(session, current, create=True)
     try:
         hashes = {_identifier_hash(settings, value) for value in payload.contact_identifiers}
     except ValueError as error:

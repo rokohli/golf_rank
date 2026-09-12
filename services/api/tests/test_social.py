@@ -1099,6 +1099,29 @@ def test_linked_contact_status_and_removal_are_owner_scoped() -> None:
     }
 
 
+def test_link_contacts_works_for_a_caller_who_has_not_finished_onboarding() -> None:
+    """A freshly authenticated device has no local User row until onboarding
+    submits (or it follows/searches someone) -- syncing contacts must
+    provision that row on demand like search_users and follow_user already
+    do, instead of 404ing during the onboarding contact-import step."""
+    client = TestClient(create_app())
+    new_caller_headers = {"X-Development-Subject": "dev:not-onboarded-contact-caller"}
+
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(User).where(User.provider_subject == "dev:not-onboarded-contact-caller")) is None
+
+    response = client.put(
+        "/api/v1/me/contacts",
+        headers=new_caller_headers,
+        json={"contact_identifiers": ["bob@example.com"]},
+    )
+    assert response.status_code == 204
+    assert client.get("/api/v1/me/contacts", headers=new_caller_headers).json() == {
+        "linked": True,
+        "contact_count": 1,
+    }
+
+
 def test_notification_cursor_uses_the_same_monotonic_id_order_as_the_query() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:cursor-notification-alice", "Alice", "cursoralice")
