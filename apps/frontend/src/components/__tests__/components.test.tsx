@@ -332,6 +332,39 @@ describe('OnboardingForm', () => {
     shareSpy.mockRestore()
   })
 
+  it('stays on the friends step when the invite sheet is dismissed without sharing', async () => {
+    const shareSpy = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.dismissedAction } as never)
+
+    await renderAtFriendsStep()
+    fireEvent.press(screen.getByRole('button', { name: 'Invite Friends' }))
+
+    await waitFor(() => expect(shareSpy).toHaveBeenCalled())
+    expect(screen.getByText('Find your friends')).toBeOnTheScreen()
+    shareSpy.mockRestore()
+  })
+
+  it('does not advance twice when Continue is pressed while a contact sync is still in flight', async () => {
+    mockRequestContactsPermission.mockResolvedValue({ status: 'granted' })
+    mockGetContacts.mockResolvedValue({ data: [{ emails: [{ email: 'friend@example.com' }], phoneNumbers: [] }] })
+    let resolveLinkContacts: (() => void) | undefined
+    const linkContacts = jest.fn().mockImplementation(() => new Promise<void>((resolve) => { resolveLinkContacts = resolve }))
+
+    await renderAtFriendsStep({ linkContacts })
+    fireEvent.press(screen.getByRole('button', { name: 'Import Contacts' }))
+    await waitFor(() => expect(linkContacts).toHaveBeenCalled())
+
+    // Continue is disabled while the sync is in flight, so it cannot fire a
+    // second, conflicting advance once linkContacts resolves.
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+
+    await act(async () => {
+      resolveLinkContacts?.()
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
+  })
+
   it('searches golfers by username and follows one from the results', async () => {
     jest.useFakeTimers()
     const searchUsers = jest.fn().mockResolvedValue([alexKim])

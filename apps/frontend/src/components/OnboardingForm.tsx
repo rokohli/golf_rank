@@ -986,6 +986,13 @@ function FriendsStep({
   const [busyUserId, setBusyUserId] = useState<number | null>(null)
   const [followError, setFollowError] = useState<string | null>(null)
   const { results, searching, searchError } = useUserSearch(searchUsers, draft.friendSearch)
+  const advanced = useRef(false)
+
+  const advanceOnce = (action: () => void = onNext) => {
+    if (advanced.current) return
+    advanced.current = true
+    action()
+  }
 
   const importContacts = async () => {
     setImporting(true)
@@ -997,7 +1004,7 @@ function FriendsStep({
       const identifiers = contactIdentifiers(result.data)
       await linkContacts?.(identifiers)
       setImported(true)
-      onNext()
+      advanceOnce()
     } catch (reason) {
       setContactError(reason instanceof Error ? reason.message : 'Unable to import contacts.')
     } finally {
@@ -1007,8 +1014,8 @@ function FriendsStep({
 
   const inviteFriends = async () => {
     try {
-      await Share.share({ message: 'Join me on Fairway to rank golf courses and compare rounds.' })
-      onNext()
+      const result = await Share.share({ message: 'Join me on Fairway to rank golf courses and compare rounds.' })
+      if (result.action !== Share.dismissedAction) advanceOnce()
     } catch (reason) {
       setContactError(reason instanceof Error ? reason.message : 'Unable to open the invite sheet.')
     }
@@ -1072,10 +1079,10 @@ function FriendsStep({
       ) : null}
       {followError ? <Text accessibilityRole="alert" style={styles.errorText}>{followError}</Text> : null}
       <SecondaryButton label={importing ? 'Importing…' : imported ? 'Contacts imported' : 'Import Contacts'} onPress={() => void importContacts()} disabled={importing} />
-      <SecondaryButton label="Invite Friends" onPress={() => void inviteFriends()} />
+      <SecondaryButton label="Invite Friends" onPress={() => void inviteFriends()} disabled={importing} />
       {contactError ? <Text accessibilityRole="alert" style={styles.errorText}>{contactError}</Text> : null}
-      <PrimaryButton label="Continue" onPress={onNext} />
-      <InlineButton label="Skip" onPress={onSkip} />
+      <PrimaryButton label="Continue" onPress={() => advanceOnce(onNext)} disabled={importing} />
+      <InlineButton label="Skip" onPress={() => advanceOnce(onSkip)} disabled={importing} />
     </View>
   )
 }
