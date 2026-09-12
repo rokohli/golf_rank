@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
+from .domain import blocked_ids as _blocked_ids
 from .domain import course_data, preload_round_visibility, require_course, stored_user
+from .domain import muted_ids as _muted_ids
 from .models import (
     Comparison,
     Course,
@@ -20,8 +22,6 @@ from .models import (
     Round,
     TierAssignment,
     User,
-    UserBlock,
-    UserMute,
     UserCourseRating,
 )
 from .schemas import (
@@ -115,23 +115,6 @@ def _with_round_stats(
         }
         for entry in entries
     ]
-
-
-def _blocked_ids(session: Session, user_id: int) -> set[int]:
-    blocked = session.scalars(
-        select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)
-    ).all()
-    blockers = session.scalars(
-        select(UserBlock.blocker_id).where(UserBlock.blocked_id == user_id)
-    ).all()
-    return set(blocked) | set(blockers)
-
-
-def _muted_ids(session: Session, user_id: int) -> set[int]:
-    """Mute is reciprocal for audience selection, matching social.py's rule."""
-    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
-    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
-    return set(outgoing) | set(incoming)
 
 
 def _friend_identity(session: Session, user: User) -> FriendRankingUserOut:

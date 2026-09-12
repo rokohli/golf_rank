@@ -51,7 +51,9 @@ from .schemas import (
     ContactLinkStatusOut,
     UserCourseVisitOut,
 )
-from .domain import course_identity_ids
+from .domain import blocked_ids as _blocked_ids
+from .domain import course_identity_ids, course_identity_ids_bulk
+from .domain import muted_ids as _muted_ids
 
 
 router = APIRouter(tags=["social"])
@@ -198,19 +200,6 @@ def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut
         )
         for user, preferences, profile in rows
     }
-
-
-def _blocked_ids(session: Session, user_id: int) -> set[int]:
-    outgoing = session.scalars(select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)).all()
-    incoming = session.scalars(select(UserBlock.blocker_id).where(UserBlock.blocked_id == user_id)).all()
-    return set(outgoing) | set(incoming)
-
-
-def _muted_ids(session: Session, user_id: int) -> set[int]:
-    """Mute is reciprocal for audience selection: neither direction is social consent."""
-    outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
-    incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
-    return set(outgoing) | set(incoming)
 
 
 def _relationship_sets(session: Session, user_id: int) -> tuple[set[int], set[int]]:
@@ -521,31 +510,24 @@ def get_user_round_summary(
         visibilities = ("public", "friends") if user_id in followed_ids else ()
 
     base = select(Round).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+    base_rounds = base.subquery()
     total, average, best = session.execute(
         select(
-            func.count(Round.id),
-            func.avg(Round.score),
-            func.min(Round.score),
-        ).where(Round.user_id == user_id, Round.visibility.in_(visibilities))
+            func.count(base_rounds.c.id),
+            func.avg(base_rounds.c.score),
+            func.min(base_rounds.c.score),
+        )
     ).one()
     # Canonicalize before counting: a round logged against a source course
     # before reconciliation and another logged against its canonical course
     # afterward are the same course to _round_out and get_user_courses, so a
     # raw distinct(course_id) count would overstate "Courses: N" relative to
     # what the profile actually renders.
-    raw_course_ids = set(
-        session.scalars(
-            select(Round.course_id)
-            .where(Round.user_id == user_id, Round.visibility.in_(visibilities))
-            .distinct()
-        ).all()
-    )
+    raw_course_ids = set(session.scalars(select(base_rounds.c.course_id).distinct()).all())
     distinct = len({course.id for course in require_courses(session, raw_course_ids).values()})
     this_year = session.scalar(
-        select(func.count(Round.id)).where(
-            Round.user_id == user_id,
-            Round.visibility.in_(visibilities),
-            func.extract("year", Round.played_on) == datetime.now().year,
+        select(func.count(base_rounds.c.id)).where(
+            func.extract("year", base_rounds.c.played_on) == datetime.now().year,
         )
     ) or 0
     latest = session.scalar(base.order_by(Round.played_on.desc(), Round.id.desc()).limit(1))
@@ -621,14 +603,15 @@ def get_user_courses(
 
     # A rating can still be stored against a source course_id that predates
     # its reconciliation, same as the state rows above -- query every
-    # identity id for each canonicalized course (course_identity_ids, as
-    # _state already does in course_ratings.py) rather than the exact
+    # identity id for each canonicalized course (course_identity_ids_bulk, as
+    # _state does per-course in course_ratings.py) rather than the exact
     # canonical id alone, or a rating recorded before reconciliation would
-    # show the visit as unrated.
+    # show the visit as unrated. Batched across the whole page instead of
+    # once per course, matching require_courses/preload_round_visibility above.
     identity_to_canonical: dict[int, int] = {}
-    for course in page:
-        for alias_id in course_identity_ids(session, course):
-            identity_to_canonical[alias_id] = course.id
+    for canonical_id, alias_ids in course_identity_ids_bulk(session, page).items():
+        for alias_id in alias_ids:
+            identity_to_canonical[alias_id] = canonical_id
 
     ratings_by_canonical: dict[int, list[UserCourseRating]] = defaultdict(list)
     for rating in session.scalars(
