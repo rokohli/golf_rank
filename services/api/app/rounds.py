@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, delete_permanent_objects, require_course, require_user, stored_user
+from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, stored_user
 from .models import (
     ActivityEvent,
+    AppNotification,
     Comparison,
     Course,
     CourseImage,
@@ -227,6 +228,40 @@ def _replace_companions(
     )
 
 
+def _notify_tagged_companions(
+    session: Session,
+    actor_id: int,
+    round_id: int,
+    friend_user_ids: list[int],
+    previously_tagged_ids: set[int],
+) -> None:
+    """Notify friends newly added as round companions.
+
+    Only the delta is notified -- re-saving a round with the same companions
+    (e.g. editing the note) must not re-notify people already tagged on it.
+    friend_user_ids is pre-validated by _validate_friend_ids, so every
+    recipient here is already a followed, non-blocked user.
+    """
+    for recipient_id in friend_user_ids:
+        if recipient_id in previously_tagged_ids or recipient_id == actor_id:
+            continue
+        if not notifications_enabled(session, recipient_id):
+            continue
+        existing = session.scalar(select(AppNotification.id).where(
+            AppNotification.recipient_user_id == recipient_id,
+            AppNotification.actor_user_id == actor_id,
+            AppNotification.notification_type == "tagged_in_round",
+            AppNotification.subject_id == round_id,
+        ))
+        if existing is None:
+            session.add(AppNotification(
+                recipient_user_id=recipient_id,
+                actor_user_id=actor_id,
+                notification_type="tagged_in_round",
+                subject_id=round_id,
+            ))
+
+
 def _refresh_course_state(session: Session, user_id: int, course_id: int) -> None:
     count, last_played = session.execute(
         select(func.count(Round.id), func.max(Round.played_on)).where(
@@ -321,6 +356,7 @@ def create_round(
         session.add(RoundNote(round_id=round_.id, body=payload.note))
     friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
     _replace_companions(session, round_.id, friend_ids, payload.guest_names)
+    _notify_tagged_companions(session, user.id, round_.id, friend_ids, set())
     _refresh_course_state(session, user.id, course_id)
     session.add(
         ActivityEvent(
@@ -457,8 +493,15 @@ def update_round(
         elif note is not None:
             session.delete(note)
     if payload.friend_user_ids is not None and payload.guest_names is not None:
+        previously_tagged_ids = set(session.scalars(
+            select(RoundCompanion.friend_user_id).where(
+                RoundCompanion.round_id == round_.id,
+                RoundCompanion.friend_user_id.is_not(None),
+            )
+        ).all())
         friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
         _replace_companions(session, round_.id, friend_ids, payload.guest_names)
+        _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
     event = session.scalar(
         select(ActivityEvent).where(
             ActivityEvent.subject_type.in_(("round", "rating_round")),

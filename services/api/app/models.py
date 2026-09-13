@@ -454,12 +454,38 @@ class LinkedContact(Base):
 
 class AppNotification(Base):
     __tablename__ = "app_notifications"
-    __table_args__ = (UniqueConstraint("recipient_user_id", "actor_user_id", "notification_type", name="uq_notification_recipient_actor_type"),)
+    __table_args__ = (
+        # A plain 4-column UniqueConstraint would not dedupe the NULL-subject
+        # types below, since both Postgres and SQLite treat every NULL as
+        # distinct for uniqueness. Two partial indexes keep both guarantees:
+        # one notification per actor for subject-less types (followed_you,
+        # contact_joined, mutual_follow), and one per actor *per round* for
+        # round-scoped types (tagged_in_round, reacted_to_round).
+        Index(
+            "uq_notification_recipient_actor_type_no_subject",
+            "recipient_user_id", "actor_user_id", "notification_type",
+            unique=True,
+            postgresql_where=text("subject_id IS NULL"),
+            sqlite_where=text("subject_id IS NULL"),
+        ),
+        Index(
+            "uq_notification_recipient_actor_type_subject",
+            "recipient_user_id", "actor_user_id", "notification_type", "subject_id",
+            unique=True,
+            postgresql_where=text("subject_id IS NOT NULL"),
+            sqlite_where=text("subject_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     notification_type: Mapped[str] = mapped_column(String(40), index=True)
+    # The round a "tagged_in_round"/"reacted_to_round" notification refers to.
+    # NULL for notification types with no per-object subject, like
+    # followed_you, contact_joined, and mutual_follow, which only ever need
+    # one live notification per actor.
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("rounds.id", ondelete="CASCADE"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 

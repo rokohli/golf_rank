@@ -301,6 +301,47 @@ def test_round_companion_name_is_redacted_once_blocked() -> None:
     ]
 
 
+def test_tagging_a_companion_notifies_them_and_only_the_newly_added_delta() -> None:
+    client = TestClient(create_app())
+    _profile(client, ALICE, "Alice", "alicetagnotif")
+    _profile(client, BOB, "Bob", "bobtagnotif")
+    carol = {"X-Development-Subject": "dev:round-carol-tagnotif"}
+    _profile(client, carol, "Carol", "caroltagnotif")
+    bob_id = client.get("/api/v1/users", headers=ALICE, params={"q": "bobtagnotif"}).json()[0]["id"]
+    carol_id = client.get("/api/v1/users", headers=ALICE, params={"q": "caroltagnotif"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=ALICE).status_code == 200
+    assert client.put(f"/api/v1/me/follows/{carol_id}", headers=ALICE).status_code == 200
+
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={"course_id": 1, "played_on": "2026-07-01", "friend_user_ids": [bob_id]},
+    )
+    assert created.status_code == 201
+    round_id = created.json()["id"]
+
+    def tags(headers: dict[str, str]) -> list[dict]:
+        items = client.get("/api/v1/me/notifications", headers=headers).json()["items"]
+        return [item for item in items if item["notification_type"] == "tagged_in_round"]
+
+    bob_notifications = tags(BOB)
+    assert len(bob_notifications) == 1
+    assert bob_notifications[0]["actor"]["display_name"] == "Alice Golfer"
+    assert bob_notifications[0]["round_id"] == round_id
+    assert bob_notifications[0]["course"]["id"] == 1
+
+    # Saving the round again with the same companion plus a newly added one
+    # must not re-notify Bob, but must notify Carol for the first time.
+    updated = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"friend_user_ids": [bob_id, carol_id], "guest_names": []},
+    )
+    assert updated.status_code == 200
+    assert len(tags(BOB)) == 1
+    assert len(tags(carol)) == 1
+
+
 def test_deleting_round_removes_its_note_without_sqlite_cascades() -> None:
     app = create_app()
     client = TestClient(app)

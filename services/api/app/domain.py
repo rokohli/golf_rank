@@ -16,6 +16,7 @@ from .models import (
     CourseReconciliation,
     DeletedIdentity,
     FailedObjectDeletion,
+    OnboardingPreference,
     Profile,
     Round,
     User,
@@ -71,6 +72,11 @@ def muted_ids(session: Session, user_id: int) -> set[int]:
     outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
     incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
     return set(outgoing) | set(incoming)
+
+
+def notifications_enabled(session: Session, user_id: int) -> bool:
+    preferences = session.get(OnboardingPreference, user_id)
+    return not preferences or preferences.onboarding_data is None or preferences.onboarding_data.get("notifications") is not False
 
 
 def require_course(session: Session, course_id: int) -> Course:

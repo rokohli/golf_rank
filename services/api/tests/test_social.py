@@ -3,6 +3,7 @@ from datetime import date, datetime
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.main import create_app
 from app.core.auth import CurrentUser, current_user
@@ -681,6 +682,41 @@ def test_feed_reactions_are_idempotent_and_private_events_are_not_reactable() ->
     ).status_code == 404
 
 
+def test_reacting_to_a_round_notifies_its_owner_once() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:reaction-notif-alice", "Alice", "alice")
+    bob = _profile(client, "dev:reaction-notif-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=bob,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 80, "visibility": "public"},
+    )
+    round_id = created.json()["id"]
+    event = client.get("/api/v1/feed", headers=alice).json()["items"][0]
+
+    def reaction_notifications() -> list[dict]:
+        items = client.get("/api/v1/me/notifications", headers=bob).json()["items"]
+        return [item for item in items if item["notification_type"] == "reacted_to_round"]
+
+    assert client.put(f"/api/v1/feed/{event['id']}/reactions/like", headers=alice).status_code == 200
+    notifications = reaction_notifications()
+    assert len(notifications) == 1
+    assert notifications[0]["actor"]["display_name"] == "Alice Golfer"
+    assert notifications[0]["round_id"] == round_id
+    assert notifications[0]["course"]["id"] == 1
+
+    # Liking again (idempotent) and unliking must not create a second notification.
+    assert client.put(f"/api/v1/feed/{event['id']}/reactions/like", headers=alice).status_code == 200
+    assert client.delete(f"/api/v1/feed/{event['id']}/reactions/like", headers=alice).status_code == 200
+    assert len(reaction_notifications()) == 1
+
+    # Reacting to your own round must not notify yourself.
+    assert client.put(f"/api/v1/feed/{event['id']}/reactions/like", headers=bob).status_code == 200
+    assert len(reaction_notifications()) == 1
+
+
 def test_block_removes_relationship_and_hides_users_and_feed() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:block-alice", "Alice", "alice")
@@ -1008,6 +1044,66 @@ def test_refollow_reuses_notification_and_notifications_preference_hides_inbox()
     saved["onboarding_data"]["notifications"] = False
     assert client.put("/api/v1/me/onboarding-preferences", headers=bob, json=saved).status_code == 200
     assert client.get("/api/v1/me/notifications", headers=bob).json() == {"items": [], "next_cursor": None}
+
+
+def test_notification_dedup_constraint_still_rejects_duplicate_subjectless_rows() -> None:
+    """The unique constraint dedup for subject_id-less types (followed_you,
+    contact_joined, mutual_follow) was rewritten as two partial indexes when
+    subject_id was added for round-scoped types (tagged_in_round,
+    reacted_to_round). Both Postgres and SQLite treat every NULL as distinct
+    under a plain unique constraint, so a naive 4-column constraint would
+    silently stop deduping these three types at the DB level -- this proves
+    the partial index still catches it as a race-safety backstop, even
+    though the app-level SELECT-before-INSERT check already prevents it on
+    the ordinary path."""
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:notification-constraint-alice", "Alice", "alice")
+    bob = _profile(client, "dev:notification-constraint-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    with client.app.state.session_factory() as session:
+        recipient = session.scalar(select(AppNotification.recipient_user_id).limit(1))
+        actor = session.scalar(select(AppNotification.actor_user_id).limit(1))
+        session.add(AppNotification(recipient_user_id=recipient, actor_user_id=actor, notification_type="followed_you"))
+        try:
+            session.flush()
+            raised = False
+        except IntegrityError:
+            raised = True
+        assert raised
+
+
+def test_mutual_follow_notifies_both_sides_exactly_once() -> None:
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:mutual-follow-alice", "Alice", "alice")
+    bob = _profile(client, "dev:mutual-follow-bob", "Bob", "bob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "bob"}).json()[0]["id"]
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "alice"}).json()[0]["id"]
+
+    def mutuals(headers: dict[str, str]) -> list[dict]:
+        items = client.get("/api/v1/me/notifications", headers=headers).json()["items"]
+        return [item for item in items if item["notification_type"] == "mutual_follow"]
+
+    # Alice follows Bob first -- not mutual yet, so no "now friends" notification.
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert mutuals(alice) == []
+    assert mutuals(bob) == []
+
+    # Bob follows back -- this completes the pair, notifying both sides once.
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    alice_mutuals = mutuals(alice)
+    bob_mutuals = mutuals(bob)
+    assert len(alice_mutuals) == 1
+    assert alice_mutuals[0]["actor"]["display_name"] == "Bob Golfer"
+    assert len(bob_mutuals) == 1
+    assert bob_mutuals[0]["actor"]["display_name"] == "Alice Golfer"
+
+    # Unfollowing and refollowing must not spam a second notification.
+    assert client.delete(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 204
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
+    assert len(mutuals(alice)) == 1
+    assert len(mutuals(bob)) == 1
 
 
 def test_contact_identifier_hashes_are_keyed_and_normalize_us_phone_numbers() -> None:
