@@ -327,8 +327,10 @@ def test_tagging_a_companion_notifies_them_and_only_the_newly_added_delta() -> N
     bob_notifications = tags(BOB)
     assert len(bob_notifications) == 1
     assert bob_notifications[0]["actor"]["display_name"] == "Alice Golfer"
-    assert bob_notifications[0]["round_id"] == round_id
     assert bob_notifications[0]["course"]["id"] == 1
+    # Bob is a companion, not the round's owner -- GET /me/rounds/{id} is
+    # owner-only, so round_id isn't surfaced for a type he can't navigate to.
+    assert bob_notifications[0]["round_id"] is None
 
     # Saving the round again with the same companion plus a newly added one
     # must not re-notify Bob, but must notify Carol for the first time.

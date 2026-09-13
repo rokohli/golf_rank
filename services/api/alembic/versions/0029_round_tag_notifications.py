@@ -53,6 +53,21 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("uq_notification_recipient_actor_type_subject", table_name="app_notifications")
     op.drop_index("uq_notification_recipient_actor_type_no_subject", table_name="app_notifications")
+    # Collapsing subject_id away means multiple per-round notifications for the
+    # same (recipient, actor, type) pair -- e.g. two tagged_in_round rows from
+    # being tagged in two different rounds -- can no longer coexist once the
+    # old 3-column constraint comes back. Keep only the most recent row per
+    # pair so that constraint doesn't fail against data this feature was
+    # built to allow.
+    op.execute(
+        """
+        DELETE FROM app_notifications
+        WHERE id NOT IN (
+            SELECT MAX(id) FROM app_notifications
+            GROUP BY recipient_user_id, actor_user_id, notification_type
+        )
+        """
+    )
     with op.batch_alter_table("app_notifications") as batch_op:
         batch_op.create_unique_constraint(
             "uq_notification_recipient_actor_type",

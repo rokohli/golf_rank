@@ -728,6 +728,13 @@ def list_notifications(
         )
     ).all()) if actor_ids else set()
     round_backed_types = ("tagged_in_round", "reacted_to_round")
+    # GET /me/rounds/{id} only returns rounds the caller owns, so round_id is
+    # only worth surfacing to the recipient for "reacted_to_round" -- there,
+    # the recipient is always the round's owner. A "tagged_in_round"
+    # recipient is a companion, not the owner, and can't open that endpoint,
+    # so course context alone (used in the notification's copy) is all this
+    # type carries.
+    round_navigable_types = ("reacted_to_round",)
     round_ids = {item.subject_id for item in page if item.notification_type in round_backed_types and item.subject_id is not None}
     rounds_by_id = {r.id: r for r in session.scalars(select(Round).where(Round.id.in_(round_ids)))} if round_ids else {}
     courses_by_id = {
@@ -741,7 +748,7 @@ def list_notifications(
                 actor=summaries[item.actor_user_id],
                 created_at=item.created_at,
                 is_following=item.actor_user_id in following_ids,
-                round_id=item.subject_id if item.notification_type in round_backed_types else None,
+                round_id=item.subject_id if item.notification_type in round_navigable_types else None,
                 course=(
                     course_data(courses_by_id[rounds_by_id[item.subject_id].course_id])
                     if item.notification_type in round_backed_types
