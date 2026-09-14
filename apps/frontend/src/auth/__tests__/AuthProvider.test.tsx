@@ -15,7 +15,7 @@ const mockSignUpCreate = jest.fn()
 const mockSetProfileImage = jest.fn()
 const mockReadAsStringAsync = jest.fn()
 const mockSignOut = jest.fn()
-const mockRequestAndRegisterPushToken = jest.fn()
+const mockRegisterPushTokenIfPermissionGranted = jest.fn()
 const mockUnregisterCurrentPushToken = jest.fn()
 let mockUrlListener: ((event: { url: string }) => void) | null = null
 let mockUser: {
@@ -36,7 +36,7 @@ jest.mock('@clerk/expo', () => ({
 }))
 
 jest.mock('../../notifications/pushTokens', () => ({
-  requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
+  registerPushTokenIfPermissionGranted: (...args: unknown[]) => mockRegisterPushTokenIfPermissionGranted(...args),
   unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
 }))
 
@@ -180,7 +180,7 @@ describe('AuthProvider', () => {
       </AuthProvider>,
     )
 
-    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRegisterPushTokenIfPermissionGranted).toHaveBeenCalledTimes(1))
 
     fireEvent.press(screen.getByText('Sign out'))
 
@@ -201,7 +201,7 @@ describe('AuthProvider', () => {
     }
     const callOrder: string[] = []
     let resolveRegistration: () => void = () => undefined
-    mockRequestAndRegisterPushToken.mockImplementation(
+    mockRegisterPushTokenIfPermissionGranted.mockImplementation(
       () => new Promise<void>((resolve) => { resolveRegistration = () => { callOrder.push('registration-resolved'); resolve() } }),
     )
     mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
@@ -222,7 +222,7 @@ describe('AuthProvider', () => {
       </AuthProvider>,
     )
 
-    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRegisterPushTokenIfPermissionGranted).toHaveBeenCalledTimes(1))
 
     // Sign out while registration is still in flight -- without the fix,
     // unregister/signOut would run immediately here, and the registration

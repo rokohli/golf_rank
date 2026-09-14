@@ -7,6 +7,7 @@ import { ApiResponseError, checkUsernameAvailable, followUser, getProfile, saveP
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { OnboardingForm } from '../src/components/OnboardingForm'
+import { requestAndRegisterPushToken } from '../src/notifications/pushTokens'
 import { colors } from '../src/ui/theme'
 
 type ProfileState = 'checking' | 'needs-onboarding' | 'error'
@@ -74,6 +75,11 @@ export default function Index() {
     [getAuthHeaders],
   )
 
+  const requestOnboardingPushPermission = useCallback(
+    () => { void requestAndRegisterPushToken(getAuthHeaders) },
+    [getAuthHeaders],
+  )
+
   if (profileState === 'checking') {
     return (
       <SafeAreaView style={styles.statusScreen}>
@@ -118,6 +124,7 @@ export default function Index() {
             linkContacts={linkOnboardingContacts}
             searchUsers={searchOnboardingUsers}
             followUser={followOnboardingUser}
+            requestPushPermission={requestOnboardingPushPermission}
             onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}
           />

@@ -26,7 +26,7 @@ jest.mock('expo-notifications', () => ({
   setNotificationChannelAsync: (...args: unknown[]) => mockSetNotificationChannelAsync(...args),
 }))
 
-import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../pushTokens'
+import { registerPushTokenIfPermissionGranted, requestAndRegisterPushToken, unregisterCurrentPushToken } from '../pushTokens'
 
 const headers = { 'Content-Type': 'application/json' as const }
 const getAuthHeaders = async () => headers
@@ -81,6 +81,54 @@ describe('requestAndRegisterPushToken', () => {
 
     await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBeUndefined()
   })
+
+  it('never hangs forever if an Expo/OS call stalls -- resolves once the internal timeout fires', async () => {
+    jest.useFakeTimers()
+    try {
+      mockGetPermissionsAsync.mockReturnValue(new Promise(() => undefined)) // never resolves
+      const settled = requestAndRegisterPushToken(getAuthHeaders)
+      await jest.advanceTimersByTimeAsync(5000)
+      await expect(settled).resolves.toBeUndefined()
+      expect(mockRegisterPushToken).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+})
+
+describe('registerPushTokenIfPermissionGranted', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockIsDevice = true
+    mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
+  })
+
+  it('registers silently when permission was already granted in an earlier session', async () => {
+    mockGetPermissionsAsync.mockResolvedValue({ status: 'granted' })
+
+    await registerPushTokenIfPermissionGranted(getAuthHeaders)
+
+    expect(mockRegisterPushToken).toHaveBeenCalledWith({ token: 'ExponentPushToken[abc]', platform: 'ios' }, headers)
+    expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
+  })
+
+  it('never prompts and never registers when permission has not been granted yet', async () => {
+    mockGetPermissionsAsync.mockResolvedValue({ status: 'undetermined' })
+
+    await registerPushTokenIfPermissionGranted(getAuthHeaders)
+
+    expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('skips entirely on a non-device (simulator)', async () => {
+    mockIsDevice = false
+
+    await registerPushTokenIfPermissionGranted(getAuthHeaders)
+
+    expect(mockGetPermissionsAsync).not.toHaveBeenCalled()
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
 })
 
 describe('unregisterCurrentPushToken', () => {
@@ -98,5 +146,17 @@ describe('unregisterCurrentPushToken', () => {
   it('swallows an unregister API failure instead of throwing', async () => {
     mockUnregisterPushToken.mockRejectedValue(new Error('network down'))
     await expect(unregisterCurrentPushToken(getAuthHeaders)).resolves.toBeUndefined()
+  })
+
+  it('never hangs forever if the unregister call stalls -- bounded so sign-out can never block on it indefinitely', async () => {
+    jest.useFakeTimers()
+    try {
+      mockUnregisterPushToken.mockReturnValue(new Promise(() => undefined)) // never resolves
+      const settled = unregisterCurrentPushToken(getAuthHeaders)
+      await jest.advanceTimersByTimeAsync(5000)
+      await expect(settled).resolves.toBeUndefined()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })

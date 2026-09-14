@@ -12,7 +12,7 @@ import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
-import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
+import { registerPushTokenIfPermissionGranted, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
 import { buildAuthHeaders } from './useAuthToken'
 
@@ -1223,14 +1223,19 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // receiving pushes meant for whoever signs in next on this device.
   const pendingRegistration = useRef<Promise<void> | null>(null)
 
-  // Registers this device's Expo push token once the user is fully signed in
-  // (not still phone-gated). Always registers regardless of the in-app
-  // notifications toggle -- send_push_notifications on the backend is the
-  // single source of truth for whether a push actually goes out, so toggling
-  // notifications back on doesn't require a fresh app open to take effect.
+  // Silently (re-)registers this device's Expo push token once the user is
+  // fully signed in (not still phone-gated) -- but only if OS permission was
+  // already granted in an earlier session. This never prompts, so it can run
+  // unconditionally on every sign-in: a brand-new user mid-onboarding hasn't
+  // granted permission yet and this is a no-op for them, while a returning
+  // user who already opted in gets their token refreshed without seeing an
+  // unsolicited native dialog before reaching the app's own notifications
+  // choice. The explicit opt-in path (onboarding's Enable button, or
+  // re-enabling in notification-settings) uses the prompting
+  // requestAndRegisterPushToken instead.
   useEffect(() => {
     if (!isLoaded || !user || needsPhone) return
-    pendingRegistration.current = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+    pendingRegistration.current = registerPushTokenIfPermissionGranted(() => buildAuthHeaders(getToken))
   }, [getToken, isLoaded, needsPhone, user])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
