@@ -12,7 +12,9 @@ import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
+import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
+import { buildAuthHeaders } from './useAuthToken'
 
 const ssoRedirectScheme = 'golfrank'
 const ssoRedirectPath = 'sso-callback'
@@ -1207,13 +1209,23 @@ const authStyles = StyleSheet.create({
 
 function ClerkUserControls({ children }: { children: ReactNode }) {
   const router = useRouter()
-  const { signOut } = useAuth()
+  const { signOut, getToken } = useAuth()
   const { isLoaded, user } = useUser()
   // useUser() returns user: undefined while Clerk is still loading. Treat that as
   // "not ready" — not "missing phone" — or every cold start falsely opens the gate
   // and router.replace('/') even for users who already verified a phone.
   const needsPhone = Boolean(isLoaded && user && !hasVerifiedPhone(user))
   const wasPhoneGated = useRef(false)
+
+  // Registers this device's Expo push token once the user is fully signed in
+  // (not still phone-gated). Always registers regardless of the in-app
+  // notifications toggle -- send_push_notifications on the backend is the
+  // single source of truth for whether a push actually goes out, so toggling
+  // notifications back on doesn't require a fresh app open to take effect.
+  useEffect(() => {
+    if (!isLoaded || !user || needsPhone) return
+    void requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+  }, [getToken, isLoaded, needsPhone, user])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
   // that gate opens or closes. Unmounting the stack during SMS verification was
@@ -1237,7 +1249,11 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         profileInitials: userInitials(user),
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
-        signOut,
+        signOut: async () => {
+          // Best-effort: an unregister failure must never block sign-out.
+          await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
+          await signOut()
+        },
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
           // Clerk's `file` param accepts a string only as a base64 data URI, not a

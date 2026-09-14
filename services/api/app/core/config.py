@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     readiness_cache_seconds: float = 5.0
     operations_alert_webhook_url: str | None = None
     operations_alert_webhook_timeout_seconds: float = 2.0
+    expo_push_api_url: str = "https://exp.host/--/api/v2/push/send"
+    expo_push_timeout_seconds: float = 5.0
     rate_limit_alert_window_seconds: int = 300
     rate_limit_backend_failure_alert_threshold: int = 3
     rate_limit_denial_alert_threshold: int = 50

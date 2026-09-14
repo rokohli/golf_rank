@@ -14,6 +14,9 @@ const mockResetPassword = jest.fn()
 const mockSignUpCreate = jest.fn()
 const mockSetProfileImage = jest.fn()
 const mockReadAsStringAsync = jest.fn()
+const mockSignOut = jest.fn()
+const mockRequestAndRegisterPushToken = jest.fn()
+const mockUnregisterCurrentPushToken = jest.fn()
 let mockUrlListener: ((event: { url: string }) => void) | null = null
 let mockUser: {
   firstName: string
@@ -27,9 +30,14 @@ jest.mock('@clerk/expo', () => ({
   ClerkProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Show: ({ children, when }: { children: React.ReactNode; when: string }) =>
     when === (mockUser ? 'signed-in' : 'signed-out') ? <>{children}</> : null,
-  useAuth: () => ({ signOut: jest.fn() }),
+  useAuth: () => ({ signOut: mockSignOut, getToken: jest.fn() }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
   useUser: () => ({ isLoaded: true, isSignedIn: mockUser !== null, user: mockUser }),
+}))
+
+jest.mock('../../notifications/pushTokens', () => ({
+  requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
+  unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
 }))
 
 jest.mock('expo-file-system', () => ({
@@ -141,6 +149,44 @@ describe('AuthProvider', () => {
 
     await waitFor(() => expect(mockReadAsStringAsync).toHaveBeenCalledWith('file:///picked-photo.jpg', { encoding: 'base64' }))
     expect(mockSetProfileImage).toHaveBeenCalledWith({ file: 'data:image/jpeg;base64,ZmFrZWJhc2U2NA==' })
+  })
+
+  it('registers a push token once phone verification is complete, and unregisters before delegating sign-out', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function SignOutProbe() {
+      const { signOut } = useAuthGate()
+      return (
+        <Pressable onPress={() => void signOut()}>
+          <Text>Sign out</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutProbe />
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+
+    fireEvent.press(screen.getByText('Sign out'))
+
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(mockUnregisterCurrentPushToken).toHaveBeenCalledTimes(1)
+    expect(callOrder).toEqual(['unregister', 'signOut'])
   })
 
   it('does not support admin-development as a no-Clerk auth mode', () => {
