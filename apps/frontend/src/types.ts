@@ -249,10 +249,12 @@ export type FeedPage = {
 
 export type AppNotification = {
   id: number
-  notification_type: 'followed_you' | 'contact_joined' | string
+  notification_type: 'followed_you' | 'contact_joined' | 'tagged_in_round' | 'reacted_to_round' | 'mutual_follow' | string
   actor: UserSummary
   created_at: string
   is_following: boolean
+  round_id: number | null
+  course: Course | null
 }
 
 export type CourseSearchFilters = {

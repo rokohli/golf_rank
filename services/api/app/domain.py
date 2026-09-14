@@ -16,6 +16,7 @@ from .models import (
     CourseReconciliation,
     DeletedIdentity,
     FailedObjectDeletion,
+    OnboardingPreference,
     Profile,
     Round,
     User,
@@ -35,6 +36,24 @@ def lock_identity_transaction(session: Session, provider_subject: str) -> None:
         return
     lock_id = int.from_bytes(
         hashlib.sha256(provider_subject.encode()).digest()[:8], byteorder="big", signed=True
+    )
+    session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+
+
+def lock_user_pair_transaction(session: Session, user_id_a: int, user_id_b: int) -> None:
+    """Serialize a read-then-decide relationship transition between two users.
+
+    Without this, two people following each other back in the same instant
+    can each read "not mutual yet" before the other's Follow row commits, so
+    both requests insert opposite-keyed rows and neither ever observes (or
+    announces) the completed mutual relationship. Ordering by the smaller id
+    makes both call directions hash to the same lock.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    low, high = sorted((user_id_a, user_id_b))
+    lock_id = int.from_bytes(
+        hashlib.sha256(f"{low}:{high}".encode()).digest()[:8], byteorder="big", signed=True
     )
     session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
 
@@ -71,6 +90,11 @@ def muted_ids(session: Session, user_id: int) -> set[int]:
     outgoing = session.scalars(select(UserMute.muted_id).where(UserMute.muter_id == user_id)).all()
     incoming = session.scalars(select(UserMute.muter_id).where(UserMute.muted_id == user_id)).all()
     return set(outgoing) | set(incoming)
+
+
+def notifications_enabled(session: Session, user_id: int) -> bool:
+    preferences = session.get(OnboardingPreference, user_id)
+    return not preferences or preferences.onboarding_data is None or preferences.onboarding_data.get("notifications") is not False
 
 
 def require_course(session: Session, course_id: int) -> Course:

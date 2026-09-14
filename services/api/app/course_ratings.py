@@ -20,7 +20,7 @@ from .models import (
     UserCourseRating,
 )
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
-from .rounds import _companion_blocked_ids, _event_data, _owner_blocked_ids, _refresh_course_state
+from .rounds import _companion_blocked_ids, _event_data, _notify_tagged_companions, _owner_blocked_ids, _refresh_course_state
 from .schemas import (
     CourseOut,
     CourseRatingIn,
@@ -481,12 +481,19 @@ def patch_rating_details(
         session.add(RoundNote(round_id=round_.id, body=payload.note))
     else:
         note.body = payload.note
+    previously_tagged_ids = set(session.scalars(
+        select(RoundCompanion.friend_user_id).where(
+            RoundCompanion.round_id == round_.id,
+            RoundCompanion.friend_user_id.is_not(None),
+        )
+    ).all())
     session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_.id))
     session.flush()
     session.add_all(
         [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
         + [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
     )
+    _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
     _record_rating_event(session, user.id, round_, rating, create=False)
     session.flush()
     result = _state(session, course, user.id)

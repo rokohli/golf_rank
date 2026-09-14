@@ -186,7 +186,6 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert exported["profile"]["onboarding_data"]["username"] == "exportalice"
     assert [round_["score"] for round_ in exported["rounds"]] == [80]
     assert len(exported["linked_contacts"]) == 1
-    assert len(exported["notifications"]) == 1
-    assert exported["notifications"][0]["recipient_user_id"] == alice_id
-    assert exported["notifications"][0]["actor_user_id"] == bob_id
+    assert {n["notification_type"] for n in exported["notifications"]} == {"followed_you", "mutual_follow"}
+    assert all(n["recipient_user_id"] == alice_id and n["actor_user_id"] == bob_id for n in exported["notifications"])
     assert "provider_subject" not in str(exported)

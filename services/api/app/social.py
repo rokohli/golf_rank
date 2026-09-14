@@ -16,6 +16,7 @@ from .core.config import Settings
 from .db import get_session
 from .domain import (
     course_data,
+    lock_user_pair_transaction,
     preload_round_visibility,
     require_course,
     require_courses,
@@ -54,6 +55,7 @@ from .schemas import (
 from .domain import blocked_ids as _blocked_ids
 from .domain import course_identity_ids, course_identity_ids_bulk
 from .domain import muted_ids as _muted_ids
+from .domain import notifications_enabled as _notifications_enabled
 
 
 router = APIRouter(tags=["social"])
@@ -113,6 +115,8 @@ class NotificationOut(BaseModel):
     actor: UserSummaryOut
     created_at: datetime
     is_following: bool = False
+    round_id: int | None = None
+    course: CourseOut | None = None
 
 
 class NotificationPageOut(BaseModel):
@@ -652,6 +656,7 @@ def follow_user(
         raise HTTPException(404, "User not found")
     if target_user_id in _blocked_ids(session, user.id):
         raise HTTPException(404, "User not found")
+    lock_user_pair_transaction(session, user.id, target_user_id)
     follow = session.scalar(select(Follow).where(Follow.follower_id == user.id, Follow.followed_id == target_user_id))
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
@@ -663,9 +668,33 @@ def follow_user(
         ))
         if existing is None and _notifications_enabled(session, target_user_id):
             session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
+        mutual = session.scalar(select(Follow.id).where(
+            Follow.follower_id == target_user_id, Follow.followed_id == user.id,
+        )) is not None
+        if mutual:
+            _notify_mutual_follow(session, user.id, target_user_id)
         session.commit()
-    mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
+    else:
+        mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
+
+
+def _notify_mutual_follow(session: Session, user_id: int, other_id: int) -> None:
+    """Notify both sides once a follow completes a mutual pair.
+
+    Called only from the branch that just created a fresh Follow row, so this
+    fires exactly once per pair -- right when the second follow lands.
+    """
+    for recipient_id, actor_id in ((user_id, other_id), (other_id, user_id)):
+        if not _notifications_enabled(session, recipient_id):
+            continue
+        existing = session.scalar(select(AppNotification.id).where(
+            AppNotification.recipient_user_id == recipient_id,
+            AppNotification.actor_user_id == actor_id,
+            AppNotification.notification_type == "mutual_follow",
+        ))
+        if existing is None:
+            session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=actor_id, notification_type="mutual_follow"))
 
 
 @router.get("/api/v1/me/notifications", response_model=NotificationPageOut)
@@ -700,6 +729,19 @@ def list_notifications(
             Follow.followed_id.in_(actor_ids),
         )
     ).all()) if actor_ids else set()
+    round_backed_types = ("tagged_in_round", "reacted_to_round")
+    # GET /me/rounds/{id} only returns rounds the caller owns, so round_id is
+    # only worth surfacing to the recipient for "reacted_to_round" -- there,
+    # the recipient is always the round's owner. A "tagged_in_round"
+    # recipient is a companion, not the owner, and can't open that endpoint,
+    # so course context alone (used in the notification's copy) is all this
+    # type carries.
+    round_navigable_types = ("reacted_to_round",)
+    round_ids = {item.subject_id for item in page if item.notification_type in round_backed_types and item.subject_id is not None}
+    rounds_by_id = {r.id: r for r in session.scalars(select(Round).where(Round.id.in_(round_ids)))} if round_ids else {}
+    courses_by_id = {
+        c.id: c for c in session.scalars(select(Course).where(Course.id.in_({r.course_id for r in rounds_by_id.values()})))
+    } if rounds_by_id else {}
     return NotificationPageOut(
         items=[
             NotificationOut(
@@ -708,6 +750,14 @@ def list_notifications(
                 actor=summaries[item.actor_user_id],
                 created_at=item.created_at,
                 is_following=item.actor_user_id in following_ids,
+                round_id=item.subject_id if item.notification_type in round_navigable_types else None,
+                course=(
+                    course_data(courses_by_id[rounds_by_id[item.subject_id].course_id])
+                    if item.notification_type in round_backed_types
+                    and item.subject_id in rounds_by_id
+                    and rounds_by_id[item.subject_id].course_id in courses_by_id
+                    else None
+                ),
             )
             for item in page
         ],
@@ -770,6 +820,34 @@ def unlink_contacts(
     return Response(status_code=204)
 
 
+def _notify_reaction(session: Session, actor_id: int, event: ActivityEvent) -> None:
+    """Notify a round's owner when someone reacts to it.
+
+    Only round-backed events carry a subject_id AppNotification can reference
+    (its subject_id is an FK to rounds.id); other event types (e.g. ranking
+    snapshots) are not reactable from the feed UI, so there is nothing to
+    notify.
+    """
+    if event.subject_type not in ("round", "rating_round") or event.actor_user_id == actor_id:
+        return
+    recipient_id = event.actor_user_id
+    if actor_id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
+        return
+    existing = session.scalar(select(AppNotification.id).where(
+        AppNotification.recipient_user_id == recipient_id,
+        AppNotification.actor_user_id == actor_id,
+        AppNotification.notification_type == "reacted_to_round",
+        AppNotification.subject_id == event.subject_id,
+    ))
+    if existing is None:
+        session.add(AppNotification(
+            recipient_user_id=recipient_id,
+            actor_user_id=actor_id,
+            notification_type="reacted_to_round",
+            subject_id=event.subject_id,
+        ))
+
+
 def notify_linked_contacts(session: Session, user: User, current: CurrentUser, settings: Settings) -> None:
     """Notify contact owners when a verified account completes onboarding or syncs contacts."""
     for identity in {_identifier_hash(settings, value) for value in verified_identifiers(current, settings)}:
@@ -787,11 +865,6 @@ def notify_linked_contacts(session: Session, user: User, current: CurrentUser, s
             ))
             if existing is None:
                 session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
-
-
-def _notifications_enabled(session: Session, user_id: int) -> bool:
-    preferences = session.get(OnboardingPreference, user_id)
-    return not preferences or preferences.onboarding_data is None or preferences.onboarding_data.get("notifications") is not False
 
 
 def _identifier_hash(settings: Settings, value: str) -> str:
@@ -1009,10 +1082,11 @@ def add_reaction(
     if reaction != "like":
         raise HTTPException(422, "Unsupported reaction")
     user = require_user(session, current)
-    _require_visible_event(session, user.id, event_id)
+    event = _require_visible_event(session, user.id, event_id)
     existing = session.scalar(select(ActivityReaction).where(ActivityReaction.event_id == event_id, ActivityReaction.user_id == user.id, ActivityReaction.reaction == reaction))
     if existing is None:
         session.add(ActivityReaction(event_id=event_id, user_id=user.id, reaction=reaction))
+        _notify_reaction(session, user.id, event)
         session.commit()
     count, reacted = _reaction_state(session, event_id, user.id)
     return ReactionOut(event_id=event_id, reaction=reaction, reaction_count=count, viewer_reacted=reacted)
