@@ -24,12 +24,36 @@ jest.mock('expo-notifications', () => ({
   getPermissionsAsync: (...args: unknown[]) => mockGetPermissionsAsync(...args),
   requestPermissionsAsync: (...args: unknown[]) => mockRequestPermissionsAsync(...args),
   setNotificationChannelAsync: (...args: unknown[]) => mockSetNotificationChannelAsync(...args),
+  // A plain inline jest.fn(), not a reference to an outer "mock"-prefixed
+  // const: pushTokens.ts calls this at module *import* time (a top-level
+  // side effect, unlike the other calls above which only ever run lazily
+  // inside a later requestAndRegisterPushToken() invocation), and import
+  // hoisting can execute this factory before an outer const initializes.
+  setNotificationHandler: jest.fn(),
 }))
+
+import * as Notifications from 'expo-notifications'
 
 import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../pushTokens'
 
 const headers = { 'Content-Type': 'application/json' as const }
 const getAuthHeaders = async () => headers
+
+describe('foreground notification handler', () => {
+  it('is installed at module load, so a push arriving while the app is foregrounded is actually shown', async () => {
+    // Must run before any other test's beforeEach clears mock call history --
+    // this checks the *module-import-time* side effect, which only fires once.
+    const setNotificationHandler = Notifications.setNotificationHandler as jest.Mock
+    expect(setNotificationHandler).toHaveBeenCalledTimes(1)
+    const handler = setNotificationHandler.mock.calls[0][0]
+    await expect(handler.handleNotification()).resolves.toEqual({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    })
+  })
+})
 
 describe('requestAndRegisterPushToken', () => {
   beforeEach(() => {

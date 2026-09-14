@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -104,57 +105,66 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
     """
     if not notifications:
         return
-    # list_notifications (social.py) hides any row whose actor the recipient
-    # has muted or blocked from the in-app inbox entirely -- the row still
-    # exists (creation-time checks only cover blocks, not mutes), but is
-    # never shown. Push delivery has to honor the same exclusion, or muting
-    # someone stops their activity from appearing in-app while their pushes
-    # keep arriving anyway. Cached per recipient since one batch can cover
-    # several recipients (e.g. tagging multiple companions on one round).
-    muted_ids_by_recipient: dict[int, set[int]] = {}
-
-    def is_muted(recipient_id: int, actor_id: int) -> bool:
-        if recipient_id not in muted_ids_by_recipient:
-            muted_ids_by_recipient[recipient_id] = muted_ids(session, recipient_id)
-        return actor_id in muted_ids_by_recipient[recipient_id]
-
-    notifications = [
-        notification for notification in notifications
-        if not is_muted(notification.recipient_user_id, notification.actor_user_id)
-    ]
-    if not notifications:
-        return
-
-    recipient_ids = {notification.recipient_user_id for notification in notifications}
-    tokens_by_recipient: dict[int, list[str]] = defaultdict(list)
-    for token_row in session.scalars(select(PushToken).where(PushToken.user_id.in_(recipient_ids))):
-        tokens_by_recipient[token_row.user_id].append(token_row.token)
-    if not tokens_by_recipient:
-        return
-
-    actor_names = _actor_display_names(session, {notification.actor_user_id for notification in notifications})
-    messages: list[dict[str, object]] = []
-    message_tokens: list[str] = []
-    for notification in notifications:
-        tokens = tokens_by_recipient.get(notification.recipient_user_id)
-        template = _MESSAGE_TEMPLATES.get(notification.notification_type)
-        if not tokens or template is None:
-            continue
-        body = template.format(actor=actor_names.get(notification.actor_user_id, "Someone"))
-        for token in tokens:
-            messages.append({"to": token, "sound": "default", "body": body})
-            message_tokens.append(token)
-    if not messages:
-        return
-
-    # All data needed for delivery is now in plain Python values above --
-    # release this connection back to the pool before the synchronous,
-    # potentially multi-second Expo call, rather than holding it for the
-    # duration of an outbound network request. (Read-only: nothing to lose.)
-    session.commit()
-
-    invalid_tokens: set[str] = set()
+    # Everything below touches the database or the network on behalf of an
+    # endpoint that has already committed its own work -- a failure here
+    # (a pool timeout, a transient Expo/HTTP error, a malformed Expo
+    # response) must never propagate past this function. A DB-layer error
+    # additionally needs an explicit rollback: left mid-transaction, it
+    # would poison the caller's session for any query it runs afterward
+    # (e.g. follow_user's _summary() call right after this returns), not
+    # just this function's own return value.
     try:
+        # list_notifications (social.py) hides any row whose actor the
+        # recipient has muted or blocked from the in-app inbox entirely --
+        # the row still exists (creation-time checks only cover blocks, not
+        # mutes), but is never shown. Push delivery has to honor the same
+        # exclusion, or muting someone stops their activity from appearing
+        # in-app while their pushes keep arriving anyway. Cached per
+        # recipient since one batch can cover several recipients (e.g.
+        # tagging multiple companions on one round).
+        muted_ids_by_recipient: dict[int, set[int]] = {}
+
+        def is_muted(recipient_id: int, actor_id: int) -> bool:
+            if recipient_id not in muted_ids_by_recipient:
+                muted_ids_by_recipient[recipient_id] = muted_ids(session, recipient_id)
+            return actor_id in muted_ids_by_recipient[recipient_id]
+
+        filtered_notifications = [
+            notification for notification in notifications
+            if not is_muted(notification.recipient_user_id, notification.actor_user_id)
+        ]
+        if not filtered_notifications:
+            return
+
+        recipient_ids = {notification.recipient_user_id for notification in filtered_notifications}
+        tokens_by_recipient: dict[int, list[str]] = defaultdict(list)
+        for token_row in session.scalars(select(PushToken).where(PushToken.user_id.in_(recipient_ids))):
+            tokens_by_recipient[token_row.user_id].append(token_row.token)
+        if not tokens_by_recipient:
+            return
+
+        actor_names = _actor_display_names(session, {notification.actor_user_id for notification in filtered_notifications})
+        messages: list[dict[str, object]] = []
+        message_tokens: list[str] = []
+        for notification in filtered_notifications:
+            tokens = tokens_by_recipient.get(notification.recipient_user_id)
+            template = _MESSAGE_TEMPLATES.get(notification.notification_type)
+            if not tokens or template is None:
+                continue
+            body = template.format(actor=actor_names.get(notification.actor_user_id, "Someone"))
+            for token in tokens:
+                messages.append({"to": token, "sound": "default", "body": body})
+                message_tokens.append(token)
+        if not messages:
+            return
+
+        # All data needed for delivery is now in plain Python values above --
+        # release this connection back to the pool before the synchronous,
+        # potentially multi-second Expo call, rather than holding it for the
+        # duration of an outbound network request. (Read-only: nothing to lose.)
+        session.commit()
+
+        invalid_tokens: set[str] = set()
         with httpx.Client(timeout=settings.expo_push_timeout_seconds) as client:
             for start in range(0, len(messages), _EXPO_BATCH_SIZE):
                 batch = messages[start:start + _EXPO_BATCH_SIZE]
@@ -166,9 +176,7 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
                 # is a third-party response -- validate the shape explicitly
                 # rather than trusting it, so a malformed/unexpected body
                 # (e.g. {"data": null}, a non-dict ticket, "details": null)
-                # is skipped instead of raising past this delivery attempt,
-                # which every caller has already committed its own work
-                # before reaching.
+                # is skipped instead of raising past this delivery attempt.
                 tickets = payload.get("data") if isinstance(payload, dict) else None
                 if not isinstance(tickets, list):
                     continue
@@ -178,10 +186,11 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
                     details = ticket.get("details")
                     if isinstance(details, dict) and details.get("error") == "DeviceNotRegistered":
                         invalid_tokens.add(token)
-    except (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError) as error:
-        logger.error("push_delivery_failed error_type=%s", type(error).__name__)
-        return
 
-    if invalid_tokens:
-        session.execute(delete(PushToken).where(PushToken.token.in_(invalid_tokens)))
-        session.commit()
+        if invalid_tokens:
+            session.execute(delete(PushToken).where(PushToken.token.in_(invalid_tokens)))
+            session.commit()
+    except (SQLAlchemyError, httpx.HTTPError, OSError, ValueError, TypeError, AttributeError) as error:
+        if isinstance(error, SQLAlchemyError):
+            session.rollback()
+        logger.error("push_delivery_failed error_type=%s", type(error).__name__)

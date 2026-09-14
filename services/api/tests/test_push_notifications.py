@@ -3,6 +3,7 @@ import json
 import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
@@ -233,6 +234,29 @@ def test_push_delivery_failure_does_not_break_the_triggering_request(monkeypatch
         # A transport failure can't tell which tokens are bad, so nothing is deleted.
         remaining = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[fail]")).all()
         assert len(remaining) == 1
+
+
+def test_database_failure_during_delivery_does_not_break_the_request_or_poison_the_session(monkeypatch) -> None:
+    # Before this fix, only the httpx block was guarded -- a DB error in the
+    # token/mute/name lookups (a pool timeout, a dropped connection) would
+    # propagate uncaught, 500ing an endpoint whose own work had already
+    # committed, and would leave the session mid-transaction for whatever
+    # that endpoint does with it afterward (follow_user builds its response
+    # body via _summary(session, ...) right after this call returns).
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-dbfail-alice", "Alice", "pushdbfailalice")
+    bob = _profile(client, "dev:push-dbfail-bob", "Bob", "pushdbfailbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushdbfailbob"}).json()[0]["id"]
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[dbfail]"})
+
+    def raise_db_error(*args: object, **kwargs: object) -> None:
+        raise OperationalError("SELECT 1", {}, Exception("connection pool exhausted"))
+
+    monkeypatch.setattr("app.push_notifications.muted_ids", raise_db_error)
+
+    response = client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+    assert response.status_code == 200
+    assert response.json()["user"]["id"] == bob_id
 
 
 def test_send_push_notifications_releases_the_db_connection_before_contacting_expo(tmp_path, monkeypatch) -> None:

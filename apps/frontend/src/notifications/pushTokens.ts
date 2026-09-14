@@ -6,6 +6,20 @@ import { Platform } from 'react-native'
 import { registerPushToken, unregisterPushToken } from '../api/client'
 import { ApiHeaders } from '../auth/useAuthToken'
 
+// Without this, Expo does not present a push at all while the app is in
+// the foreground (no banner, no sound) -- it's silently dropped rather
+// than deferred. This module is imported by AuthProvider.tsx, which is
+// always rendered from the root layout, so this side effect runs once on
+// every app boot regardless of sign-in state, before any push can arrive.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+})
+
 // Push registration is a background nicety, never something that should
 // surface an error to the user or block sign-in/out -- every entry point
 // here swallows its own failures. Non-cancellable calls (OS permission
