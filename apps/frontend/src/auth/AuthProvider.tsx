@@ -61,7 +61,33 @@ function userInitials(user: { firstName?: string | null; lastName?: string | nul
 }
 
 function DevelopmentAuthGate({ children }: { children: ReactNode }) {
-  return <>{children}</>
+  // Without this provider, useAuthGate() falls through to AuthGateContext's
+  // default value -- registerPushToken there is a silent no-op -- so
+  // onboarding's Enable button and notification-settings would persist the
+  // preference without ever requesting permission or registering a token.
+  // README.md documents EXPO_PUBLIC_AUTH_MODE=development as a real
+  // on-device workflow (no Clerk account needed), so push delivery must be
+  // exercisable here too. getToken is unused: buildAuthHeaders returns the
+  // X-Development-Subject header directly in this mode without calling it.
+  const registerPushToken = useCallback(
+    () => requestAndRegisterPushToken(() => buildAuthHeaders(async () => null)),
+    [],
+  )
+  return (
+    <AuthGateContext.Provider
+      value={{
+        profileInitials: 'GR',
+        profileImageUrl: null,
+        returnToGetStarted: () => false,
+        signOut: async () => undefined,
+        registerPushToken,
+        updateProfileImage: async () => undefined,
+        updateUserProfile: async () => undefined,
+      }}
+    >
+      {children}
+    </AuthGateContext.Provider>
+  )
 }
 
 const { height: screenHeight } = Dimensions.get('window')

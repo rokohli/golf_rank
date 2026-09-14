@@ -566,6 +566,36 @@ describe('AuthProvider', () => {
     expect(screen.getByText('Onboarding form')).toBeOnTheScreen()
   })
 
+  it('registers a push token in development mode instead of silently no-op-ing', async () => {
+    // Regression test: EXPO_PUBLIC_AUTH_MODE=development is a documented,
+    // real on-device workflow (README.md) for local development without a
+    // Clerk account. Without its own AuthGateContext.Provider,
+    // DevelopmentAuthGate fell through to the default context's
+    // registerPushToken, a silent no-op -- so onboarding's Enable button
+    // and notification-settings couldn't exercise push registration at all
+    // in this mode.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+
+    function RegisterProbe() {
+      const { registerPushToken } = useAuthGate()
+      return (
+        <Pressable onPress={() => void registerPushToken()}>
+          <Text>Register</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <RegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Register'))
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
   it('shows the premium get started screen before Clerk auth for signed-out users', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
