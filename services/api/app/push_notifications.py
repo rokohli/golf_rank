@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
 from .db import get_session
-from .domain import require_user
+from .domain import muted_ids, require_user
 from .models import AppNotification, OnboardingPreference, Profile, PushToken, User
 
 
@@ -104,6 +104,27 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
     """
     if not notifications:
         return
+    # list_notifications (social.py) hides any row whose actor the recipient
+    # has muted or blocked from the in-app inbox entirely -- the row still
+    # exists (creation-time checks only cover blocks, not mutes), but is
+    # never shown. Push delivery has to honor the same exclusion, or muting
+    # someone stops their activity from appearing in-app while their pushes
+    # keep arriving anyway. Cached per recipient since one batch can cover
+    # several recipients (e.g. tagging multiple companions on one round).
+    muted_ids_by_recipient: dict[int, set[int]] = {}
+
+    def is_muted(recipient_id: int, actor_id: int) -> bool:
+        if recipient_id not in muted_ids_by_recipient:
+            muted_ids_by_recipient[recipient_id] = muted_ids(session, recipient_id)
+        return actor_id in muted_ids_by_recipient[recipient_id]
+
+    notifications = [
+        notification for notification in notifications
+        if not is_muted(notification.recipient_user_id, notification.actor_user_id)
+    ]
+    if not notifications:
+        return
+
     recipient_ids = {notification.recipient_user_id for notification in notifications}
     tokens_by_recipient: dict[int, list[str]] = defaultdict(list)
     for token_row in session.scalars(select(PushToken).where(PushToken.user_id.in_(recipient_ids))):

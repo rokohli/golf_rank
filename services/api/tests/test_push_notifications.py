@@ -123,6 +123,33 @@ def test_follow_notification_sends_exactly_one_push_and_no_second_on_refollow(mo
     assert len(calls) == 1
 
 
+def test_muted_actor_does_not_trigger_a_push_even_though_the_in_app_row_is_still_created(monkeypatch) -> None:
+    # list_notifications hides a muted actor's rows from the in-app inbox
+    # entirely; push delivery must honor the same exclusion, or muting
+    # someone stops their activity from showing up in-app while their
+    # pushes keep arriving anyway.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-muted-alice", "Alice", "pushmutedalice")
+    bob = _profile(client, "dev:push-muted-bob", "Bob", "pushmutedbob")
+    alice_id = client.get("/api/v1/users", headers=bob, params={"q": "pushmutedalice"}).json()[0]["id"]
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[muted-bob]"})
+    assert client.put(f"/api/v1/me/mutes/{alice_id}", headers=bob).status_code == 204
+
+    calls = _mock_push_client(monkeypatch, lambda request: _ok_response())
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushmutedbob"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    assert calls == []
+    in_app_items = client.get("/api/v1/me/notifications", headers=bob).json()["items"]
+    assert in_app_items == []
+    with client.app.state.session_factory() as session:
+        # The row is created (creation-time checks only cover blocks, not
+        # mutes) -- it's push delivery and the in-app read path that both
+        # exclude it, not row creation.
+        rows = session.scalars(select(AppNotification).where(AppNotification.notification_type == "followed_you")).all()
+        assert len(rows) == 1
+
+
 def test_no_registered_token_means_no_push_attempt(monkeypatch) -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:push-notoken-alice", "Alice", "pushnotokenalice")

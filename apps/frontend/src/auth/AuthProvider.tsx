@@ -7,12 +7,12 @@ import * as FileSystem from 'expo-file-system'
 import * as Linking from 'expo-linking'
 import { useRouter } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
-import { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
-import { registerPushTokenIfPermissionGranted, requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
+import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
 import { buildAuthHeaders } from './useAuthToken'
 
@@ -1227,22 +1227,39 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // can resolve after sign-out's DELETE and re-create/reassign the token to
   // the account that just signed out -- that account would then keep
   // receiving pushes meant for whoever signs in next on this device.
+  // Tracks the in-flight registration PUT (from the registerPushToken
+  // context action below) so sign-out can wait for it before issuing its
+  // unregister DELETE. Without this, a slow registration request can
+  // resolve after sign-out's DELETE and re-create/reassign the token to
+  // the account that just signed out -- that account would then keep
+  // receiving pushes meant for whoever signs in next on this device.
+  //
+  // Deliberately not an effect keyed on sign-in: OS notification
+  // permission is device-wide, not per-account consent, so silently
+  // registering here whenever permission happens to already be granted
+  // (e.g. a previous account on this device granted it) would register a
+  // brand-new, not-yet-onboarded account before it has made any choice of
+  // its own. Registration only ever happens from a confirmed per-account
+  // opt-in: onboarding's Enable button, notification-settings' re-enable
+  // toggle, or (for an already-onboarded returning user) app/index.tsx
+  // checking that account's own saved preference once its profile loads.
   const pendingRegistration = useRef<Promise<void> | null>(null)
 
-  // Silently (re-)registers this device's Expo push token once the user is
-  // fully signed in (not still phone-gated) -- but only if OS permission was
-  // already granted in an earlier session. This never prompts, so it can run
-  // unconditionally on every sign-in: a brand-new user mid-onboarding hasn't
-  // granted permission yet and this is a no-op for them, while a returning
-  // user who already opted in gets their token refreshed without seeing an
-  // unsolicited native dialog before reaching the app's own notifications
-  // choice. The explicit opt-in path (onboarding's Enable button, or
-  // re-enabling in notification-settings) uses the prompting
-  // requestAndRegisterPushToken instead.
-  useEffect(() => {
-    if (!isLoaded || !user || needsPhone) return
-    pendingRegistration.current = registerPushTokenIfPermissionGranted(() => buildAuthHeaders(getToken))
-  }, [getToken, isLoaded, needsPhone, user])
+  // Memoized: this is exposed through useAuthGate() and consumers (e.g.
+  // app/index.tsx's checkSavedProfile) depend on it in their own
+  // useCallback/useEffect dependency arrays. An unmemoized new closure every
+  // render would make every such dependency array "change" every render too,
+  // re-running those effects in an infinite loop.
+  const registerPushToken = useCallback(() => {
+    // Track this explicit opt-in call in the same ref the mount-time silent
+    // registration uses, so sign-out's wait below covers this path too --
+    // otherwise an untracked PUT here could complete after sign-out's
+    // DELETE and resurrect the token for the signed-out account, the same
+    // race the mount-effect registration is guarded against.
+    const promise = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+    pendingRegistration.current = promise
+    return promise
+  }, [getToken])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
   // that gate opens or closes. Unmounting the stack during SMS verification was
@@ -1274,17 +1291,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
           await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
           await signOut()
         },
-        registerPushToken: () => {
-          // Track this explicit opt-in call in the same ref the mount-time
-          // silent registration uses, so sign-out's wait above covers this
-          // path too -- otherwise an untracked PUT here could complete after
-          // sign-out's DELETE and resurrect the token for the signed-out
-          // account, the same race the mount-effect registration is guarded
-          // against.
-          const promise = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
-          pendingRegistration.current = promise
-          return promise
-        },
+        registerPushToken,
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
           // Clerk's `file` param accepts a string only as a base64 data URI, not a

@@ -72,31 +72,17 @@ async function registerCurrentToken(getAuthHeaders: () => Promise<ApiHeaders>): 
   )
 }
 
-// Silent, non-prompting registration: only (re-)registers when the OS
-// permission was already granted in an earlier session (e.g. a returning
-// user opening the app on a new device, or after reinstalling). Never calls
-// requestPermissionsAsync, so it can safely run unconditionally on sign-in
-// without popping an unsolicited native dialog before the user has chosen
-// anything in the app. Use requestAndRegisterPushToken for the explicit
-// opt-in moment instead.
-export async function registerPushTokenIfPermissionGranted(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
-  try {
-    if (!Device.isDevice) return
-    const existingPermission = await withTimeout(Notifications.getPermissionsAsync(), PUSH_OPERATION_TIMEOUT_MS)
-    if (existingPermission.status !== 'granted') return
-    await registerCurrentToken(getAuthHeaders)
-  } catch {
-    // Timeout, an unsupported environment (simulator, Expo Go without a
-    // projectId), or a transient network error are all expected, silent
-    // paths -- push is additive to the existing in-app inbox.
-  }
-}
-
-// Prompting registration: shows the native permission dialog if the user
-// hasn't answered yet. Call this only from an explicit in-app opt-in --
-// the onboarding notifications step's Enable button, or turning the
-// notification-settings toggle back on -- never unconditionally on mount,
-// so the OS prompt always follows the user's own in-app choice.
+// Requests permission (prompting only if the user hasn't answered yet --
+// getPermissionsAsync already-granted skips straight past
+// requestPermissionsAsync, so this is silent for anyone who's already said
+// yes) and registers the device token. Call this only once this specific
+// account has its own confirmed opt-in: onboarding's Enable button, turning
+// the notification-settings toggle back on, or -- for a returning,
+// already-onboarded user -- after confirming their saved preference has
+// notifications enabled. Never call this from an unconditional mount
+// effect keyed only on OS permission: permission is device-wide, not
+// per-account consent, so a different account that previously granted it
+// on this device is not evidence *this* account opted in.
 export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
   try {
     if (!Device.isDevice) return

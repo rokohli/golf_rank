@@ -26,7 +26,7 @@ jest.mock('expo-notifications', () => ({
   setNotificationChannelAsync: (...args: unknown[]) => mockSetNotificationChannelAsync(...args),
 }))
 
-import { registerPushTokenIfPermissionGranted, requestAndRegisterPushToken, unregisterCurrentPushToken } from '../pushTokens'
+import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../pushTokens'
 
 const headers = { 'Content-Type': 'application/json' as const }
 const getAuthHeaders = async () => headers
@@ -39,7 +39,10 @@ describe('requestAndRegisterPushToken', () => {
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
   })
 
-  it('registers the current Expo push token once permission is granted', async () => {
+  it('registers the current Expo push token once permission is granted, without prompting again', async () => {
+    // getPermissionsAsync already returns 'granted' in beforeEach -- this is
+    // the same call path a returning, already-opted-in user goes through,
+    // and it must stay silent (no OS dialog) for them.
     await requestAndRegisterPushToken(getAuthHeaders)
 
     expect(mockGetExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: 'test-project-id' })
@@ -48,6 +51,7 @@ describe('requestAndRegisterPushToken', () => {
       headers,
       expect.any(AbortSignal),
     )
+    expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
   })
 
   it('requests permission when not already granted, and registers if the user allows it', async () => {
@@ -115,41 +119,6 @@ describe('requestAndRegisterPushToken', () => {
     } finally {
       jest.useRealTimers()
     }
-  })
-})
-
-describe('registerPushTokenIfPermissionGranted', () => {
-  beforeEach(() => {
-    jest.resetAllMocks()
-    mockIsDevice = true
-    mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
-  })
-
-  it('registers silently when permission was already granted in an earlier session', async () => {
-    mockGetPermissionsAsync.mockResolvedValue({ status: 'granted' })
-
-    await registerPushTokenIfPermissionGranted(getAuthHeaders)
-
-    expect(mockRegisterPushToken).toHaveBeenCalledWith({ token: 'ExponentPushToken[abc]', platform: 'ios' }, headers, expect.any(AbortSignal))
-    expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
-  })
-
-  it('never prompts and never registers when permission has not been granted yet', async () => {
-    mockGetPermissionsAsync.mockResolvedValue({ status: 'undetermined' })
-
-    await registerPushTokenIfPermissionGranted(getAuthHeaders)
-
-    expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
-    expect(mockRegisterPushToken).not.toHaveBeenCalled()
-  })
-
-  it('skips entirely on a non-device (simulator)', async () => {
-    mockIsDevice = false
-
-    await registerPushTokenIfPermissionGranted(getAuthHeaders)
-
-    expect(mockGetPermissionsAsync).not.toHaveBeenCalled()
-    expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })
 })
 

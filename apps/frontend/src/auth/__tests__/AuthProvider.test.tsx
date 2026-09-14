@@ -15,7 +15,6 @@ const mockSignUpCreate = jest.fn()
 const mockSetProfileImage = jest.fn()
 const mockReadAsStringAsync = jest.fn()
 const mockSignOut = jest.fn()
-const mockRegisterPushTokenIfPermissionGranted = jest.fn()
 const mockRequestAndRegisterPushToken = jest.fn()
 const mockUnregisterCurrentPushToken = jest.fn()
 let mockUrlListener: ((event: { url: string }) => void) | null = null
@@ -37,7 +36,6 @@ jest.mock('@clerk/expo', () => ({
 }))
 
 jest.mock('../../notifications/pushTokens', () => ({
-  registerPushTokenIfPermissionGranted: (...args: unknown[]) => mockRegisterPushTokenIfPermissionGranted(...args),
   requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
   unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
 }))
@@ -153,7 +151,7 @@ describe('AuthProvider', () => {
     expect(mockSetProfileImage).toHaveBeenCalledWith({ file: 'data:image/jpeg;base64,ZmFrZWJhc2U2NA==' })
   })
 
-  it('registers a push token once phone verification is complete, and unregisters before delegating sign-out', async () => {
+  it('unregisters the push token before delegating sign-out', async () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
     mockUser = {
@@ -181,8 +179,6 @@ describe('AuthProvider', () => {
         <SignOutProbe />
       </AuthProvider>,
     )
-
-    await waitFor(() => expect(mockRegisterPushTokenIfPermissionGranted).toHaveBeenCalledTimes(1))
 
     fireEvent.press(screen.getByText('Sign out'))
 
@@ -191,7 +187,14 @@ describe('AuthProvider', () => {
     expect(callOrder).toEqual(['unregister', 'signOut'])
   })
 
-  it('waits for an in-flight push registration before unregistering, so a slow PUT cannot land after sign-out and revive the token', async () => {
+  it('waits for an in-flight registerPushToken() call before unregistering on sign-out, so a slow PUT cannot land afterward and revive the token', async () => {
+    // registerPushToken() is what onboarding's Enable button and
+    // notification-settings' re-enable toggle both call (via useAuthGate()).
+    // It must be tracked in the same pendingRegistration ref sign-out
+    // awaits, or an untracked call here reopens the exact race this guards
+    // against: enable, then sign out quickly, and the abandoned PUT
+    // completes after the DELETE and re-associates the token with the
+    // account that just signed out.
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
     mockUser = {
@@ -201,60 +204,6 @@ describe('AuthProvider', () => {
       phoneNumbers: [{ verification: { status: 'verified' } }],
       setProfileImage: mockSetProfileImage,
     }
-    const callOrder: string[] = []
-    let resolveRegistration: () => void = () => undefined
-    mockRegisterPushTokenIfPermissionGranted.mockImplementation(
-      () => new Promise<void>((resolve) => { resolveRegistration = () => { callOrder.push('registration-resolved'); resolve() } }),
-    )
-    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
-    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
-
-    function SignOutProbe() {
-      const { signOut } = useAuthGate()
-      return (
-        <Pressable onPress={() => void signOut()}>
-          <Text>Sign out</Text>
-        </Pressable>
-      )
-    }
-
-    render(
-      <AuthProvider>
-        <SignOutProbe />
-      </AuthProvider>,
-    )
-
-    await waitFor(() => expect(mockRegisterPushTokenIfPermissionGranted).toHaveBeenCalledTimes(1))
-
-    // Sign out while registration is still in flight -- without the fix,
-    // unregister/signOut would run immediately here, and the registration
-    // promise resolving afterward would re-create the token server-side.
-    fireEvent.press(screen.getByText('Sign out'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(callOrder).toEqual([])
-
-    resolveRegistration()
-
-    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
-    expect(callOrder).toEqual(['registration-resolved', 'unregister', 'signOut'])
-  })
-
-  it('also waits for an explicit registerPushToken() call (onboarding Enable, notification-settings re-enable) before unregistering on sign-out', async () => {
-    // Distinct from the mount-effect test above: this exercises the
-    // registerPushToken() the useAuthGate() context exposes for explicit
-    // opt-in call sites. It must be tracked in the same pendingRegistration
-    // ref, or an untracked call there reopens the exact race the mount
-    // effect is already guarded against.
-    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
-    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
-    mockUser = {
-      firstName: 'Rohan',
-      hasImage: false,
-      imageUrl: '',
-      phoneNumbers: [{ verification: { status: 'verified' } }],
-      setProfileImage: mockSetProfileImage,
-    }
-    mockRegisterPushTokenIfPermissionGranted.mockResolvedValue(undefined)
     const callOrder: string[] = []
     let resolveRegistration: () => void = () => undefined
     mockRequestAndRegisterPushToken.mockImplementation(
@@ -282,11 +231,12 @@ describe('AuthProvider', () => {
         <OptInAndSignOutProbe />
       </AuthProvider>,
     )
-    await waitFor(() => expect(mockRegisterPushTokenIfPermissionGranted).toHaveBeenCalledTimes(1))
 
     fireEvent.press(screen.getByText('Enable notifications'))
     await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
 
+    // Sign out while registration is still in flight -- without the fix,
+    // unregister/signOut would run immediately here.
     fireEvent.press(screen.getByText('Sign out'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(callOrder).toEqual([])

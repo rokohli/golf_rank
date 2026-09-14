@@ -4,6 +4,7 @@ import Index from '../index'
 import { ApiResponseError } from '../../src/api/client'
 
 const mockSignOut = jest.fn()
+const mockRegisterPushToken = jest.fn()
 const mockGetProfile = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
@@ -31,6 +32,11 @@ jest.mock('../../src/auth/AuthProvider', () => ({
   useAuthGate: () => ({
     returnToGetStarted: jest.fn(() => false),
     signOut: (...args: unknown[]) => mockSignOut(...args),
+    // A stable reference, not a new wrapper closure per call: Index's
+    // checkSavedProfile depends on this in a useCallback array, and a
+    // fresh function identity every render would re-trigger its effect
+    // forever (mirrors the real AuthProvider's memoized registerPushToken).
+    registerPushToken: mockRegisterPushToken,
     updateUserProfile: jest.fn(),
   }),
 }))
@@ -74,6 +80,45 @@ describe('startup profile routing', () => {
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/home'))
     expect(screen.queryByText('Onboarding form')).toBeNull()
+  })
+
+  it('registers this device for push once a returning account with notifications enabled loads', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Santa Cruz, CA',
+      max_green_fee: 225,
+      difficulty: 'any',
+      access: 'public',
+      onboarding_data: { first_name: 'Rohan', last_name: 'K', username: 'rohan', notifications: true },
+    })
+
+    render(<Index />)
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/home'))
+    expect(mockRegisterPushToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not register push for a returning account that saved notifications as disabled', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Santa Cruz, CA',
+      max_green_fee: 225,
+      difficulty: 'any',
+      access: 'public',
+      onboarding_data: { first_name: 'Rohan', last_name: 'K', username: 'rohan', notifications: false },
+    })
+
+    render(<Index />)
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/home'))
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('never registers push before a brand-new account reaches onboarding -- device-wide OS permission is not this account\'s consent', async () => {
+    mockGetProfile.mockRejectedValue(new ApiResponseError('Profile not found', 404))
+
+    render(<Index />)
+
+    expect(await screen.findByText('Onboarding form')).toBeOnTheScreen()
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })
 
   it('shows onboarding only when the authenticated account has no profile', async () => {

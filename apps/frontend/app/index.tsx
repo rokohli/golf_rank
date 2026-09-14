@@ -20,7 +20,14 @@ export default function Index() {
   const checkSavedProfile = useCallback(async () => {
     setProfileState('checking')
     try {
-      await getProfile(await getAuthHeaders())
+      const profile = await getProfile(await getAuthHeaders())
+      // Only a returning, already-onboarded account reaches here (a
+      // brand-new account 404s below, into 'needs-onboarding', and never
+      // registers until its own explicit Enable tap) -- and only if this
+      // account's own saved preference has notifications enabled, not
+      // merely because the device's OS permission happens to already be
+      // granted from some other account.
+      if (profile.onboarding_data?.notifications !== false) void registerPushToken()
       router.replace('/home')
     } catch (reason) {
       if (reason instanceof ApiResponseError && reason.status === 404) {
@@ -29,7 +36,7 @@ export default function Index() {
       }
       setProfileState('error')
     }
-  }, [getAuthHeaders, router])
+  }, [getAuthHeaders, registerPushToken, router])
 
   useEffect(() => {
     void checkSavedProfile()
