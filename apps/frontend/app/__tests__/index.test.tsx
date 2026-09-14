@@ -112,6 +112,21 @@ describe('startup profile routing', () => {
     expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })
 
+  it('does not register push for a legacy/never-chosen account (notifications: null) -- "not false" is not the same as an explicit "true"', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Santa Cruz, CA',
+      max_green_fee: 225,
+      difficulty: 'any',
+      access: 'public',
+      onboarding_data: { first_name: 'Rohan', last_name: 'K', username: 'rohan', notifications: null },
+    })
+
+    render(<Index />)
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/home'))
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
+
   it('never registers push before a brand-new account reaches onboarding -- device-wide OS permission is not this account\'s consent', async () => {
     mockGetProfile.mockRejectedValue(new ApiResponseError('Profile not found', 404))
 

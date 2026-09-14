@@ -247,6 +247,70 @@ describe('AuthProvider', () => {
     expect(callOrder).toEqual(['registration-resolved', 'unregister', 'signOut'])
   })
 
+  it('waits for every concurrent registerPushToken() call, not just the most recent, before unregistering on sign-out', async () => {
+    // Two calls can be in flight at once -- e.g. registration on app open
+    // for a returning user, then the user saves "enabled" again from
+    // notification-settings before the first call has settled. A single
+    // tracked promise would let the second call's promise overwrite the
+    // first's, so sign-out would only wait for the newer one and the older
+    // PUT could complete after the DELETE and resurrect the token anyway.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    let resolveFirst: () => void = () => undefined
+    let resolveSecond: () => void = () => undefined
+    mockRequestAndRegisterPushToken
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = () => { callOrder.push('first-resolved'); resolve() } }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSecond = () => { callOrder.push('second-resolved'); resolve() } }))
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function TwoRegistrationsProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+          <Pressable onPress={() => void signOut()}>
+            <Text>Sign out</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <TwoRegistrationsProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Register'))
+    fireEvent.press(screen.getByText('Register'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2))
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual([])
+
+    // Resolve only the newer call -- without the fix, sign-out would
+    // proceed here since it only ever tracked the latest promise.
+    resolveSecond()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual(['second-resolved'])
+
+    resolveFirst()
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(callOrder).toEqual(['second-resolved', 'first-resolved', 'unregister', 'signOut'])
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 

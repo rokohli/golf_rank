@@ -1243,7 +1243,15 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // opt-in: onboarding's Enable button, notification-settings' re-enable
   // toggle, or (for an already-onboarded returning user) app/index.tsx
   // checking that account's own saved preference once its profile loads.
-  const pendingRegistration = useRef<Promise<void> | null>(null)
+  // A Set, not a single slot: registerPushToken can be called more than
+  // once before the first call settles (e.g. it fires once on app open for
+  // a returning user, and the user reaches notification-settings and saves
+  // "enabled" again before that first call finishes). A single ref would
+  // let the second call's promise overwrite the first's, so sign-out below
+  // would only wait for the newer one -- the older PUT could then complete
+  // after sign-out's DELETE and resurrect the token anyway. Self-pruning:
+  // each promise removes itself once settled.
+  const pendingRegistrations = useRef<Set<Promise<void>>>(new Set())
 
   // Memoized: this is exposed through useAuthGate() and consumers (e.g.
   // app/index.tsx's checkSavedProfile) depend on it in their own
@@ -1251,13 +1259,12 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // render would make every such dependency array "change" every render too,
   // re-running those effects in an infinite loop.
   const registerPushToken = useCallback(() => {
-    // Track this explicit opt-in call in the same ref the mount-time silent
-    // registration uses, so sign-out's wait below covers this path too --
-    // otherwise an untracked PUT here could complete after sign-out's
-    // DELETE and resurrect the token for the signed-out account, the same
-    // race the mount-effect registration is guarded against.
+    // Track this explicit opt-in call, so sign-out's wait below covers this
+    // path too -- otherwise an untracked PUT here could complete after
+    // sign-out's DELETE and resurrect the token for the signed-out account.
     const promise = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
-    pendingRegistration.current = promise
+    pendingRegistrations.current.add(promise)
+    void promise.finally(() => pendingRegistrations.current.delete(promise))
     return promise
   }, [getToken])
 
@@ -1284,10 +1291,11 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
         signOut: async () => {
-          // Wait for any in-flight registration before unregistering, so a
-          // slow PUT can never land after (and undo) this DELETE. Both calls
-          // are best-effort internally -- neither failure blocks sign-out.
-          if (pendingRegistration.current) await pendingRegistration.current
+          // Wait for every in-flight registration before unregistering, so
+          // a slow PUT can never land after (and undo) this DELETE. Both
+          // calls are best-effort internally -- neither failure blocks
+          // sign-out.
+          if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
           await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
           await signOut()
         },

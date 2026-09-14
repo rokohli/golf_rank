@@ -23,11 +23,15 @@ export default function Index() {
       const profile = await getProfile(await getAuthHeaders())
       // Only a returning, already-onboarded account reaches here (a
       // brand-new account 404s below, into 'needs-onboarding', and never
-      // registers until its own explicit Enable tap) -- and only if this
-      // account's own saved preference has notifications enabled, not
-      // merely because the device's OS permission happens to already be
-      // granted from some other account.
-      if (profile.onboarding_data?.notifications !== false) void registerPushToken()
+      // registers until its own explicit Enable tap) -- and only on an
+      // explicit `true`, not merely "not false". `notifications` is
+      // `boolean | null`: a legacy account whose saved preference predates
+      // this field, or otherwise has never made a push choice, is `null`
+      // here -- the backend's own notifications_enabled() treats that as
+      // enabled for the in-app inbox (a passive default), but push is an
+      // active OS-level prompt/registration that must not fire without an
+      // account-level choice actually on record.
+      if (profile.onboarding_data?.notifications === true) void registerPushToken()
       router.replace('/home')
     } catch (reason) {
       if (reason instanceof ApiResponseError && reason.status === 404) {
