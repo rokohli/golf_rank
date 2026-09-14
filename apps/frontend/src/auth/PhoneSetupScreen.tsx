@@ -1,4 +1,4 @@
-import { useAuth, useUser } from '@clerk/expo'
+import { useUser } from '@clerk/expo'
 import { Feather } from '@expo/vector-icons'
 import { useState } from 'react'
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
@@ -26,8 +26,7 @@ export function hasVerifiedPhone(user: { phoneNumbers?: { verification?: { statu
   return Boolean(user?.phoneNumbers?.some((phone) => phone.verification?.status === 'verified'))
 }
 
-export function PhoneSetupScreen() {
-  const { signOut } = useAuth()
+export function PhoneSetupScreen({ signOut }: { signOut: () => Promise<void> }) {
   const { user } = useUser()
   const [step, setStep] = useState<'collect' | 'verify'>('collect')
   const [phoneNumber, setPhoneNumber] = useState('')

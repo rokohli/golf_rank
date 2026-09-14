@@ -1268,6 +1268,19 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
     return promise
   }, [getToken])
 
+  // Memoized for the same reason as registerPushToken above, and passed as
+  // a prop to PhoneSetupScreen (rather than having that file import
+  // useAuthGate itself, which would create a circular import with this
+  // one) -- an unverified-phone user cancelling out of that screen is a
+  // real, distinct sign-out path from useAuthGate().signOut(), and must
+  // get the same push cleanup or a push-enabled account that never
+  // verifies its phone keeps a live token after signing out here.
+  const signOutWithPushCleanup = useCallback(async () => {
+    if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
+    await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
+    await signOut()
+  }, [getToken, signOut])
+
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
   // that gate opens or closes. Unmounting the stack during SMS verification was
   // remounting onto a stale `/course/...` route (often a legacy slug) afterward.
@@ -1290,15 +1303,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         profileInitials: userInitials(user),
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
-        signOut: async () => {
-          // Wait for every in-flight registration before unregistering, so
-          // a slow PUT can never land after (and undo) this DELETE. Both
-          // calls are best-effort internally -- neither failure blocks
-          // sign-out.
-          if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
-          await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
-          await signOut()
-        },
+        signOut: signOutWithPushCleanup,
         registerPushToken,
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
@@ -1320,7 +1325,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         {children}
         {needsPhone ? (
           <View style={authStyles.phoneGateOverlay}>
-            <PhoneSetupScreen />
+            <PhoneSetupScreen signOut={signOutWithPushCleanup} />
           </View>
         ) : null}
       </View>

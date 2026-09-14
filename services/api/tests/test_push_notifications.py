@@ -68,6 +68,24 @@ def _ok_response(*, tickets: list[dict] | None = None) -> httpx.Response:
     return httpx.Response(200, json={"data": payload_tickets})
 
 
+def test_register_push_token_rejects_oversized_fields_with_a_validation_error_not_a_500() -> None:
+    # PushToken.token/platform are String(255)/String(20); without a
+    # matching bound here, an over-length value passes this validation and
+    # then raises an uncaught DataError on the insert.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-oversized-alice", "Alice", "pushoversizedalice")
+
+    assert client.put(
+        "/api/v1/me/push-tokens", headers=alice, json={"token": "x" * 256}
+    ).status_code == 422
+    assert client.put(
+        "/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[ok]", "platform": "x" * 21}
+    ).status_code == 422
+    assert client.put(
+        "/api/v1/me/push-tokens", headers=alice, json={"token": ""}
+    ).status_code == 422
+
+
 def test_register_push_token_reassigns_ownership_on_reuse() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:push-alice", "Alice", "pushalice")

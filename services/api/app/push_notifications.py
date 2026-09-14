@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import httpx
 from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -37,8 +37,12 @@ _EXPO_BATCH_SIZE = 100
 
 
 class PushTokenIn(BaseModel):
-    token: str
-    platform: str | None = None
+    # Bounded to match PushToken.token/platform (String(255)/String(20)) --
+    # without this, an over-length value passes validation here and then
+    # raises an uncaught DataError on insert/update, 500ing instead of
+    # returning a normal validation error.
+    token: str = Field(min_length=1, max_length=255)
+    platform: str | None = Field(default=None, max_length=20)
 
 
 @router.put("/api/v1/me/push-tokens", status_code=204)

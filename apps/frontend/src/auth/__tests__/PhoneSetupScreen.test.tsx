@@ -23,7 +23,6 @@ const mockUser = {
 }
 
 jest.mock('@clerk/expo', () => ({
-  useAuth: () => ({ signOut: mockSignOut }),
   useUser: () => ({ user: mockUser }),
 }))
 
@@ -57,7 +56,7 @@ describe('PhoneSetupScreen', () => {
     mockReload.mockImplementation(async () => {
       mockUser.phoneNumbers = [phoneResource]
     })
-    render(<PhoneSetupScreen />)
+    render(<PhoneSetupScreen signOut={mockSignOut} />)
 
     expect(screen.getByText('Add your phone')).toBeOnTheScreen()
     expect(screen.queryByLabelText('Email')).toBeNull()
@@ -82,7 +81,7 @@ describe('PhoneSetupScreen', () => {
   })
 
   it('reuses an existing Clerk phone number when resending the SMS code', async () => {
-    render(<PhoneSetupScreen />)
+    render(<PhoneSetupScreen signOut={mockSignOut} />)
 
     fireEvent.changeText(screen.getByLabelText('Phone number'), '(415) 555-1212')
     fireEvent.press(screen.getByRole('button', { name: 'Send SMS Code' }))
@@ -91,5 +90,17 @@ describe('PhoneSetupScreen', () => {
       expect(mockPrepareVerification).toHaveBeenCalledWith({ strategy: 'phone_code' })
     })
     expect(mockCreatePhoneNumber).not.toHaveBeenCalled()
+  })
+
+  it('calls the signOut prop (not a bare Clerk signOut) when the user cancels out of the phone gate', () => {
+    // This is a distinct sign-out entry point from useAuthGate().signOut() --
+    // AuthProvider passes its own push-cleanup-wrapped signOut in as a prop
+    // specifically so an unverified-phone user who bails here still gets
+    // this device's token unregistered, not Clerk's raw signOut.
+    render(<PhoneSetupScreen signOut={mockSignOut} />)
+
+    fireEvent.press(screen.getByRole('button', { name: 'Sign out' }))
+
+    expect(mockSignOut).toHaveBeenCalledTimes(1)
   })
 })
