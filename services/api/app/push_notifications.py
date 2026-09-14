@@ -237,9 +237,21 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
             for start in range(0, len(messages), _EXPO_BATCH_SIZE):
                 batch = messages[start:start + _EXPO_BATCH_SIZE]
                 batch_tokens = message_tokens[start:start + _EXPO_BATCH_SIZE]
-                response = client.post(settings.expo_push_api_url, json=batch)
-                response.raise_for_status()
-                payload = response.json()
+                try:
+                    response = client.post(settings.expo_push_api_url, json=batch)
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError) as error:
+                    # A transport failure or malformed response for one
+                    # batch must not abandon the rest -- reachable once a
+                    # single delivery spans more than Expo's 100-message
+                    # batch limit (a large contact_joined fan-out, or a
+                    # recipient with several registered devices), each
+                    # batch is independent, and letting this propagate to
+                    # the outer except would skip every later batch and
+                    # lose invalid_tokens already found by earlier ones.
+                    logger.error("push_delivery_batch_failed error_type=%s", type(error).__name__)
+                    continue
                 # Expo is expected to return {"data": [ticket, ...]}, but this
                 # is a third-party response -- validate the shape explicitly
                 # rather than trusting it, so a malformed/unexpected body

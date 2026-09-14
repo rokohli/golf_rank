@@ -444,6 +444,50 @@ def test_non_device_ticket_error_is_logged_and_token_is_kept(monkeypatch, caplog
         assert len(remaining) == 1
 
 
+def test_one_failed_batch_does_not_abandon_independent_later_batches(monkeypatch, caplog) -> None:
+    # Expo's batch limit is 100 messages -- a delivery that spans more than
+    # that (here: one recipient with 101 registered devices) makes multiple
+    # independent HTTP calls. A transport failure on an earlier batch must
+    # not skip every later one, and invalid tokens already found by an
+    # earlier successful batch must still get cleaned up.
+    monkeypatch.setattr(push_notifications_module.logger, "disabled", False)
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-batch-alice", "Alice", "pushbatchalice")
+    bob = _profile(client, "dev:push-batch-bob", "Bob", "pushbatchbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushbatchbob"}).json()[0]["id"]
+
+    token_count = 101
+    for index in range(token_count):
+        assert client.put(
+            "/api/v1/me/push-tokens", headers=bob, json={"token": f"ExponentPushToken[batch-{index:03d}]"}
+        ).status_code == 204
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(500, json={"errors": ["internal error"]})
+        batch = json.loads(request.content)
+        return httpx.Response(200, json={
+            "data": [{"status": "error", "details": {"error": "DeviceNotRegistered"}} for _ in batch],
+        })
+
+    _mock_push_client(monkeypatch, handler)
+
+    with caplog.at_level("ERROR", logger="fairway.push"):
+        assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    assert call_count["n"] == 2, "the second, independent batch must still be attempted after the first fails"
+    assert any("push_delivery_batch_failed" in record.message for record in caplog.records)
+    with client.app.state.session_factory() as session:
+        remaining = session.scalars(select(PushToken).where(PushToken.user_id == bob_id)).all()
+        # The failed first batch's ~100 tokens are conservatively kept (its
+        # response couldn't be trusted), but the second, successful batch's
+        # token was correctly identified as invalid and pruned.
+        assert len(remaining) == token_count - 1
+
+
 def test_malformed_expo_response_shapes_do_not_break_the_triggering_request(monkeypatch) -> None:
     # Expo is a third-party response; a malformed/unexpected body must be
     # skipped rather than raising past send_push_notifications -- the
