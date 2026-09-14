@@ -79,6 +79,26 @@ describe('NotificationSettings', () => {
     expect(mockRouterBack).toHaveBeenCalledTimes(1)
   })
 
+  it('does not register a push token from a legacy/never-chosen account (notifications: null) that opens and saves without touching the switch', async () => {
+    // Regression test: `enabled` initializes to true for a null preference
+    // (matching notifications_enabled()'s "not false" default for the
+    // in-app feed) -- merely opening this screen and pressing Save without
+    // ever touching the switch must not read as consent for push, or it
+    // would silently trigger the native OS permission prompt.
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      onboarding_data: { ...profile.onboarding_data, notifications: null },
+    })
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+    expect(mockUnregisterCurrentPushToken).not.toHaveBeenCalled()
+  })
+
   it('unregisters the push token when the user disables notifications', async () => {
     mockGetProfile.mockResolvedValue({
       ...profile,

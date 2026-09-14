@@ -60,6 +60,7 @@ from .models import (
     PlanConstraint,
     PlanGeneration,
     Profile,
+    PushToken,
     RankingConfidence,
     RankingSnapshot,
     Round,
@@ -380,6 +381,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "activity": rows(ActivityEvent, ActivityEvent.actor_user_id == stored_user.id),
             "activity_reactions": rows(ActivityReaction, ActivityReaction.user_id == stored_user.id),
             "linked_contacts": rows(LinkedContact, LinkedContact.user_id == stored_user.id),
+            "push_tokens": rows(PushToken, PushToken.user_id == stored_user.id),
             "notifications": rows(
                 AppNotification,
                 AppNotification.recipient_user_id == stored_user.id,
