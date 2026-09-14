@@ -79,6 +79,25 @@ describe('NotificationSettings', () => {
     expect(mockRouterBack).toHaveBeenCalledTimes(1)
   })
 
+  it('re-registers on save for an already-enabled account, even without touching the switch, so a device with a lost token catches up', async () => {
+    // Distinct from the null-preference case below: here the preference is
+    // already an explicit `true` on record, so opening and saving without
+    // touching the switch is not new consent -- it's this device catching
+    // up to a decision the user already made (e.g. a prior registration
+    // failed transiently, or OS permission was granted later in Settings).
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      onboarding_data: { ...profile.onboarding_data, notifications: true },
+    })
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockRegisterPushToken).toHaveBeenCalledTimes(1)
+  })
+
   it('does not register a push token from a legacy/never-chosen account (notifications: null) that opens and saves without touching the switch', async () => {
     // Regression test: `enabled` initializes to true for a null preference
     // (matching notifications_enabled()'s "not false" default for the

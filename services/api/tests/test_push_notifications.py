@@ -146,6 +146,63 @@ def test_register_push_token_retries_after_a_concurrent_registration_race(monkey
         assert rows[0].user_id == alice_id
 
 
+def test_register_push_token_recreates_a_brand_new_user_after_rollback_from_a_registration_race(monkeypatch) -> None:
+    # A brand-new identity whose very first API call is push-token
+    # registration (e.g. onboarding's Enable action, which can run before
+    # the final profile save) has its User row inserted in the SAME
+    # transaction as the token insert -- require_user(..., create=True)
+    # only flushes it, never commits it independently. If a concurrent
+    # registration of the same brand-new token then wins the unique-
+    # constraint race, the resulting rollback undoes that flushed User
+    # insert along with the token insert. Without re-deriving the user
+    # afterward, the retry's reassignment would use a stale, now-
+    # nonexistent user id and fail its foreign key at the final commit
+    # instead of completing.
+    #
+    # Simulated sequentially rather than with genuinely overlapping
+    # connections: SQLite (this suite's default) locks the whole database
+    # for any writer, so a second connection attempting to commit while
+    # alice's own flush is still uncommitted would just block until it
+    # times out, not reproduce the race. Instead, the competing token is
+    # committed for real by an independent session *before* alice's
+    # request begins (no lock contention -- fully sequential), and only
+    # alice's own existence check is made to lie about having seen it, to
+    # reproduce the TOCTOU window a genuinely concurrent request would hit.
+    # Her own subsequent insert then collides with that already-committed
+    # row for real, and her own rollback genuinely undoes her own
+    # just-flushed User row (single connection -- no concurrency needed for
+    # that part to be real).
+    client = TestClient(create_app())
+    _profile(client, "dev:push-race-newuser-bob", "Bob", "pushracenewuserbob")
+    with client.app.state.session_factory() as setup_session:
+        bob_id = setup_session.scalar(select(User.id).where(User.provider_subject == "dev:push-race-newuser-bob"))
+        setup_session.add(PushToken(user_id=bob_id, token="ExponentPushToken[race-newuser]", platform="android"))
+        setup_session.commit()
+
+    alice = {"X-Development-Subject": "dev:push-race-newuser-alice"}
+
+    original_scalar = OrmSession.scalar
+    intercepted = {"done": False}
+
+    def racy_scalar(self, statement, *args, **kwargs):
+        if not intercepted["done"] and "push_tokens" in str(statement).lower():
+            intercepted["done"] = True
+            return None
+        return original_scalar(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(OrmSession, "scalar", racy_scalar)
+
+    response = client.put("/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[race-newuser]"})
+    assert response.status_code == 204
+
+    with client.app.state.session_factory() as session:
+        alice_id = session.scalar(select(User.id).where(User.provider_subject == "dev:push-race-newuser-alice"))
+        assert alice_id is not None
+        rows = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[race-newuser]")).all()
+        assert len(rows) == 1
+        assert rows[0].user_id == alice_id
+
+
 def test_unregister_push_token_removes_only_the_callers_row() -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:push-unreg-alice", "Alice", "pushunregalice")

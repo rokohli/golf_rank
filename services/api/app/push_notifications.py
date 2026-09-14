@@ -87,6 +87,16 @@ def register_push_token(
             # below instead of 500ing a request that should just win or
             # lose the same way the existing-token branch already does.
             session.rollback()
+            # If this was this identity's first-ever write, require_user's
+            # create=True above only flushed the new User row -- it was
+            # never committed, so the rollback just undid it along with the
+            # token insert. `user` (and its `.id`) would otherwise point at
+            # a row that no longer exists, and the reassignment below would
+            # fail its foreign key at the final commit instead of
+            # completing. Re-derive it in the fresh transaction: a no-op
+            # re-fetch if the user already existed, a clean re-insert if it
+            # didn't.
+            user = require_user(session, current, create=True)
             existing = session.scalar(select(PushToken).where(PushToken.token == payload.token))
     if existing is not None:
         # A device can be reused across accounts (sign out, sign back in as
