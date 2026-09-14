@@ -1288,9 +1288,22 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   const signOutWithPushCleanup = useCallback(async () => {
     // Synchronous and first: see the comment on isSigningOut above.
     isSigningOut.current = true
-    if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
-    await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
-    await signOut()
+    try {
+      if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
+      await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
+      await signOut()
+    } catch (error) {
+      // unregisterCurrentPushToken and the tracked registrations never
+      // throw (both swallow their own failures) -- only Clerk's raw
+      // signOut() can reject here. If it does, the user is still
+      // authenticated and this component stays mounted, so the guard must
+      // not stay stuck: otherwise every later registration attempt
+      // (startup, notification-settings) would silently no-op until the
+      // app restarts, with no way for the still-signed-in user to restore
+      // push delivery.
+      isSigningOut.current = false
+      throw error
+    }
   }, [getToken, signOut])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when

@@ -121,15 +121,36 @@ export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<
   }
 }
 
+// Deliberately unlike registration (never retried): a failed unregister
+// leaves the token pointed at the account that's about to sign out, so a
+// second attempt right here is worth the extra time -- it's the last
+// chance to fix it while we still hold this account's own credentials. A
+// device that's fully offline fails both attempts identically (retrying
+// can't manufacture connectivity); this only helps a momentary blip right
+// as the user signs out. It cannot help at all once the app has fully
+// signed out and this account's session is gone -- there is no
+// unauthenticated revocation endpoint, so a token stuck orphaned past this
+// point stays that way until something else (a different account
+// registering the same device, or that account re-enabling notifications)
+// reassigns it. See docs/product/next-features-handoff.md.
+const UNREGISTER_ATTEMPTS = 2
+
 export async function unregisterCurrentPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
   try {
     const token = await currentExpoPushToken()
     if (!token) return
     const headers = await withTimeout(getAuthHeaders(), PUSH_OPERATION_TIMEOUT_MS)
-    await withAbortTimeout(
-      (signal) => unregisterPushToken(token, headers, signal),
-      PUSH_OPERATION_TIMEOUT_MS,
-    )
+    for (let attempt = 1; attempt <= UNREGISTER_ATTEMPTS; attempt++) {
+      try {
+        await withAbortTimeout(
+          (signal) => unregisterPushToken(token, headers, signal),
+          PUSH_OPERATION_TIMEOUT_MS,
+        )
+        return
+      } catch (error) {
+        if (attempt === UNREGISTER_ATTEMPTS) throw error
+      }
+    }
   } catch {
     // Best-effort, and bounded by the timeout above -- sign-out and the
     // notification-settings toggle must not hang or fail just because the

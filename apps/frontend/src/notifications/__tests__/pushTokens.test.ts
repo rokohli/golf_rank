@@ -164,10 +164,12 @@ describe('unregisterCurrentPushToken', () => {
   })
 
   it('never hangs forever if the unregister call stalls -- bounded so sign-out can never block on it indefinitely', async () => {
+    // Two full timeout cycles: unregister retries once on failure.
     jest.useFakeTimers()
     try {
       mockUnregisterPushToken.mockReturnValue(new Promise(() => undefined)) // never resolves
       const settled = unregisterCurrentPushToken(getAuthHeaders)
+      await jest.advanceTimersByTimeAsync(5000)
       await jest.advanceTimersByTimeAsync(5000)
       await expect(settled).resolves.toBeUndefined()
     } finally {
@@ -175,13 +177,13 @@ describe('unregisterCurrentPushToken', () => {
     }
   })
 
-  it('aborts a stalled unregister request rather than merely giving up on it', async () => {
+  it('aborts every stalled unregister attempt rather than merely giving up on it', async () => {
     jest.useFakeTimers()
     try {
-      let capturedSignal: AbortSignal | undefined
+      const capturedSignals: AbortSignal[] = []
       mockUnregisterPushToken.mockImplementation((..._args: unknown[]) => {
         const signal = _args[2] as AbortSignal
-        capturedSignal = signal
+        capturedSignals.push(signal)
         return new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => reject(new Error('aborted')))
         })
@@ -189,10 +191,21 @@ describe('unregisterCurrentPushToken', () => {
 
       const settled = unregisterCurrentPushToken(getAuthHeaders)
       await jest.advanceTimersByTimeAsync(5000)
+      await jest.advanceTimersByTimeAsync(5000)
       await expect(settled).resolves.toBeUndefined()
-      expect(capturedSignal?.aborted).toBe(true)
+      expect(capturedSignals).toHaveLength(2)
+      expect(capturedSignals.every((signal) => signal.aborted)).toBe(true)
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it('retries once after a failed attempt and succeeds if the retry lands', async () => {
+    mockUnregisterPushToken
+      .mockRejectedValueOnce(new Error('network blip'))
+      .mockResolvedValueOnce(undefined)
+
+    await expect(unregisterCurrentPushToken(getAuthHeaders)).resolves.toBeUndefined()
+    expect(mockUnregisterPushToken).toHaveBeenCalledTimes(2)
   })
 })

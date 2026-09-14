@@ -363,6 +363,53 @@ describe('AuthProvider', () => {
     expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
   })
 
+  it('resets the sign-out guard when Clerk sign-out itself fails, so a still-signed-in user can register again', async () => {
+    // unregisterCurrentPushToken and tracked registrations never throw
+    // (both swallow their own failures) -- only Clerk's raw signOut() can
+    // reject here. If it does, the user is still authenticated and this
+    // component stays mounted, so the guard must not stay stuck forever.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockUnregisterCurrentPushToken.mockResolvedValue(undefined)
+    mockSignOut.mockRejectedValueOnce(new Error('network down'))
+    mockRequestAndRegisterPushToken.mockResolvedValue(undefined)
+
+    function SignOutThenRegisterProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void signOut().catch(() => undefined)}>
+            <Text>Sign out</Text>
+          </Pressable>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutThenRegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+
+    // Sign-out failed -- registration must work again, not be permanently
+    // stuck refusing every future call.
+    fireEvent.press(screen.getByText('Register'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 
