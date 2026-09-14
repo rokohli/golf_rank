@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .core.config import Settings
 from .db import get_session
-from .domain import muted_ids, require_user
+from .domain import blocked_ids, muted_ids, notifications_enabled, require_user
 from .models import AppNotification, OnboardingPreference, Profile, PushToken, User
 
 
@@ -152,23 +152,40 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
     # just this function's own return value.
     try:
         # list_notifications (social.py) hides any row whose actor the
-        # recipient has muted or blocked from the in-app inbox entirely --
-        # the row still exists (creation-time checks only cover blocks, not
-        # mutes), but is never shown. Push delivery has to honor the same
-        # exclusion, or muting someone stops their activity from appearing
-        # in-app while their pushes keep arriving anyway. Cached per
-        # recipient since one batch can cover several recipients (e.g.
-        # tagging multiple companions on one round).
+        # recipient has muted or blocked from the in-app inbox, and returns
+        # nothing at all for a recipient who has notifications disabled.
+        # Push delivery has to honor the same exclusions -- and re-check
+        # them here rather than trusting the creation-time checks, because
+        # delivery now runs as a BackgroundTask after the triggering
+        # request has already committed and returned: the recipient has a
+        # real window to block the actor or flip notifications off between
+        # the row being created and this function running. Re-fetched per
+        # recipient (not per notification) and cached, since one batch can
+        # cover several recipients (e.g. tagging multiple companions on one
+        # round) but re-checking the same recipient twice would be wasted
+        # work.
         muted_ids_by_recipient: dict[int, set[int]] = {}
+        blocked_ids_by_recipient: dict[int, set[int]] = {}
+        notifications_enabled_by_recipient: dict[int, bool] = {}
 
-        def is_muted(recipient_id: int, actor_id: int) -> bool:
+        def is_deliverable(recipient_id: int, actor_id: int) -> bool:
+            if recipient_id not in notifications_enabled_by_recipient:
+                notifications_enabled_by_recipient[recipient_id] = notifications_enabled(session, recipient_id)
+            if not notifications_enabled_by_recipient[recipient_id]:
+                return False
             if recipient_id not in muted_ids_by_recipient:
                 muted_ids_by_recipient[recipient_id] = muted_ids(session, recipient_id)
-            return actor_id in muted_ids_by_recipient[recipient_id]
+            if actor_id in muted_ids_by_recipient[recipient_id]:
+                return False
+            if recipient_id not in blocked_ids_by_recipient:
+                blocked_ids_by_recipient[recipient_id] = blocked_ids(session, recipient_id)
+            if actor_id in blocked_ids_by_recipient[recipient_id]:
+                return False
+            return True
 
         filtered_notifications = [
             notification for notification in notifications
-            if not is_muted(notification.recipient_user_id, notification.actor_user_id)
+            if is_deliverable(notification.recipient_user_id, notification.actor_user_id)
         ]
         if not filtered_notifications:
             return

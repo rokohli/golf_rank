@@ -2,7 +2,7 @@ import json
 
 import httpx
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session as OrmSession, sessionmaker
 from sqlalchemy.pool import QueuePool
@@ -10,7 +10,7 @@ from sqlalchemy.pool import QueuePool
 from app import push_notifications as push_notifications_module
 from app.core.config import Settings
 from app.main import create_app
-from app.models import AppNotification, Base, PushToken, User
+from app.models import AppNotification, Base, OnboardingPreference, PushToken, User, UserBlock
 from app.push_notifications import send_push_notifications
 
 
@@ -278,6 +278,53 @@ def test_muted_actor_does_not_trigger_a_push_even_though_the_in_app_row_is_still
         # exclude it, not row creation.
         rows = session.scalars(select(AppNotification).where(AppNotification.notification_type == "followed_you")).all()
         assert len(rows) == 1
+
+
+def test_send_push_notifications_rechecks_block_and_notification_preference_at_delivery_time(monkeypatch) -> None:
+    # Delivery now runs as a BackgroundTask after the triggering request has
+    # already committed and returned -- the recipient has a real window to
+    # block the actor or disable notifications between the row being
+    # created and delivery actually running. Tested directly against
+    # send_push_notifications (rather than through the HTTP race, which
+    # isn't reproducible deterministically) by constructing a row that
+    # exists as-if-created-before, then re-checking against a session where
+    # the recipient has since blocked / opted out.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-recheck-alice", "Alice", "pushrecheckalice")
+    bob = _profile(client, "dev:push-recheck-bob", "Bob", "pushrecheckbob")
+    with client.app.state.session_factory() as session:
+        alice_id = session.scalar(select(User.id).where(User.provider_subject == "dev:push-recheck-alice"))
+        bob_id = session.scalar(select(User.id).where(User.provider_subject == "dev:push-recheck-bob"))
+
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[recheck-block]"})
+    assert client.put(f"/api/v1/me/blocks/{alice_id}", headers=bob).status_code == 204
+
+    with client.app.state.session_factory() as session:
+        notification = AppNotification(recipient_user_id=bob_id, actor_user_id=alice_id, notification_type="followed_you")
+        session.add(notification)
+        session.commit()
+        notification_id = notification.id
+
+    calls = _mock_push_client(monkeypatch, lambda request: _ok_response())
+    with client.app.state.session_factory() as session:
+        pending = session.get(AppNotification, notification_id)
+        send_push_notifications(session, client.app.state.settings, [pending])
+    assert calls == [], "blocked between creation and delivery -- must not deliver"
+
+    # Same shape, this time for the notifications-disabled case.
+    with client.app.state.session_factory() as session:
+        session.execute(delete(UserBlock).where(UserBlock.blocker_id == bob_id, UserBlock.blocked_id == alice_id))
+        preferences = session.get(OnboardingPreference, bob_id)
+        preferences.onboarding_data = {**preferences.onboarding_data, "notifications": False}
+        notification = AppNotification(recipient_user_id=bob_id, actor_user_id=alice_id, notification_type="mutual_follow")
+        session.add(notification)
+        session.commit()
+        notification_id = notification.id
+
+    with client.app.state.session_factory() as session:
+        pending = session.get(AppNotification, notification_id)
+        send_push_notifications(session, client.app.state.settings, [pending])
+    assert calls == [], "notifications disabled between creation and delivery -- must not deliver"
 
 
 def test_no_registered_token_means_no_push_attempt(monkeypatch) -> None:
