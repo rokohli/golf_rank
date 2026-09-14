@@ -503,6 +503,45 @@ describe('AuthProvider', () => {
     expect(mockGetProfile).toHaveBeenCalledTimes(1)
   })
 
+  it('retries the preference check after a transient failure instead of giving up for the whole session', async () => {
+    // Regression test: marking the check "done" before the first attempt
+    // resolved meant a single network blip on app open permanently blocked
+    // registration for the rest of the session, with nothing left to
+    // retrigger it.
+    jest.useFakeTimers()
+    try {
+      process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+      process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+      mockUser = {
+        firstName: 'Rohan',
+        hasImage: false,
+        imageUrl: '',
+        phoneNumbers: [{ verification: { status: 'verified' } }],
+        setProfileImage: mockSetProfileImage,
+      }
+      mockGetProfile
+        .mockRejectedValueOnce(new Error('network blip'))
+        .mockResolvedValueOnce({ onboarding_data: { notifications: true } })
+
+      render(
+        <AuthProvider>
+          <Text>Screen</Text>
+        </AuthProvider>,
+      )
+
+      await jest.advanceTimersByTimeAsync(0)
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
+
+      await jest.advanceTimersByTimeAsync(2000)
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(mockGetProfile).toHaveBeenCalledTimes(2)
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 

@@ -20,6 +20,11 @@ import { buildAuthHeaders } from './useAuthToken'
 const ssoRedirectScheme = 'golfrank'
 const ssoRedirectPath = 'sso-callback'
 
+// Bounded retry for the sign-in push-registration preference check below
+// (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts).
+const PROFILE_CHECK_ATTEMPTS = 2
+const PROFILE_CHECK_RETRY_DELAY_MS = 2000
+
 WebBrowser.maybeCompleteAuthSession()
 
 type AuthGateActions = {
@@ -1335,19 +1340,30 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   const hasCheckedPushRegistration = useRef(false)
   useEffect(() => {
     if (!isLoaded || needsPhone || hasCheckedPushRegistration.current) return
-    hasCheckedPushRegistration.current = true
     void (async () => {
-      try {
-        // A brand-new, not-yet-onboarded account 404s here -- registration
-        // for that case only ever happens through onboarding's own
-        // explicit Enable tap, never from this check. Any other failure
-        // (network, etc.) is likewise silently skipped: push registration
-        // is a background nicety, never something that should block or
-        // error the authenticated shell.
-        const profile = await getProfile(await buildAuthHeaders(getToken))
-        if (profile.onboarding_data?.notifications === true) void registerPushToken()
-      } catch {
-        // See above.
+      // Bounded retry (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts): the
+      // flag above is only set to true once an attempt actually resolves
+      // (success or exhausted retries), never before the first attempt --
+      // marking it complete up front meant a single transient failure (a
+      // network blip on app open) permanently blocked registration for the
+      // rest of the session, since there's no other trigger to recheck
+      // once this effect's own deps stop changing.
+      for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
+        try {
+          const profile = await getProfile(await buildAuthHeaders(getToken))
+          hasCheckedPushRegistration.current = true
+          // A brand-new, not-yet-onboarded account 404s on every attempt --
+          // registration for that case only ever happens through
+          // onboarding's own explicit Enable tap, never from this check.
+          if (profile.onboarding_data?.notifications === true) void registerPushToken()
+          return
+        } catch {
+          if (attempt === PROFILE_CHECK_ATTEMPTS) {
+            hasCheckedPushRegistration.current = true
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+        }
       }
     })()
   }, [isLoaded, needsPhone, getToken, registerPushToken])
