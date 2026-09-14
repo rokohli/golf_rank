@@ -355,6 +355,38 @@ def test_device_not_registered_ticket_deletes_the_token(monkeypatch) -> None:
         assert remaining == []
 
 
+def test_non_device_ticket_error_is_logged_and_token_is_kept(monkeypatch, caplog) -> None:
+    # A ticket error other than DeviceNotRegistered (e.g. misconfigured Expo
+    # credentials) never reaches send_push_notifications's except block --
+    # Expo returns it as a normal HTTP 200 body. Without its own logging,
+    # this failure mode would be completely silent in production.
+    #
+    # alembic/env.py's fileConfig(config.config_file_name) call -- exercised
+    # by test_migration_lifecycle.py/test_models.py, which sort before this
+    # file -- disables every logger that already existed and isn't listed in
+    # alembic.ini, "fairway.push" included. caplog's own at_level() doesn't
+    # undo that, so this must re-enable the logger itself or the assertion
+    # below is order-dependent on which other test files already ran.
+    monkeypatch.setattr(push_notifications_module.logger, "disabled", False)
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-ticket-err-alice", "Alice", "pushticketerralice")
+    bob = _profile(client, "dev:push-ticket-err-bob", "Bob", "pushticketerrbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushticketerrbob"}).json()[0]["id"]
+
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[ticketerr]"})
+    _mock_push_client(monkeypatch, lambda request: _ok_response(
+        tickets=[{"status": "error", "message": "bad credentials", "details": {"error": "InvalidCredentials"}}]
+    ))
+
+    with caplog.at_level("ERROR", logger="fairway.push"):
+        assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    assert any("push_delivery_ticket_error" in record.message for record in caplog.records)
+    with client.app.state.session_factory() as session:
+        remaining = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[ticketerr]")).all()
+        assert len(remaining) == 1
+
+
 def test_malformed_expo_response_shapes_do_not_break_the_triggering_request(monkeypatch) -> None:
     # Expo is a third-party response; a malformed/unexpected body must be
     # skipped rather than raising past send_push_notifications -- the

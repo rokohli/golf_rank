@@ -241,9 +241,21 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
                 for ticket, token in zip(tickets, batch_tokens):
                     if not isinstance(ticket, dict):
                         continue
+                    if ticket.get("status") != "error":
+                        continue
                     details = ticket.get("details")
-                    if isinstance(details, dict) and details.get("error") == "DeviceNotRegistered":
+                    error_code = details.get("error") if isinstance(details, dict) else None
+                    if error_code == "DeviceNotRegistered":
                         invalid_tokens.add(token)
+                    else:
+                        # Anything else here (InvalidCredentials,
+                        # MismatchSenderId, MessageTooBig, ...) is an Expo
+                        # HTTP-200-with-error-ticket response, so it never
+                        # reaches the except block below -- without logging
+                        # it here, a misconfigured Expo project (e.g. wrong
+                        # credentials) would fail every push silently and
+                        # leave nothing to diagnose why.
+                        logger.error("push_delivery_ticket_error error_code=%s", error_code)
 
         if invalid_tokens:
             session.execute(delete(PushToken).where(PushToken.token.in_(invalid_tokens)))
