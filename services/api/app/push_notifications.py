@@ -210,3 +210,26 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
         if isinstance(error, SQLAlchemyError):
             session.rollback()
         logger.error("push_delivery_failed error_type=%s", type(error).__name__)
+
+
+def run_push_delivery_task(app, notification_ids: Sequence[int]) -> None:
+    """BackgroundTask entry point (mirrors run_scoring_task in
+    course_photo_scoring_job.py). Opens its own session -- the request's
+    session is closed by the time a background task runs -- and, more to
+    the point, runs off the request-serving worker thread entirely: the
+    synchronous Expo POST inside send_push_notifications can take up to
+    expo_push_timeout_seconds per batch, and every notification-generating
+    endpoint used to eat that cost inline. Under an Expo slowdown, enough
+    concurrent notification writes could exhaust Starlette's sync-worker
+    threadpool and stall unrelated requests even after the DB connection
+    fix. Re-fetches by ID rather than reusing the caller's ORM objects,
+    since those belong to a session that's gone by the time this runs.
+    """
+    if not notification_ids:
+        return
+    settings = app.state.settings
+    with app.state.session_factory() as session:
+        notifications = session.scalars(
+            select(AppNotification).where(AppNotification.id.in_(notification_ids))
+        ).all()
+        send_push_notifications(session, settings, notifications)

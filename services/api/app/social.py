@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -25,7 +25,7 @@ from .domain import (
     round_image_data_bulk,
     stored_user,
 )
-from .push_notifications import send_push_notifications
+from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -646,9 +646,10 @@ def get_user_courses(
 @router.put("/api/v1/me/follows/{target_user_id}", response_model=FollowOut)
 def follow_user(
     target_user_id: int,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> FollowOut:
     user = require_user(session, current, create=True)
     if target_user_id == user.id:
@@ -679,7 +680,8 @@ def follow_user(
         if mutual:
             created.extend(_notify_mutual_follow(session, user.id, target_user_id))
         session.commit()
-        send_push_notifications(session, settings, created)
+        if created:
+            background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     else:
         mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
@@ -778,6 +780,8 @@ def list_notifications(
 @router.put("/api/v1/me/contacts", status_code=204)
 def link_contacts(
     payload: ContactLinkIn,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -803,7 +807,8 @@ def link_contacts(
             error.status_code,
         )
     session.commit()
-    send_push_notifications(session, settings, created)
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return Response(status_code=204)
 
 
@@ -1095,9 +1100,10 @@ def get_activity(
 def add_reaction(
     event_id: int,
     reaction: str,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> ReactionOut:
     if reaction != "like":
         raise HTTPException(422, "Unsupported reaction")
@@ -1108,7 +1114,8 @@ def add_reaction(
         session.add(ActivityReaction(event_id=event_id, user_id=user.id, reaction=reaction))
         created = _notify_reaction(session, user.id, event)
         session.commit()
-        send_push_notifications(session, settings, created)
+        if created:
+            background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     count, reacted = _reaction_state(session, event_id, user.id)
     return ReactionOut(event_id=event_id, reaction=reaction, reaction_count=count, viewer_reacted=reacted)
 

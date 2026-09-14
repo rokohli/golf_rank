@@ -1,16 +1,15 @@
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user, get_settings
-from .core.config import Settings
+from .core.auth import CurrentUser, current_user
 from .db import get_session
 from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, stored_user
-from .push_notifications import send_push_notifications
+from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
     AppNotification,
@@ -342,9 +341,10 @@ def _delete_round_activity_event(session: Session, user_id: int, round_id: int) 
 @router.post("", response_model=RoundOut, status_code=201)
 def create_round(
     payload: RoundIn,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> RoundOut:
     user = require_user(session, current, create=True)
     course_id = require_course(session, payload.course_id).id
@@ -376,7 +376,8 @@ def create_round(
         )
     )
     session.commit()
-    send_push_notifications(session, settings, created)
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return _round_out(session, round_)
 
 
@@ -471,9 +472,10 @@ def get_round(
 def update_round(
     round_id: int,
     payload: RoundPatch,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> RoundOut:
     user = require_user(session, current)
     created: list[AppNotification] = []
@@ -530,7 +532,8 @@ def update_round(
         event.event_data = event_data
     _refresh_course_state(session, user.id, round_.course_id)
     session.commit()
-    send_push_notifications(session, settings, created)
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return _round_out(session, round_)
 
 

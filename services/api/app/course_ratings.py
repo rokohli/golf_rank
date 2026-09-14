@@ -1,11 +1,10 @@
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user, get_settings
-from .core.config import Settings
+from .core.auth import CurrentUser, current_user
 from .db import get_session
 from .domain import course_data, course_identity_ids, require_course, require_user, round_image_data, stored_user
 from .models import (
@@ -20,7 +19,7 @@ from .models import (
     User,
     UserCourseRating,
 )
-from .push_notifications import send_push_notifications
+from .push_notifications import run_push_delivery_task
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 from .rounds import _companion_blocked_ids, _event_data, _notify_tagged_companions, _owner_blocked_ids, _refresh_course_state
 from .schemas import (
@@ -438,9 +437,10 @@ def put_course_rating(
 def patch_rating_details(
     course_id: int,
     payload: RatingDetailsPatch,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> CourseRatingStateOut:
     course = require_course(session, course_id)
     course_id = course.id
@@ -501,5 +501,6 @@ def patch_rating_details(
     session.flush()
     result = _state(session, course, user.id)
     session.commit()
-    send_push_notifications(session, settings, created)
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return result

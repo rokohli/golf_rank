@@ -161,6 +161,39 @@ def test_unregister_push_token_removes_only_the_callers_row() -> None:
         assert remaining == {"ExponentPushToken[bob]"}
 
 
+def test_follow_notification_delivery_is_scheduled_as_a_background_task_not_called_inline(monkeypatch) -> None:
+    # The point of run_push_delivery_task (vs. calling send_push_notifications
+    # directly in the request handler) is that Expo delivery no longer
+    # occupies the request-serving worker thread. Proves the wiring: the
+    # endpoint hands off to run_push_delivery_task via BackgroundTasks with
+    # the app instance and the newly created notification's id, rather than
+    # delivering synchronously itself.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-bgtask-alice", "Alice", "pushbgtaskalice")
+    bob = _profile(client, "dev:push-bgtask-bob", "Bob", "pushbgtaskbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushbgtaskbob"}).json()[0]["id"]
+
+    calls: list[tuple[object, list[int]]] = []
+
+    def spy(app: object, notification_ids: list[int]) -> None:
+        calls.append((app, notification_ids))
+
+    monkeypatch.setattr("app.social.run_push_delivery_task", spy)
+
+    assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+
+    assert len(calls) == 1
+    scheduled_app, notification_ids = calls[0]
+    assert scheduled_app is client.app
+    with client.app.state.session_factory() as session:
+        notification = session.get(AppNotification, notification_ids[0])
+        assert notification is not None
+        assert notification.notification_type == "followed_you"
+        assert notification.recipient_user_id == session.scalar(
+            select(User.id).where(User.provider_subject == "dev:push-bgtask-bob")
+        )
+
+
 def test_follow_notification_sends_exactly_one_push_and_no_second_on_refollow(monkeypatch) -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:push-follow-alice", "Alice", "pushfollowalice")
