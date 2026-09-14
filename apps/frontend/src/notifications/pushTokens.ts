@@ -136,6 +136,13 @@ export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<
 const UNREGISTER_ATTEMPTS = 2
 
 export async function unregisterCurrentPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
+  // Clears this device's notification tray independently of whether the
+  // server-side unregister below succeeds -- otherwise a push delivered to
+  // this account moments before sign-out (or before another account signs
+  // in on the same shared device) stays visible in the tray, readable by
+  // whoever uses the device next. Fire-and-forget: dismissal has no server
+  // round trip to fail and nothing downstream depends on its result.
+  Notifications.dismissAllNotificationsAsync().catch(() => {})
   try {
     const token = await currentExpoPushToken()
     if (!token) return

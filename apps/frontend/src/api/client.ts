@@ -521,7 +521,9 @@ export async function registerPushToken(input: { token: string; platform: string
 }
 
 export async function unregisterPushToken(token: string, headers: ApiHeaders, signal?: AbortSignal): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens?token=${encodeURIComponent(token)}`, { method: 'DELETE', headers, signal })
+  // Sent in the body, not a query string -- an Expo push token in a URL
+  // would otherwise land in server/proxy access logs.
+  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens`, { method: 'DELETE', headers, body: JSON.stringify({ token }), signal })
   if (!response.ok) throw await responseError(response, 'Unable to unregister push notifications. Please try again.')
 }
 

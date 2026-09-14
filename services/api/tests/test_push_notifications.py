@@ -154,7 +154,7 @@ def test_unregister_push_token_removes_only_the_callers_row() -> None:
     client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[bob]"})
 
     assert client.request(
-        "DELETE", "/api/v1/me/push-tokens", headers=alice, params={"token": "ExponentPushToken[alice]"}
+        "DELETE", "/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[alice]"}
     ).status_code == 204
 
     with client.app.state.session_factory() as session:

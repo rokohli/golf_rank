@@ -99,14 +99,18 @@ def register_push_token(
     return Response(status_code=204)
 
 
+class PushTokenUnregisterIn(BaseModel):
+    token: str = Field(min_length=1, max_length=255)
+
+
 @router.delete("/api/v1/me/push-tokens", status_code=204)
 def unregister_push_token(
-    token: str,
+    payload: PushTokenUnregisterIn,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> Response:
     user = require_user(session, current)
-    session.execute(delete(PushToken).where(PushToken.user_id == user.id, PushToken.token == token))
+    session.execute(delete(PushToken).where(PushToken.user_id == user.id, PushToken.token == payload.token))
     session.commit()
     return Response(status_code=204)
 

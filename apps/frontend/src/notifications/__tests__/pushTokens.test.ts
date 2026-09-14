@@ -4,6 +4,7 @@ const mockGetExpoPushTokenAsync = jest.fn()
 const mockGetPermissionsAsync = jest.fn()
 const mockRequestPermissionsAsync = jest.fn()
 const mockSetNotificationChannelAsync = jest.fn()
+const mockDismissAllNotificationsAsync = jest.fn()
 let mockIsDevice = true
 
 jest.mock('../../api/client', () => ({
@@ -24,6 +25,7 @@ jest.mock('expo-notifications', () => ({
   getPermissionsAsync: (...args: unknown[]) => mockGetPermissionsAsync(...args),
   requestPermissionsAsync: (...args: unknown[]) => mockRequestPermissionsAsync(...args),
   setNotificationChannelAsync: (...args: unknown[]) => mockSetNotificationChannelAsync(...args),
+  dismissAllNotificationsAsync: (...args: unknown[]) => mockDismissAllNotificationsAsync(...args),
   // A plain inline jest.fn(), not a reference to an outer "mock"-prefixed
   // const: pushTokens.ts calls this at module *import* time (a top-level
   // side effect, unlike the other calls above which only ever run lazily
@@ -151,11 +153,30 @@ describe('unregisterCurrentPushToken', () => {
     jest.resetAllMocks()
     mockIsDevice = true
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
+    mockDismissAllNotificationsAsync.mockResolvedValue(undefined)
   })
 
   it('unregisters the current token', async () => {
     await unregisterCurrentPushToken(getAuthHeaders)
     expect(mockUnregisterPushToken).toHaveBeenCalledWith('ExponentPushToken[abc]', headers, expect.any(AbortSignal))
+  })
+
+  it('clears delivered OS notifications so they do not linger in the tray after sign-out', async () => {
+    await unregisterCurrentPushToken(getAuthHeaders)
+    expect(mockDismissAllNotificationsAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('still clears delivered notifications even when the server unregister call fails', async () => {
+    mockUnregisterPushToken.mockRejectedValue(new Error('network down'))
+    await unregisterCurrentPushToken(getAuthHeaders)
+    expect(mockDismissAllNotificationsAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('still clears delivered notifications even with no token to unregister (simulator)', async () => {
+    mockIsDevice = false
+    await unregisterCurrentPushToken(getAuthHeaders)
+    expect(mockDismissAllNotificationsAsync).toHaveBeenCalledTimes(1)
+    expect(mockUnregisterPushToken).not.toHaveBeenCalled()
   })
 
   it('swallows an unregister API failure instead of throwing', async () => {
