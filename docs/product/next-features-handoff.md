@@ -8,12 +8,12 @@ The next work should harden the real product flows before adding broad new surfa
 
 ## Recommended implementation order
 
+Round/course photos and Friends' thoughts on course pages (previously items 3–4 here) are done — see sections 5 and 6.
+
 1. Finish API security operations, especially limiter and unusual-traffic alerting.
 2. Add the AI planning layer with strict factual guardrails.
-3. Add private round and course-memory photos.
-4. Make Friends' thoughts real on course pages.
-5. Implement actual notifications and availability signals.
-6. Add EAS distribution, monitoring, and a separate production environment.
+3. Add push delivery on top of the existing in-app notification inbox.
+4. Add EAS distribution, monitoring, and a separate production environment.
 
 ## 1. Canonical course identity and presentation
 
@@ -275,66 +275,36 @@ The deterministic planner remains the authority for hard constraints and allowed
 
 All acceptance criteria above have local automated coverage. Staging provider credentials and live acceptance remain outstanding.
 
-## 5. Private golf-memory photos
+## 5. Round-linked course photos — implemented
 
-### Problem
+`expo-image-picker` backs a working Add photos flow in the rating flow and course-detail round disclosure (`apps/frontend/app/course/[id].tsx`, `apps/frontend/src/api/coursePhotoUpload.ts`). Uploads go through FastAPI-issued signed URLs (`course_photo_uploads.py`), are owner- and round-scoped, and pass through a moderation pipeline (`course_photo_moderation.py`, `course_photo_scoring_job.py`) with quality scoring and hero selection. Migrations `0021`–`0028` cover the course-image abstraction, round linking, deletes, moderation audit, and concurrency handling. Retry classification for confirm failures is centralized in `isRetryableConfirmFailure` so staged uploads can't be abandoned or double-confirmed.
 
-`expo-image-picker` is installed, but Add photos is intentionally disabled in rating and course-detail flows. Database backups also do not restore deleted Storage objects, so object recovery must be designed before launch.
+Remaining, if picked back up: this photo pipeline is course-image-shaped (attributable, moderated, potentially visible beyond the owner) rather than the originally-scoped purely-private "golf memory" bucket. If a strictly private, unmoderated photo album is still wanted as a separate concept, that would need its own bucket/table and product decision — otherwise treat this item as done and drop it from the roadmap.
 
-### Scope
+## 6. Friends' thoughts on course pages — implemented
 
-- Create a private Supabase Storage bucket for user golf memories.
-- Keep Clerk as the identity provider; the mobile app must not receive a Supabase service-role key.
-- Have FastAPI issue short-lived signed upload and read URLs after Clerk authorization.
-- Add `round_photos` with owner, round, course, object key, MIME type, byte size, caption, position, and timestamps.
-- Support image selection, compression, upload progress, retry, reorder, caption edit, and delete.
-- Enforce MIME allowlists, size/count quotas, randomized object keys, and ownership checks.
-- Start with private photos. Public or friends-visible photos require a separate moderation and reporting design.
-- Add a separate object-backup or retention process; database dumps preserve metadata only.
+`GET /api/v1/courses/{course_id}/friends-thoughts` (`services/api/app/social.py:230`) has been live since #32. It restricts to mutual follows, excludes blocked/muted users, aggregates friend ratings per course (deduped by latest rating per friend across reconciliation aliases), and surfaces notes/favorite holes only when the backing round is friends-visible — never a round ID or other private round field. The course-detail disclosure (`FriendsThoughts` in `course/[id].tsx`) has explicit loading, populated, empty, and error/retry states, and routes into `/activity/[id]` rather than always opening the course. Test coverage: `apps/frontend/app/course/__tests__/detail.test.tsx` and backend cases in `test_social.py` for friendship, visibility, block, mute, and ownership.
 
-### Acceptance criteria
-
-- A user can add and remove photos from their own round.
-- Another user cannot read or mutate private photo metadata or objects.
-- Failed uploads leave no completed database record or abandoned permanent object.
-- Deleting a round follows an explicit object-retention policy.
-
-## 6. Friends' thoughts on course pages
-
-### Problem
-
-The course-detail disclosure exists but always says Friends' thoughts are unavailable.
-
-### Scope
-
-- Add `GET /api/v1/courses/{course_id}/friends-thoughts`.
-- Return only visible friend ratings and deliberately shared notes or favorite holes.
-- Apply mutual-friend/follow rules consistently with Friends rankings, plus block and mute filtering.
-- Never expose private round notes through this endpoint.
-- Show aggregate friend rating, count, recent entries, empty state, and links to the friend's visible activity.
-- Correct feed routing so round activity can open the round rather than always opening the course.
-
-### Acceptance criteria
-
-- Private details remain private.
-- Blocking removes the relationship from both the endpoint and UI.
-- Empty, loading, and error states are explicit.
-- Tests cover friendship, visibility, block, mute, and ownership cases.
+No further work identified here.
 
 ## 7. Notifications and availability
 
+### In-app notification inbox, implemented
+
+`app_notifications` (migration `0016`, extended by `0029` with a round-scoped `subject_id`) persists `followed_you`, `mutual_follow`, `reacted_to_round`, `tagged_in_round`, and `contact_joined` events, deduped per actor/type (and per actor/type/round for round-scoped types). `services/api/app/social.py` writes these on follow, mutual-follow, round reaction, and round-tag actions, and `apps/frontend/app/notifications.tsx` renders the inbox, routing round-backed notifications (`reacted_to_round`) to the round. `tagged_in_round` is recorded but intentionally not round-navigable from the notification itself — see the `round_navigable_types` comment in `social.py`.
+
 ### Problem
 
-The app persists one notification preference, but it does not register device tokens or send notifications. Onboarding currently promises nearby-friend, bucket-list availability, and AI trip notifications that do not exist.
+There is still no push delivery: no Expo push token registration, and the single `notifications` boolean in onboarding preferences (`apps/frontend/app/notification-settings.tsx`) is not split by category. Onboarding still should not promise nearby-friend, bucket-list availability, or AI trip notifications, since none of those exist.
 
 ### Scope
 
 - Register and revoke Expo push tokens per installation.
-- Split notification preferences by category.
-- Start with events Fairway owns: follow activity, reactions, shared rounds, and completed AI plans.
+- Split notification preferences by category (the in-app event types above already give a natural category boundary).
+- Send pushes for the events already recorded in-app: follow activity, reactions, round tags, and (once shipped) completed AI plans.
 - Add idempotent delivery records, retries, expiry handling, and token invalidation.
 - Treat tee-time availability as a separate integration. Until a licensed/current provider exists, use official tee-time deep links and never claim availability.
-- Add quiet hours and a user-visible notification inbox only after push delivery is reliable.
+- Add quiet hours only after push delivery is reliable; the notification inbox itself is already built.
 
 ### Acceptance criteria
 
