@@ -33,7 +33,7 @@ const getAuthHeaders = async () => headers
 
 describe('requestAndRegisterPushToken', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    jest.resetAllMocks()
     mockIsDevice = true
     mockGetPermissionsAsync.mockResolvedValue({ status: 'granted' })
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
@@ -46,6 +46,7 @@ describe('requestAndRegisterPushToken', () => {
     expect(mockRegisterPushToken).toHaveBeenCalledWith(
       { token: 'ExponentPushToken[abc]', platform: 'ios' },
       headers,
+      expect.any(AbortSignal),
     )
   })
 
@@ -94,11 +95,32 @@ describe('requestAndRegisterPushToken', () => {
       jest.useRealTimers()
     }
   })
+
+  it('aborts a stalled registration request rather than merely giving up on it -- so an abandoned PUT cannot land later and revive a signed-out token', async () => {
+    jest.useFakeTimers()
+    try {
+      let capturedSignal: AbortSignal | undefined
+      mockRegisterPushToken.mockImplementation((..._args: unknown[]) => {
+        const signal = _args[2] as AbortSignal
+        capturedSignal = signal
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      })
+
+      const settled = requestAndRegisterPushToken(getAuthHeaders)
+      await jest.advanceTimersByTimeAsync(5000)
+      await expect(settled).resolves.toBeUndefined()
+      expect(capturedSignal?.aborted).toBe(true)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
 })
 
 describe('registerPushTokenIfPermissionGranted', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    jest.resetAllMocks()
     mockIsDevice = true
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
   })
@@ -108,7 +130,7 @@ describe('registerPushTokenIfPermissionGranted', () => {
 
     await registerPushTokenIfPermissionGranted(getAuthHeaders)
 
-    expect(mockRegisterPushToken).toHaveBeenCalledWith({ token: 'ExponentPushToken[abc]', platform: 'ios' }, headers)
+    expect(mockRegisterPushToken).toHaveBeenCalledWith({ token: 'ExponentPushToken[abc]', platform: 'ios' }, headers, expect.any(AbortSignal))
     expect(mockRequestPermissionsAsync).not.toHaveBeenCalled()
   })
 
@@ -133,14 +155,14 @@ describe('registerPushTokenIfPermissionGranted', () => {
 
 describe('unregisterCurrentPushToken', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    jest.resetAllMocks()
     mockIsDevice = true
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
   })
 
   it('unregisters the current token', async () => {
     await unregisterCurrentPushToken(getAuthHeaders)
-    expect(mockUnregisterPushToken).toHaveBeenCalledWith('ExponentPushToken[abc]', headers)
+    expect(mockUnregisterPushToken).toHaveBeenCalledWith('ExponentPushToken[abc]', headers, expect.any(AbortSignal))
   })
 
   it('swallows an unregister API failure instead of throwing', async () => {
@@ -155,6 +177,27 @@ describe('unregisterCurrentPushToken', () => {
       const settled = unregisterCurrentPushToken(getAuthHeaders)
       await jest.advanceTimersByTimeAsync(5000)
       await expect(settled).resolves.toBeUndefined()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('aborts a stalled unregister request rather than merely giving up on it', async () => {
+    jest.useFakeTimers()
+    try {
+      let capturedSignal: AbortSignal | undefined
+      mockUnregisterPushToken.mockImplementation((..._args: unknown[]) => {
+        const signal = _args[2] as AbortSignal
+        capturedSignal = signal
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      })
+
+      const settled = unregisterCurrentPushToken(getAuthHeaders)
+      await jest.advanceTimersByTimeAsync(5000)
+      await expect(settled).resolves.toBeUndefined()
+      expect(capturedSignal?.aborted).toBe(true)
     } finally {
       jest.useRealTimers()
     }

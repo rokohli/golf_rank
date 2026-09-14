@@ -515,13 +515,13 @@ export async function deleteLinkedContacts(headers: ApiHeaders): Promise<void> {
   if (!response.ok) throw await responseError(response, 'Unable to remove linked contacts. Please try again.')
 }
 
-export async function registerPushToken(input: { token: string; platform: string }, headers: ApiHeaders): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens`, { method: 'PUT', headers, body: JSON.stringify(input) })
+export async function registerPushToken(input: { token: string; platform: string }, headers: ApiHeaders, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens`, { method: 'PUT', headers, body: JSON.stringify(input), signal })
   if (!response.ok) throw await responseError(response, 'Unable to register for notifications. Please try again.')
 }
 
-export async function unregisterPushToken(token: string, headers: ApiHeaders): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens?token=${encodeURIComponent(token)}`, { method: 'DELETE', headers })
+export async function unregisterPushToken(token: string, headers: ApiHeaders, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/me/push-tokens?token=${encodeURIComponent(token)}`, { method: 'DELETE', headers, signal })
   if (!response.ok) throw await responseError(response, 'Unable to unregister push notifications. Please try again.')
 }
 

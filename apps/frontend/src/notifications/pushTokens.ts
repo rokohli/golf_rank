@@ -8,9 +8,18 @@ import { ApiHeaders } from '../auth/useAuthToken'
 
 // Push registration is a background nicety, never something that should
 // surface an error to the user or block sign-in/out -- every entry point
-// here swallows its own failures and is bounded by PUSH_OPERATION_TIMEOUT_MS
-// so a stalled OS call or network request can never hang a caller (notably
-// sign-out) indefinitely.
+// here swallows its own failures. Non-cancellable calls (OS permission
+// checks, the Expo push-token fetch, the auth-header fetch) are bounded by
+// a race so a stall can't hang the caller forever. The state-mutating
+// register/unregister network calls get more than that: an AbortController
+// tied to the same timeout actually cancels the in-flight fetch, so a
+// caller that gave up waiting doesn't leave that request running to
+// complete later and silently undo whatever the caller did next -- notably,
+// AuthProvider's sign-out awaiting a timed-out registration and then
+// issuing its unregister DELETE, only for the abandoned PUT to land
+// afterward and re-associate the token with the account that just signed
+// out. A plain race (reject-on-timeout without cancelling) can't prevent
+// that; only actually aborting the request can.
 
 const PUSH_OPERATION_TIMEOUT_MS = 5000
 
@@ -20,6 +29,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new PushOperationTimeoutError('push operation timed out')), ms)
     promise.then(
+      (value) => { clearTimeout(timer); resolve(value) },
+      (reason) => { clearTimeout(timer); reject(reason) },
+    )
+  })
+}
+
+// Both aborts the underlying request (so a signal-respecting call, like
+// fetch, actually cancels the in-flight network request) and independently
+// races it (so this still settles even if the operation doesn't -- or
+// can't -- react to the abort promptly). Relying on abort() alone would
+// still hang here if `operation` ignored the signal.
+async function withAbortTimeout<T>(operation: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController()
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort()
+      reject(new PushOperationTimeoutError('push operation timed out'))
+    }, ms)
+    operation(controller.signal).then(
       (value) => { clearTimeout(timer); resolve(value) },
       (reason) => { clearTimeout(timer); reject(reason) },
     )
@@ -37,7 +65,11 @@ async function currentExpoPushToken(): Promise<string | null> {
 async function registerCurrentToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
   const token = await currentExpoPushToken()
   if (!token) return
-  await withTimeout(registerPushToken({ token, platform: Platform.OS }, await getAuthHeaders()), PUSH_OPERATION_TIMEOUT_MS)
+  const headers = await withTimeout(getAuthHeaders(), PUSH_OPERATION_TIMEOUT_MS)
+  await withAbortTimeout(
+    (signal) => registerPushToken({ token, platform: Platform.OS }, headers, signal),
+    PUSH_OPERATION_TIMEOUT_MS,
+  )
 }
 
 // Silent, non-prompting registration: only (re-)registers when the OS
@@ -93,7 +125,11 @@ export async function unregisterCurrentPushToken(getAuthHeaders: () => Promise<A
   try {
     const token = await currentExpoPushToken()
     if (!token) return
-    await withTimeout(unregisterPushToken(token, await getAuthHeaders()), PUSH_OPERATION_TIMEOUT_MS)
+    const headers = await withTimeout(getAuthHeaders(), PUSH_OPERATION_TIMEOUT_MS)
+    await withAbortTimeout(
+      (signal) => unregisterPushToken(token, headers, signal),
+      PUSH_OPERATION_TIMEOUT_MS,
+    )
   } catch {
     // Best-effort, and bounded by the timeout above -- sign-out and the
     // notification-settings toggle must not hang or fail just because the
