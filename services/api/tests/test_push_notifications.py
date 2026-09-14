@@ -36,8 +36,19 @@ def _profile(client: TestClient, subject: str, first_name: str, username: str) -
     return headers
 
 
+# `app.push_notifications.httpx` is the same module object as `httpx` itself
+# (module identity, not a copy), so patching "app.push_notifications.httpx.Client"
+# mutates httpx.Client process-wide -- including for unrelated httpx.Client()
+# construction elsewhere (e.g. create_app()'s WikimediaImageProvider). Always
+# wrap from this fixed reference, captured once before any test patches it,
+# rather than reading httpx.Client at call time: a test that calls this
+# helper more than once (or that calls create_app() after an earlier call in
+# the same test) would otherwise capture an already-wrapped Client and nest
+# wrappers, each injecting its own `transport=` kwarg into the next.
+_ORIGINAL_HTTPX_CLIENT = httpx.Client
+
+
 def _mock_push_client(monkeypatch, handler):
-    original_client = httpx.Client
     calls: list[list[dict]] = []
 
     def record_and_handle(request: httpx.Request) -> httpx.Response:
@@ -46,7 +57,7 @@ def _mock_push_client(monkeypatch, handler):
 
     monkeypatch.setattr(
         "app.push_notifications.httpx.Client",
-        lambda **kwargs: original_client(**kwargs, transport=httpx.MockTransport(record_and_handle)),
+        lambda **kwargs: _ORIGINAL_HTTPX_CLIENT(**kwargs, transport=httpx.MockTransport(record_and_handle)),
     )
     return calls
 
@@ -138,6 +149,38 @@ def test_device_not_registered_ticket_deletes_the_token(monkeypatch) -> None:
     with client.app.state.session_factory() as session:
         remaining = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[stale]")).all()
         assert remaining == []
+
+
+def test_malformed_expo_response_shapes_do_not_break_the_triggering_request(monkeypatch) -> None:
+    # Expo is a third-party response; a malformed/unexpected body must be
+    # skipped rather than raising past send_push_notifications -- the
+    # triggering request has already committed its own work by this point.
+    # One shared app/client for the whole test (created before any
+    # monkeypatching) -- see _mock_push_client's note on why constructing a
+    # second app under an active patch is unsafe.
+    client = TestClient(create_app())
+    for index, malformed_body in enumerate((
+        {"data": None},
+        {"data": [None]},
+        {"data": ["not-a-dict"]},
+        {"data": [{"status": "error", "details": None}]},
+        {"data": "not-a-list"},
+        "not-even-a-dict",
+    )):
+        alice = _profile(client, f"dev:push-malformed-alice-{index}", "Alice", f"pushmalformedalice{index}")
+        bob = _profile(client, f"dev:push-malformed-bob-{index}", "Bob", f"pushmalformedbob{index}")
+        bob_id = client.get("/api/v1/users", headers=alice, params={"q": f"pushmalformedbob{index}"}).json()[0]["id"]
+        client.put("/api/v1/me/push-tokens", headers=bob, json={"token": f"ExponentPushToken[malformed{index}]"})
+        _mock_push_client(monkeypatch, lambda request, body=malformed_body: httpx.Response(200, json=body))
+
+        response = client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+        assert response.status_code == 200, malformed_body
+        with client.app.state.session_factory() as session:
+            # A response this malformed can't be trusted to identify which
+            # token to prune, so the token is conservatively kept rather
+            # than guessed-deleted.
+            remaining = session.scalars(select(PushToken).where(PushToken.token == f"ExponentPushToken[malformed{index}]")).all()
+            assert len(remaining) == 1, malformed_body
 
 
 def test_push_delivery_failure_does_not_break_the_triggering_request(monkeypatch) -> None:

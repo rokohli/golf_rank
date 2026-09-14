@@ -12,7 +12,7 @@ import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { GetStartedScreen } from '../components/GetStartedScreen'
-import { registerPushTokenIfPermissionGranted, unregisterCurrentPushToken } from '../notifications/pushTokens'
+import { registerPushTokenIfPermissionGranted, requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
 import { buildAuthHeaders } from './useAuthToken'
 
@@ -26,6 +26,11 @@ type AuthGateActions = {
   profileImageUrl: string | null
   returnToGetStarted: () => boolean
   signOut: () => Promise<void>
+  // Explicit opt-in push registration (onboarding's Enable button,
+  // notification-settings' re-enable toggle) -- routes through the same
+  // in-flight-promise tracking sign-out awaits, so an explicit opt-in call
+  // is covered by the same race protection as the silent mount-time one.
+  registerPushToken: () => Promise<void>
   updateProfileImage: (file: string) => Promise<void>
   updateUserProfile: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
 }
@@ -35,6 +40,7 @@ const AuthGateContext = createContext<AuthGateActions>({
   profileImageUrl: null,
   returnToGetStarted: () => false,
   signOut: async () => undefined,
+  registerPushToken: async () => undefined,
   updateProfileImage: async () => undefined,
   updateUserProfile: async () => undefined,
 })
@@ -1267,6 +1273,17 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
           if (pendingRegistration.current) await pendingRegistration.current
           await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
           await signOut()
+        },
+        registerPushToken: () => {
+          // Track this explicit opt-in call in the same ref the mount-time
+          // silent registration uses, so sign-out's wait above covers this
+          // path too -- otherwise an untracked PUT here could complete after
+          // sign-out's DELETE and resurrect the token for the signed-out
+          // account, the same race the mount-effect registration is guarded
+          // against.
+          const promise = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+          pendingRegistration.current = promise
+          return promise
         },
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')

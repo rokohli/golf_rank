@@ -6,7 +6,7 @@ const mockGetProfile = jest.fn()
 const mockGetLinkedContactStatus = jest.fn()
 const mockSavePreferences = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
-const mockRequestAndRegisterPushToken = jest.fn()
+const mockRegisterPushToken = jest.fn()
 const mockUnregisterCurrentPushToken = jest.fn()
 const mockRouterBack = jest.fn()
 
@@ -42,8 +42,11 @@ jest.mock('../../src/auth/useAuthToken', () => ({
   useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
+jest.mock('../../src/auth/AuthProvider', () => ({
+  useAuthGate: () => ({ registerPushToken: (...args: unknown[]) => mockRegisterPushToken(...args) }),
+}))
+
 jest.mock('../../src/notifications/pushTokens', () => ({
-  requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
   unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
 }))
 
@@ -71,7 +74,7 @@ describe('NotificationSettings', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
-    expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+    expect(mockRegisterPushToken).toHaveBeenCalledTimes(1)
     expect(mockUnregisterCurrentPushToken).not.toHaveBeenCalled()
     expect(mockRouterBack).toHaveBeenCalledTimes(1)
   })
@@ -89,6 +92,6 @@ describe('NotificationSettings', () => {
 
     await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
     expect(mockUnregisterCurrentPushToken).toHaveBeenCalledTimes(1)
-    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })
 })

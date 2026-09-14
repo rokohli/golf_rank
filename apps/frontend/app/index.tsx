@@ -7,14 +7,13 @@ import { ApiResponseError, checkUsernameAvailable, followUser, getProfile, saveP
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { OnboardingForm } from '../src/components/OnboardingForm'
-import { requestAndRegisterPushToken } from '../src/notifications/pushTokens'
 import { colors } from '../src/ui/theme'
 
 type ProfileState = 'checking' | 'needs-onboarding' | 'error'
 
 export default function Index() {
   const router = useRouter()
-  const { returnToGetStarted, signOut, updateUserProfile, updateProfileImage } = useAuthGate()
+  const { returnToGetStarted, signOut, updateUserProfile, updateProfileImage, registerPushToken } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
   const [profileState, setProfileState] = useState<ProfileState>('checking')
 
@@ -76,8 +75,8 @@ export default function Index() {
   )
 
   const requestOnboardingPushPermission = useCallback(
-    () => { void requestAndRegisterPushToken(getAuthHeaders) },
-    [getAuthHeaders],
+    () => { void registerPushToken() },
+    [registerPushToken],
   )
 
   if (profileState === 'checking') {

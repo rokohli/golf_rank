@@ -140,11 +140,24 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
                 batch_tokens = message_tokens[start:start + _EXPO_BATCH_SIZE]
                 response = client.post(settings.expo_push_api_url, json=batch)
                 response.raise_for_status()
-                tickets = response.json().get("data", [])
+                payload = response.json()
+                # Expo is expected to return {"data": [ticket, ...]}, but this
+                # is a third-party response -- validate the shape explicitly
+                # rather than trusting it, so a malformed/unexpected body
+                # (e.g. {"data": null}, a non-dict ticket, "details": null)
+                # is skipped instead of raising past this delivery attempt,
+                # which every caller has already committed its own work
+                # before reaching.
+                tickets = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(tickets, list):
+                    continue
                 for ticket, token in zip(tickets, batch_tokens):
-                    if isinstance(ticket, dict) and ticket.get("details", {}).get("error") == "DeviceNotRegistered":
+                    if not isinstance(ticket, dict):
+                        continue
+                    details = ticket.get("details")
+                    if isinstance(details, dict) and details.get("error") == "DeviceNotRegistered":
                         invalid_tokens.add(token)
-    except (httpx.HTTPError, OSError, ValueError) as error:
+    except (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError) as error:
         logger.error("push_delivery_failed error_type=%s", type(error).__name__)
         return
 
