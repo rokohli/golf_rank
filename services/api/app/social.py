@@ -16,6 +16,7 @@ from .core.config import Settings
 from .db import get_session
 from .domain import (
     course_data,
+    lock_user_pair_transaction,
     preload_round_visibility,
     require_course,
     require_courses,
@@ -655,6 +656,7 @@ def follow_user(
         raise HTTPException(404, "User not found")
     if target_user_id in _blocked_ids(session, user.id):
         raise HTTPException(404, "User not found")
+    lock_user_pair_transaction(session, user.id, target_user_id)
     follow = session.scalar(select(Follow).where(Follow.follower_id == user.id, Follow.followed_id == target_user_id))
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
