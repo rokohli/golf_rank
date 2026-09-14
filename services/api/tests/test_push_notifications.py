@@ -4,7 +4,7 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session as OrmSession, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from app.core.config import Settings
@@ -85,6 +85,46 @@ def test_register_push_token_reassigns_ownership_on_reuse() -> None:
         rows = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[shared]")).all()
         assert len(rows) == 1
         assert rows[0].user_id != alice_user_id
+
+
+def test_register_push_token_retries_after_a_concurrent_registration_race(monkeypatch) -> None:
+    # Two overlapping requests for the same brand-new token can both observe
+    # existing is None and race to insert -- the unique constraint on token
+    # then rejects the loser's commit. Without a retry, that surfaced as an
+    # uncaught 500 and could leave the token owned by the "wrong" side of the
+    # race with no reassignment ever applied. Simulates the interleaving
+    # deterministically: intercept the endpoint's own existence check and
+    # have a second, genuinely separate session win the insert first.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-race-alice", "Alice", "pushracealice")
+    _profile(client, "dev:push-race-bob", "Bob", "pushracebob")
+    with client.app.state.session_factory() as setup_session:
+        alice_id = setup_session.scalar(select(User.id).where(User.provider_subject == "dev:push-race-alice"))
+        bob_id = setup_session.scalar(select(User.id).where(User.provider_subject == "dev:push-race-bob"))
+
+    original_scalar = OrmSession.scalar
+    intercepted = {"done": False}
+
+    def racy_scalar(self, statement, *args, **kwargs):
+        result = original_scalar(self, statement, *args, **kwargs)
+        if not intercepted["done"] and "push_tokens" in str(statement).lower() and result is None:
+            intercepted["done"] = True
+            with client.app.state.session_factory() as racer:
+                racer.add(PushToken(user_id=bob_id, token="ExponentPushToken[race]", platform="android"))
+                racer.commit()
+        return result
+
+    monkeypatch.setattr(OrmSession, "scalar", racy_scalar)
+
+    response = client.put("/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[race]"})
+    assert response.status_code == 204
+
+    with client.app.state.session_factory() as session:
+        rows = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[race]")).all()
+        # Exactly one row survives (no duplicate, no crash), reassigned to
+        # whichever request's retry ran last -- here, alice's original call.
+        assert len(rows) == 1
+        assert rows[0].user_id == alice_id
 
 
 def test_unregister_push_token_removes_only_the_callers_row() -> None:

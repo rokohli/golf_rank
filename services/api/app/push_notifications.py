@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
@@ -51,7 +51,19 @@ def register_push_token(
     existing = session.scalar(select(PushToken).where(PushToken.token == payload.token))
     if existing is None:
         session.add(PushToken(user_id=user.id, token=payload.token, platform=payload.platform))
-    else:
+        try:
+            session.commit()
+            return Response(status_code=204)
+        except IntegrityError:
+            # Lost a race with a concurrent registration of the same
+            # brand-new token (e.g. a retry racing the original request) --
+            # the other request's insert already landed on `token`'s unique
+            # constraint. Roll back and fall through to the reassign path
+            # below instead of 500ing a request that should just win or
+            # lose the same way the existing-token branch already does.
+            session.rollback()
+            existing = session.scalar(select(PushToken).where(PushToken.token == payload.token))
+    if existing is not None:
         # A device can be reused across accounts (sign out, sign back in as
         # someone else) -- reassign rather than reject, so the old owner
         # stops receiving pushes meant for the new one.
