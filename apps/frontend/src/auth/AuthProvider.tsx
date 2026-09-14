@@ -11,6 +11,7 @@ import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, u
 import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { getProfile } from '../api/client'
 import { GetStartedScreen } from '../components/GetStartedScreen'
 import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
@@ -1321,6 +1322,35 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
       router.replace('/')
     }
   }, [isLoaded, needsPhone, router])
+
+  // Runs here rather than only from app/index.tsx: Expo Router mounts a
+  // deep-linked target route (e.g. golfrank://course/1) directly as
+  // `children` below without ever passing through index.tsx, so a check
+  // that lived only there would leave a phone-verified, opted-in user who
+  // signs in from a deep link unregistered until some later flow happened
+  // to run it. This runs once per phone-verified sign-in regardless of
+  // which route mounts first -- the ref resets naturally on the next
+  // sign-in because ClerkUserControls itself unmounts on sign-out (see
+  // ClerkAuthGate's <Show when="signed-out"> below).
+  const hasCheckedPushRegistration = useRef(false)
+  useEffect(() => {
+    if (!isLoaded || needsPhone || hasCheckedPushRegistration.current) return
+    hasCheckedPushRegistration.current = true
+    void (async () => {
+      try {
+        // A brand-new, not-yet-onboarded account 404s here -- registration
+        // for that case only ever happens through onboarding's own
+        // explicit Enable tap, never from this check. Any other failure
+        // (network, etc.) is likewise silently skipped: push registration
+        // is a background nicety, never something that should block or
+        // error the authenticated shell.
+        const profile = await getProfile(await buildAuthHeaders(getToken))
+        if (profile.onboarding_data?.notifications === true) void registerPushToken()
+      } catch {
+        // See above.
+      }
+    })()
+  }, [isLoaded, needsPhone, getToken, registerPushToken])
 
   return (
     <AuthGateContext.Provider

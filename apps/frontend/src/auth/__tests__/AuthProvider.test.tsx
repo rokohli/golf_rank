@@ -17,6 +17,7 @@ const mockReadAsStringAsync = jest.fn()
 const mockSignOut = jest.fn()
 const mockRequestAndRegisterPushToken = jest.fn()
 const mockUnregisterCurrentPushToken = jest.fn()
+const mockGetProfile = jest.fn().mockRejectedValue(new Error('not onboarded'))
 let mockUrlListener: ((event: { url: string }) => void) | null = null
 let mockUser: {
   firstName: string
@@ -30,7 +31,12 @@ jest.mock('@clerk/expo', () => ({
   ClerkProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Show: ({ children, when }: { children: React.ReactNode; when: string }) =>
     when === (mockUser ? 'signed-in' : 'signed-out') ? <>{children}</> : null,
-  useAuth: () => ({ signOut: mockSignOut, getToken: jest.fn() }),
+  // Resolves to a real token: ClerkUserControls' own registration check
+  // calls buildAuthHeaders(getToken) directly (not mocked away, unlike
+  // requestAndRegisterPushToken/unregisterCurrentPushToken below), and
+  // buildAuthHeaders throws "Sign in required" on a falsy token -- an
+  // unconfigured jest.fn() here would make getProfile silently unreachable.
+  useAuth: () => ({ signOut: mockSignOut, getToken: jest.fn().mockResolvedValue('test-clerk-token') }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
   useUser: () => ({ isLoaded: true, isSignedIn: mockUser !== null, user: mockUser }),
 }))
@@ -38,6 +44,10 @@ jest.mock('@clerk/expo', () => ({
 jest.mock('../../notifications/pushTokens', () => ({
   requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
   unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
+}))
+
+jest.mock('../../api/client', () => ({
+  getProfile: (...args: unknown[]) => mockGetProfile(...args),
 }))
 
 jest.mock('expo-file-system', () => ({
@@ -116,6 +126,11 @@ describe('AuthProvider', () => {
     mockUrlListener = null
     mockUser = null
     jest.clearAllMocks()
+    // Default: no saved preference on record (a brand-new/not-yet-onboarded
+    // account 404s the same way) -- ClerkUserControls' own registration
+    // check silently no-ops on this, matching production. Tests below that
+    // care about the check override it explicitly.
+    mockGetProfile.mockRejectedValue(new Error('not onboarded'))
   })
 
   it('converts a picked local file to a base64 data URI before handing it to Clerk', async () => {
@@ -408,6 +423,84 @@ describe('AuthProvider', () => {
     // stuck refusing every future call.
     fireEvent.press(screen.getByText('Register'))
     await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
+  it('registers this device for a phone-verified, opted-in user even when the mounted route is not app/index.tsx', async () => {
+    // Regression test: Expo Router mounts a deep-linked target route
+    // directly as `children` without ever passing through index.tsx, so a
+    // registration check that only lived there would leave a signed-in,
+    // opted-in user unregistered. This must run from the authenticated
+    // shell itself regardless of which route is mounted.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    render(
+      <AuthProvider>
+        <Text>Some deep-linked screen, not index.tsx</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not register when the saved preference is not an explicit true', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: false } })
+
+    render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(1))
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('checks the saved preference only once per sign-in, not on every re-render', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    const { rerender } = render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(1))
+
+    rerender(
+      <AuthProvider>
+        <Text>Screen, re-rendered</Text>
+      </AuthProvider>,
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockGetProfile).toHaveBeenCalledTimes(1)
   })
 
   it('does not support admin-development as a no-Clerk auth mode', () => {

@@ -20,18 +20,11 @@ export default function Index() {
   const checkSavedProfile = useCallback(async () => {
     setProfileState('checking')
     try {
-      const profile = await getProfile(await getAuthHeaders())
-      // Only a returning, already-onboarded account reaches here (a
-      // brand-new account 404s below, into 'needs-onboarding', and never
-      // registers until its own explicit Enable tap) -- and only on an
-      // explicit `true`, not merely "not false". `notifications` is
-      // `boolean | null`: a legacy account whose saved preference predates
-      // this field, or otherwise has never made a push choice, is `null`
-      // here -- the backend's own notifications_enabled() treats that as
-      // enabled for the in-app inbox (a passive default), but push is an
-      // active OS-level prompt/registration that must not fire without an
-      // account-level choice actually on record.
-      if (profile.onboarding_data?.notifications === true) void registerPushToken()
+      // Push registration for a returning, opted-in user is handled once
+      // per sign-in by AuthProvider's ClerkUserControls (covers every
+      // signed-in route, not just this one -- see its own comment) --
+      // this call is only for onboarding-state routing.
+      await getProfile(await getAuthHeaders())
       router.replace('/home')
     } catch (reason) {
       if (reason instanceof ApiResponseError && reason.status === 404) {
@@ -40,7 +33,7 @@ export default function Index() {
       }
       setProfileState('error')
     }
-  }, [getAuthHeaders, registerPushToken, router])
+  }, [getAuthHeaders, router])
 
   useEffect(() => {
     void checkSavedProfile()
