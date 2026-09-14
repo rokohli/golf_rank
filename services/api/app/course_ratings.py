@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .core.auth import CurrentUser, current_user
+from .core.auth import CurrentUser, current_user, get_settings
+from .core.config import Settings
 from .db import get_session
 from .domain import course_data, course_identity_ids, require_course, require_user, round_image_data, stored_user
 from .models import (
@@ -19,6 +20,7 @@ from .models import (
     User,
     UserCourseRating,
 )
+from .push_notifications import send_push_notifications
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 from .rounds import _companion_blocked_ids, _event_data, _notify_tagged_companions, _owner_blocked_ids, _refresh_course_state
 from .schemas import (
@@ -438,6 +440,7 @@ def patch_rating_details(
     payload: RatingDetailsPatch,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> CourseRatingStateOut:
     course = require_course(session, course_id)
     course_id = course.id
@@ -493,9 +496,10 @@ def patch_rating_details(
         [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
         + [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
     )
-    _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
+    created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
     _record_rating_event(session, user.id, round_, rating, create=False)
     session.flush()
     result = _state(session, course, user.id)
     session.commit()
+    send_push_notifications(session, settings, created)
     return result

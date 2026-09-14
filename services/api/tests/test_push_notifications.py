@@ -161,6 +161,34 @@ def test_push_delivery_failure_does_not_break_the_triggering_request(monkeypatch
         assert len(remaining) == 1
 
 
+def test_tagging_a_companion_via_rating_details_sends_a_push(monkeypatch) -> None:
+    # patch_rating_details (services/api/app/course_ratings.py) is a second,
+    # separate entry point into _notify_tagged_companions besides
+    # create_round/update_round -- it must dispatch push the same way they do.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-details-alice", "Alice", "pushdetailsalice")
+    bob = _profile(client, "dev:push-details-bob", "Bob", "pushdetailsbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushdetailsbob"}).json()[0]["id"]
+    # Registers no token yet, so this unmocked follow has nothing to push to
+    # (and can't accidentally prune a fake token via a real Expo response).
+    client.put(f"/api/v1/me/follows/{bob_id}", headers=alice)
+    assert client.put(
+        "/api/v1/me/course-ratings/1", headers=alice, json={"tier": "green", "played_on": "2026-07-01", "score": None}
+    ).status_code == 200
+
+    calls = _mock_push_client(monkeypatch, lambda request: _ok_response())
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[details-bob]"})
+    response = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=alice,
+        json={"friend_user_ids": [bob_id], "guest_names": [], "visibility": "friends"},
+    )
+    assert response.status_code == 200
+    assert len(calls) == 1
+    [batch] = calls
+    assert batch == [{"to": "ExponentPushToken[details-bob]", "sound": "default", "body": "Alice Golfer tagged you in a round"}]
+
+
 def test_disabling_notifications_prevents_push(monkeypatch) -> None:
     client = TestClient(create_app())
     alice = _profile(client, "dev:push-disabled-alice", "Alice", "pushdisabledalice")
