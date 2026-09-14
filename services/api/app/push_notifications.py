@@ -1,4 +1,5 @@
 import logging
+import threading
 from collections import defaultdict
 from collections.abc import Sequence
 
@@ -19,6 +20,26 @@ from .models import AppNotification, OnboardingPreference, Profile, PushToken, U
 logger = logging.getLogger("fairway.push")
 
 router = APIRouter(tags=["push"])
+
+# Bounds concurrent Expo delivery attempts from the request process, mirroring
+# course_photo_scoring_job.py's _scoring_slots: BackgroundTasks for a sync
+# callable still runs on Starlette's shared AnyIO worker threadpool -- the
+# same one sync route handlers use -- so an unbounded number of concurrent
+# deliveries could still exhaust it during an Expo slowdown even though
+# delivery no longer runs on the *triggering* request's own thread. Acquired
+# non-blocking: there is no retry/queue for a skipped push (matches this
+# feature's existing best-effort framing), so a batch that can't get a slot
+# is simply dropped rather than queuing threads behind a slow outbound call.
+_delivery_slots: threading.Semaphore | None = None
+_delivery_slots_lock = threading.Lock()
+
+
+def _slots(settings: Settings) -> threading.Semaphore:
+    global _delivery_slots
+    with _delivery_slots_lock:
+        if _delivery_slots is None:
+            _delivery_slots = threading.Semaphore(settings.push_delivery_max_concurrent)
+        return _delivery_slots
 
 # Deliberately generic per notification_type: never derived from a private
 # note, round detail, or other content the recipient hasn't already made
@@ -215,21 +236,35 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
 def run_push_delivery_task(app, notification_ids: Sequence[int]) -> None:
     """BackgroundTask entry point (mirrors run_scoring_task in
     course_photo_scoring_job.py). Opens its own session -- the request's
-    session is closed by the time a background task runs -- and, more to
-    the point, runs off the request-serving worker thread entirely: the
-    synchronous Expo POST inside send_push_notifications can take up to
-    expo_push_timeout_seconds per batch, and every notification-generating
-    endpoint used to eat that cost inline. Under an Expo slowdown, enough
-    concurrent notification writes could exhaust Starlette's sync-worker
-    threadpool and stall unrelated requests even after the DB connection
-    fix. Re-fetches by ID rather than reusing the caller's ORM objects,
-    since those belong to a session that's gone by the time this runs.
+    session is closed by the time a background task runs -- so delivery no
+    longer holds up the *triggering* request's own response.
+
+    That alone isn't enough: BackgroundTasks for a sync callable still runs
+    on Starlette's shared AnyIO worker threadpool, the same one sync route
+    handlers use to run at all. Enough concurrent notification writes could
+    still exhaust that shared pool during an Expo slowdown and stall
+    unrelated requests, even though none of them are individually blocked
+    waiting on this one. The non-blocking semaphore below bounds how many
+    deliveries can occupy that pool at once; anything past the bound is
+    dropped rather than queued, matching this feature's existing
+    best-effort, no-retry framing.
+
+    Re-fetches notifications by ID rather than reusing the caller's ORM
+    objects, since those belong to a session that's gone by the time this
+    runs.
     """
     if not notification_ids:
         return
     settings = app.state.settings
-    with app.state.session_factory() as session:
-        notifications = session.scalars(
-            select(AppNotification).where(AppNotification.id.in_(notification_ids))
-        ).all()
-        send_push_notifications(session, settings, notifications)
+    slots = _slots(settings)
+    if not slots.acquire(blocking=False):
+        logger.info("push_delivery_deferred notification_count=%s reason=busy", len(notification_ids))
+        return
+    try:
+        with app.state.session_factory() as session:
+            notifications = session.scalars(
+                select(AppNotification).where(AppNotification.id.in_(notification_ids))
+            ).all()
+            send_push_notifications(session, settings, notifications)
+    finally:
+        slots.release()

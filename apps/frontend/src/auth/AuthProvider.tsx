@@ -1252,6 +1252,15 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // after sign-out's DELETE and resurrect the token anyway. Self-pruning:
   // each promise removes itself once settled.
   const pendingRegistrations = useRef<Set<Promise<void>>>(new Set())
+  // Set synchronously as the very first thing sign-out does, before any
+  // await -- Promise.all(pendingRegistrations.current) below only awaits
+  // whatever was already in the Set at the moment it's called; it can never
+  // observe a registration that starts afterward (or is mid-flight through
+  // registerPushToken's own synchronous prologue right as sign-out begins).
+  // This flag closes that gap at the source instead: once sign-out has
+  // started, registerPushToken refuses to start a new PUT at all, so
+  // nothing can land after the DELETE and resurrect the token.
+  const isSigningOut = useRef(false)
 
   // Memoized: this is exposed through useAuthGate() and consumers (e.g.
   // app/index.tsx's checkSavedProfile) depend on it in their own
@@ -1259,6 +1268,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // render would make every such dependency array "change" every render too,
   // re-running those effects in an infinite loop.
   const registerPushToken = useCallback(() => {
+    if (isSigningOut.current) return Promise.resolve()
     // Track this explicit opt-in call, so sign-out's wait below covers this
     // path too -- otherwise an untracked PUT here could complete after
     // sign-out's DELETE and resurrect the token for the signed-out account.
@@ -1276,6 +1286,8 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // get the same push cleanup or a push-enabled account that never
   // verifies its phone keeps a live token after signing out here.
   const signOutWithPushCleanup = useCallback(async () => {
+    // Synchronous and first: see the comment on isSigningOut above.
+    isSigningOut.current = true
     if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
     await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
     await signOut()

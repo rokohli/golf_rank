@@ -311,6 +311,58 @@ describe('AuthProvider', () => {
     expect(callOrder).toEqual(['second-resolved', 'first-resolved', 'unregister', 'signOut'])
   })
 
+  it('refuses to start a new registration once sign-out has begun, even before the DELETE lands', async () => {
+    // Promise.all(pendingRegistrations.current) inside sign-out only awaits
+    // whatever was already in the Set at the moment it's called -- it can
+    // never observe a registration that starts afterward. Relying on that
+    // alone would let a registerPushToken() call that begins while sign-out
+    // is still in flight (e.g. mid-DELETE) issue an untracked PUT that
+    // lands after sign-out finishes and resurrects the token.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    let resolveUnregister: () => void = () => undefined
+    mockUnregisterCurrentPushToken.mockImplementation(() => new Promise<void>((resolve) => { resolveUnregister = resolve }))
+    mockSignOut.mockResolvedValue(undefined)
+
+    function SignOutThenRegisterProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void signOut()}>
+            <Text>Sign out</Text>
+          </Pressable>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutThenRegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    // Sign-out is now in flight, blocked on the held-open unregister call.
+    fireEvent.press(screen.getByText('Register'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+
+    resolveUnregister()
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 

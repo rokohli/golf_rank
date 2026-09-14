@@ -7,6 +7,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session as OrmSession, sessionmaker
 from sqlalchemy.pool import QueuePool
 
+from app import push_notifications as push_notifications_module
 from app.core.config import Settings
 from app.main import create_app
 from app.models import AppNotification, Base, PushToken, User
@@ -192,6 +193,43 @@ def test_follow_notification_delivery_is_scheduled_as_a_background_task_not_call
         assert notification.recipient_user_id == session.scalar(
             select(User.id).where(User.provider_subject == "dev:push-bgtask-bob")
         )
+
+
+def test_delivery_is_skipped_not_queued_when_the_concurrency_bound_is_exhausted(monkeypatch) -> None:
+    # BackgroundTasks for a sync callable still runs on Starlette's shared
+    # worker threadpool -- the same one sync route handlers use -- so
+    # unbounded concurrent deliveries could still exhaust it during an Expo
+    # slowdown even though delivery is off any single triggering request's
+    # own thread. The non-blocking semaphore bounds that: exhausted means
+    # dropped, never queued behind a slow outbound call.
+    client = TestClient(create_app())
+    alice = _profile(client, "dev:push-slots-alice", "Alice", "pushslotsalice")
+    bob = _profile(client, "dev:push-slots-bob", "Bob", "pushslotsbob")
+    bob_id = client.get("/api/v1/users", headers=alice, params={"q": "pushslotsbob"}).json()[0]["id"]
+    client.put("/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[slots]"})
+
+    calls = _mock_push_client(monkeypatch, lambda request: _ok_response())
+
+    settings = client.app.state.settings
+    slots = push_notifications_module._slots(settings)
+    held = [slots.acquire(blocking=False) for _ in range(settings.push_delivery_max_concurrent)]
+    assert all(held), "test assumes a fresh semaphore -- run this file in isolation if it fails"
+    try:
+        assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+        assert calls == []
+    finally:
+        for _ in held:
+            slots.release()
+
+    # Confirms the drop was really about the bound, not something broken:
+    # with slots free again, a *fresh* notification (a new pair -- the
+    # dropped follow above still created its row, so re-following bob would
+    # hit the existing dedup check and create nothing new) delivers normally.
+    carol = _profile(client, "dev:push-slots-carol", "Carol", "pushslotscarol")
+    client.put("/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[slots-alice]"})
+    alice_id = client.get("/api/v1/users", headers=carol, params={"q": "pushslotsalice"}).json()[0]["id"]
+    assert client.put(f"/api/v1/me/follows/{alice_id}", headers=carol).status_code == 200
+    assert len(calls) == 1
 
 
 def test_follow_notification_sends_exactly_one_push_and_no_second_on_refollow(monkeypatch) -> None:
