@@ -2,10 +2,14 @@ import json
 
 import httpx
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
 
+from app.core.config import Settings
 from app.main import create_app
-from app.models import PushToken
+from app.models import AppNotification, Base, PushToken, User
+from app.push_notifications import send_push_notifications
 
 
 def _profile(client: TestClient, subject: str, first_name: str, username: str) -> dict[str, str]:
@@ -159,6 +163,48 @@ def test_push_delivery_failure_does_not_break_the_triggering_request(monkeypatch
         # A transport failure can't tell which tokens are bad, so nothing is deleted.
         remaining = session.scalars(select(PushToken).where(PushToken.token == "ExponentPushToken[fail]")).all()
         assert len(remaining) == 1
+
+
+def test_send_push_notifications_releases_the_db_connection_before_contacting_expo(tmp_path, monkeypatch) -> None:
+    # A StaticPool in-memory SQLite engine (used by TestClient(create_app()))
+    # always hands back the same single connection, so it can't demonstrate
+    # real pool checkout/checkin behavior. A file-backed engine with a real
+    # QueuePool can: if the connection used for the token/name lookups is
+    # still checked out while httpx.Client blocks on Expo, engine.pool
+    # reports it, proving the fix (a mid-function session.commit()) actually
+    # releases it back to the pool before the outbound call.
+    engine = create_engine(f"sqlite:///{tmp_path / 'push.db'}", poolclass=QueuePool, pool_size=1, max_overflow=0)
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    with session_factory() as setup_session:
+        actor = User(provider_subject="dev:pool-actor")
+        recipient = User(provider_subject="dev:pool-recipient")
+        setup_session.add_all([actor, recipient])
+        setup_session.flush()
+        setup_session.add(PushToken(user_id=recipient.id, token="ExponentPushToken[pool]"))
+        setup_session.commit()
+        actor_id, recipient_id = actor.id, recipient.id
+
+    checked_out_during_call: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        checked_out_during_call.append(engine.pool.checkedout())
+        return httpx.Response(200, json={"data": [{"status": "ok"}]})
+
+    original_client = httpx.Client
+    monkeypatch.setattr(
+        "app.push_notifications.httpx.Client",
+        lambda **kwargs: original_client(**kwargs, transport=httpx.MockTransport(handler)),
+    )
+
+    with session_factory() as session:
+        notification = AppNotification(recipient_user_id=recipient_id, actor_user_id=actor_id, notification_type="followed_you")
+        session.add(notification)
+        session.commit()
+        send_push_notifications(session, Settings(), [notification])
+
+    assert checked_out_during_call == [0]
 
 
 def test_tagging_a_companion_via_rating_details_sends_a_push(monkeypatch) -> None:

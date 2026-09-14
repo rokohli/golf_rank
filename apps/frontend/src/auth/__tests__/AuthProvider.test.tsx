@@ -189,6 +189,54 @@ describe('AuthProvider', () => {
     expect(callOrder).toEqual(['unregister', 'signOut'])
   })
 
+  it('waits for an in-flight push registration before unregistering, so a slow PUT cannot land after sign-out and revive the token', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    let resolveRegistration: () => void = () => undefined
+    mockRequestAndRegisterPushToken.mockImplementation(
+      () => new Promise<void>((resolve) => { resolveRegistration = () => { callOrder.push('registration-resolved'); resolve() } }),
+    )
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function SignOutProbe() {
+      const { signOut } = useAuthGate()
+      return (
+        <Pressable onPress={() => void signOut()}>
+          <Text>Sign out</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutProbe />
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+
+    // Sign out while registration is still in flight -- without the fix,
+    // unregister/signOut would run immediately here, and the registration
+    // promise resolving afterward would re-create the token server-side.
+    fireEvent.press(screen.getByText('Sign out'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual([])
+
+    resolveRegistration()
+
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(callOrder).toEqual(['registration-resolved', 'unregister', 'signOut'])
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 

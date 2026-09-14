@@ -1216,6 +1216,12 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // and router.replace('/') even for users who already verified a phone.
   const needsPhone = Boolean(isLoaded && user && !hasVerifiedPhone(user))
   const wasPhoneGated = useRef(false)
+  // Tracks the in-flight registration PUT so sign-out can wait for it before
+  // issuing its unregister DELETE. Without this, a slow registration request
+  // can resolve after sign-out's DELETE and re-create/reassign the token to
+  // the account that just signed out -- that account would then keep
+  // receiving pushes meant for whoever signs in next on this device.
+  const pendingRegistration = useRef<Promise<void> | null>(null)
 
   // Registers this device's Expo push token once the user is fully signed in
   // (not still phone-gated). Always registers regardless of the in-app
@@ -1224,7 +1230,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // notifications back on doesn't require a fresh app open to take effect.
   useEffect(() => {
     if (!isLoaded || !user || needsPhone) return
-    void requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+    pendingRegistration.current = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
   }, [getToken, isLoaded, needsPhone, user])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
@@ -1250,7 +1256,10 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
         signOut: async () => {
-          // Best-effort: an unregister failure must never block sign-out.
+          // Wait for any in-flight registration before unregistering, so a
+          // slow PUT can never land after (and undo) this DELETE. Both calls
+          // are best-effort internally -- neither failure blocks sign-out.
+          if (pendingRegistration.current) await pendingRegistration.current
           await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
           await signOut()
         },

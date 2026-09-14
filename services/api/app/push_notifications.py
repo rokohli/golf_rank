@@ -126,6 +126,12 @@ def send_push_notifications(session: Session, settings: Settings, notifications:
     if not messages:
         return
 
+    # All data needed for delivery is now in plain Python values above --
+    # release this connection back to the pool before the synchronous,
+    # potentially multi-second Expo call, rather than holding it for the
+    # duration of an outbound network request. (Read-only: nothing to lose.)
+    session.commit()
+
     invalid_tokens: set[str] = set()
     try:
         with httpx.Client(timeout=settings.expo_push_timeout_seconds) as client:

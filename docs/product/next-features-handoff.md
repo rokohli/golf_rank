@@ -8,12 +8,11 @@ The next work should harden the real product flows before adding broad new surfa
 
 ## Recommended implementation order
 
-Round/course photos and Friends' thoughts on course pages (previously items 3–4 here) are done — see sections 5 and 6.
+Round/course photos, Friends' thoughts on course pages, and push notification delivery (previously items 3–5 here) are done — see sections 5, 6, and 7.
 
 1. Finish API security operations, especially limiter and unusual-traffic alerting.
 2. Add the AI planning layer with strict factual guardrails.
-3. Add push delivery on top of the existing in-app notification inbox.
-4. Add EAS distribution, monitoring, and a separate production environment.
+3. Add EAS distribution, monitoring, and a separate production environment.
 
 ## 1. Canonical course identity and presentation
 
@@ -293,25 +292,24 @@ No further work identified here.
 
 `app_notifications` (migration `0016`, extended by `0029` with a round-scoped `subject_id`) persists `followed_you`, `mutual_follow`, `reacted_to_round`, `tagged_in_round`, and `contact_joined` events, deduped per actor/type (and per actor/type/round for round-scoped types). `services/api/app/social.py` writes these on follow, mutual-follow, round reaction, and round-tag actions, and `apps/frontend/app/notifications.tsx` renders the inbox, routing round-backed notifications (`reacted_to_round`) to the round. `tagged_in_round` is recorded but intentionally not round-navigable from the notification itself — see the `round_navigable_types` comment in `social.py`.
 
-### Problem
+### Push delivery, implemented
 
-There is still no push delivery: no Expo push token registration, and the single `notifications` boolean in onboarding preferences (`apps/frontend/app/notification-settings.tsx`) is not split by category. Onboarding still should not promise nearby-friend, bucket-list availability, or AI trip notifications, since none of those exist.
+`push_tokens` (migration `0030`) stores per-device Expo push tokens. `PUT`/`DELETE /api/v1/me/push-tokens` (`services/api/app/push_notifications.py`) register/reassign/unregister a token; `send_push_notifications` sends a push for every notification actually inserted at each of the four creation sites (`follow_user`/`_notify_mutual_follow`, `add_reaction`/`_notify_reaction`, round create/update and rating-details tagging via `_notify_tagged_companions`, `notify_linked_contacts`) — piggybacking on their existing per-type dedup checks, so delivery is naturally idempotent without a separate delivery-record table. A `DeviceNotRegistered` ticket from Expo prunes the stale token; any other delivery failure is logged and swallowed. `apps/frontend/src/notifications/pushTokens.ts` requests permission and registers/unregisters the device token, wired into `AuthProvider` (register on sign-in, unregister on sign-out) and the notification-settings toggle (register on enable, unregister on disable).
 
-### Scope
+### Remaining
 
-- Register and revoke Expo push tokens per installation.
-- Split notification preferences by category (the in-app event types above already give a natural category boundary).
-- Send pushes for the events already recorded in-app: follow activity, reactions, round tags, and (once shipped) completed AI plans.
-- Add idempotent delivery records, retries, expiry handling, and token invalidation.
+- The single `notifications` boolean in onboarding preferences (`apps/frontend/app/notification-settings.tsx`) is not split by category — every event type sends if the one toggle is on.
+- No explicit retry/backoff for a failed Expo delivery attempt beyond Expo's own ticket semantics; a transient failure is logged and dropped rather than retried.
+- No quiet hours.
+- Onboarding still should not promise nearby-friend, bucket-list availability, or AI trip notifications, since none of those exist.
 - Treat tee-time availability as a separate integration. Until a licensed/current provider exists, use official tee-time deep links and never claim availability.
-- Add quiet hours only after push delivery is reliable; the notification inbox itself is already built.
 
 ### Acceptance criteria
 
-- Turning notifications off prevents new sends.
-- Duplicate jobs do not produce duplicate pushes.
-- Invalid tokens are disabled safely.
-- Notification payloads contain no private notes or sensitive profile data.
+- Turning notifications off prevents new sends. ✅
+- Duplicate jobs do not produce duplicate pushes. ✅
+- Invalid tokens are disabled safely. ✅
+- Notification payloads contain no private notes or sensitive profile data. ✅
 
 ## 8. Distribution and operational readiness
 
