@@ -15,7 +15,7 @@ import { getProfile } from '../api/client'
 import { GetStartedScreen } from '../components/GetStartedScreen'
 import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
-import { buildAuthHeaders } from './useAuthToken'
+import { ApiHeaders, buildAuthHeaders } from './useAuthToken'
 
 const ssoRedirectScheme = 'golfrank'
 const ssoRedirectPath = 'sso-callback'
@@ -60,6 +60,50 @@ function userInitials(user: { firstName?: string | null; lastName?: string | nul
   return name.split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR'
 }
 
+// Shared by ClerkUserControls and DevelopmentAuthGate: checks a returning,
+// signed-in user's persisted notifications preference once and registers
+// the device if it's an explicit `true`. Each caller's own startup effect
+// only covers a first mount through its own gate -- without this running
+// in BOTH, a returning user in whichever mode lacks it stays unregistered
+// on every fresh app launch until they happen to revisit notification
+// settings, since nothing else ever calls registerPushToken() on its own.
+function useStartupPushRegistrationCheck(
+  ready: boolean,
+  getAuthHeadersForCheck: () => Promise<ApiHeaders>,
+  registerPushToken: () => Promise<void>,
+) {
+  const hasChecked = useRef(false)
+  useEffect(() => {
+    if (!ready || hasChecked.current) return
+    void (async () => {
+      // Bounded retry (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts): the
+      // flag above is only set to true once an attempt actually resolves
+      // (success or exhausted retries), never before the first attempt --
+      // marking it complete up front meant a single transient failure (a
+      // network blip on app open) permanently blocked registration for the
+      // rest of the session, since there's no other trigger to recheck
+      // once this effect's own deps stop changing.
+      for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
+        try {
+          const profile = await getProfile(await getAuthHeadersForCheck())
+          hasChecked.current = true
+          // A brand-new, not-yet-onboarded account 404s on every attempt --
+          // registration for that case only ever happens through
+          // onboarding's own explicit Enable tap, never from this check.
+          if (profile.onboarding_data?.notifications === true) void registerPushToken()
+          return
+        } catch {
+          if (attempt === PROFILE_CHECK_ATTEMPTS) {
+            hasChecked.current = true
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+        }
+      }
+    })()
+  }, [ready, getAuthHeadersForCheck, registerPushToken])
+}
+
 function DevelopmentAuthGate({ children }: { children: ReactNode }) {
   // Without this provider, useAuthGate() falls through to AuthGateContext's
   // default value -- registerPushToken there is a silent no-op -- so
@@ -69,10 +113,16 @@ function DevelopmentAuthGate({ children }: { children: ReactNode }) {
   // on-device workflow (no Clerk account needed), so push delivery must be
   // exercisable here too. getToken is unused: buildAuthHeaders returns the
   // X-Development-Subject header directly in this mode without calling it.
+  const getAuthHeadersForCheck = useCallback(() => buildAuthHeaders(async () => null), [])
   const registerPushToken = useCallback(
-    () => requestAndRegisterPushToken(() => buildAuthHeaders(async () => null)),
-    [],
+    () => requestAndRegisterPushToken(getAuthHeadersForCheck),
+    [getAuthHeadersForCheck],
   )
+  // A returning user (notifications already true on record from a prior
+  // onboarding Enable tap or notification-settings save) must not stay
+  // unregistered on every fresh app launch just because development mode
+  // has no equivalent of ClerkUserControls' own startup check.
+  useStartupPushRegistrationCheck(true, getAuthHeadersForCheck, registerPushToken)
   return (
     <AuthGateContext.Provider
       value={{
@@ -1363,36 +1413,8 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // which route mounts first -- the ref resets naturally on the next
   // sign-in because ClerkUserControls itself unmounts on sign-out (see
   // ClerkAuthGate's <Show when="signed-out"> below).
-  const hasCheckedPushRegistration = useRef(false)
-  useEffect(() => {
-    if (!isLoaded || needsPhone || hasCheckedPushRegistration.current) return
-    void (async () => {
-      // Bounded retry (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts): the
-      // flag above is only set to true once an attempt actually resolves
-      // (success or exhausted retries), never before the first attempt --
-      // marking it complete up front meant a single transient failure (a
-      // network blip on app open) permanently blocked registration for the
-      // rest of the session, since there's no other trigger to recheck
-      // once this effect's own deps stop changing.
-      for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
-        try {
-          const profile = await getProfile(await buildAuthHeaders(getToken))
-          hasCheckedPushRegistration.current = true
-          // A brand-new, not-yet-onboarded account 404s on every attempt --
-          // registration for that case only ever happens through
-          // onboarding's own explicit Enable tap, never from this check.
-          if (profile.onboarding_data?.notifications === true) void registerPushToken()
-          return
-        } catch {
-          if (attempt === PROFILE_CHECK_ATTEMPTS) {
-            hasCheckedPushRegistration.current = true
-            return
-          }
-          await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
-        }
-      }
-    })()
-  }, [isLoaded, needsPhone, getToken, registerPushToken])
+  const getAuthHeadersForCheck = useCallback(() => buildAuthHeaders(getToken), [getToken])
+  useStartupPushRegistrationCheck(isLoaded && !needsPhone, getAuthHeadersForCheck, registerPushToken)
 
   return (
     <AuthGateContext.Provider

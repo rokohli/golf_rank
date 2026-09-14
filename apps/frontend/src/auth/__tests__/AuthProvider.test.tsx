@@ -596,6 +596,25 @@ describe('AuthProvider', () => {
     await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
   })
 
+  it('registers a returning development-mode user on startup, without any explicit action', async () => {
+    // Regression test: the registerPushToken action above only fires on an
+    // explicit user action (onboarding's Enable tap, notification-settings
+    // save) -- ClerkUserControls has its own startup check for a returning,
+    // already-opted-in user, but DevelopmentAuthGate had no equivalent, so
+    // a returning dev-mode user with notifications already true on record
+    // stayed unregistered on every fresh app launch.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
   it('shows the premium get started screen before Clerk auth for signed-out users', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
     process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'

@@ -116,6 +116,12 @@ describe('NotificationSettings', () => {
     await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
     expect(mockRegisterPushToken).not.toHaveBeenCalled()
     expect(mockUnregisterCurrentPushToken).not.toHaveBeenCalled()
+    // Regression test: skipping registration this session isn't enough --
+    // persisting `true` (enabled's display default for null) would read as
+    // explicit consent on the NEXT app mount and silently trigger
+    // registration there instead. The untouched null preference must be
+    // written back unchanged.
+    expect(mockSavePreferences.mock.calls[0][0].onboarding_data.notifications).toBeNull()
   })
 
   it('unregisters the push token when the user disables notifications', async () => {
