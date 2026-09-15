@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from .models import (
     User,
     UserCourseRating,
 )
+from .push_notifications import run_push_delivery_task
 from .ranking import _lock_user_for_ranking_update, _stage_snapshot
 from .rounds import _companion_blocked_ids, _event_data, _notify_tagged_companions, _owner_blocked_ids, _refresh_course_state
 from .schemas import (
@@ -436,6 +437,8 @@ def put_course_rating(
 def patch_rating_details(
     course_id: int,
     payload: RatingDetailsPatch,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> CourseRatingStateOut:
@@ -493,9 +496,11 @@ def patch_rating_details(
         [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
         + [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
     )
-    _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
+    created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
     _record_rating_event(session, user.id, round_, rating, create=False)
     session.flush()
     result = _state(session, course, user.id)
     session.commit()
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return result

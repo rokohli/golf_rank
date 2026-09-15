@@ -65,6 +65,11 @@ type OnboardingFormProps = {
   linkContacts?: (identifiers: string[]) => Promise<void>
   searchUsers?: (query: string) => Promise<UserSearchResult[]>
   followUser?: (userId: number) => Promise<void>
+  // Called when the user taps Enable on the notifications step -- the one
+  // explicit in-app moment the native permission prompt is allowed to
+  // appear. Never called on Skip, and never called anywhere else in this
+  // flow, so onboarding itself never triggers an unsolicited OS dialog.
+  requestPushPermission?: () => void
 }
 
 const DRAFT_KEY = 'golfrank_onboarding_draft'
@@ -252,7 +257,7 @@ function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, qu
   return { results, searching, searchError }
 }
 
-export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser }: OnboardingFormProps) {
+export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser, requestPushPermission }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
   const [courseQuery, setCourseQuery] = useState('')
@@ -505,7 +510,7 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
         ) : step === 'planning' ? (
           <PlanningStep draft={draft} onChange={patchDraft} onNext={next} />
         ) : step === 'notifications' ? (
-          <NotificationsStep onAllow={() => { patchDraft({ notifications: true }); next() }} onSkip={() => { patchDraft({ notifications: false }); next() }} />
+          <NotificationsStep onAllow={() => { patchDraft({ notifications: true }); requestPushPermission?.(); next() }} onSkip={() => { patchDraft({ notifications: false }); next() }} />
         ) : step === 'success' ? (
           <SuccessStep
             draft={draft}

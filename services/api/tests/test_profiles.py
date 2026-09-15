@@ -176,6 +176,12 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     bob_id = client.get("/api/v1/users", headers=alice, params={"q": "exportbob"}).json()[0]["id"]
     assert client.put(f"/api/v1/me/follows/{alice_id}", headers=bob).status_code == 200
     assert client.put(f"/api/v1/me/follows/{bob_id}", headers=alice).status_code == 200
+    assert client.put(
+        "/api/v1/me/push-tokens", headers=alice, json={"token": "ExponentPushToken[export-alice]"}
+    ).status_code == 204
+    assert client.put(
+        "/api/v1/me/push-tokens", headers=bob, json={"token": "ExponentPushToken[export-bob]"}
+    ).status_code == 204
 
     response = client.get("/api/v1/me/data-export", headers=alice)
 
@@ -188,4 +194,5 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert len(exported["linked_contacts"]) == 1
     assert {n["notification_type"] for n in exported["notifications"]} == {"followed_you", "mutual_follow"}
     assert all(n["recipient_user_id"] == alice_id and n["actor_user_id"] == bob_id for n in exported["notifications"])
+    assert [t["token"] for t in exported["push_tokens"]] == ["ExponentPushToken[export-alice]"]
     assert "provider_subject" not in str(exported)

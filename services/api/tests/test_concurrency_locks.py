@@ -386,3 +386,117 @@ def test_concurrent_feature_requests_on_postgres_no_deadlock() -> None:
             )
             session.commit()
         engine.dispose()
+
+
+@pytest.mark.skipif(
+    not _can_connect_postgres(POSTGRES_TEST_URL),
+    reason="PostgreSQL test database not available",
+)
+def test_concurrent_first_time_user_creation_serializes_on_postgres() -> None:
+    """A Codex review of the push-notifications PR raised this as a fresh
+    concern: register_push_token calls require_user(..., create=True), and
+    if two requests for a brand-new identity (e.g. registering from two
+    devices moments apart, before either has completed onboarding) both
+    observe no User row, the loser would flush into the unique
+    provider_subject constraint and 500.
+
+    That's the exact race stored_user's lock_identity_transaction already
+    exists to close: a Postgres advisory transaction lock keyed by
+    provider_subject, acquired before the existence check. On SQLite (every
+    other test in this suite) that lock is a deliberate no-op -- this file
+    is where the lock actually gets to bind.
+
+    A bare threading.Barrier isn't enough to prove this: both threads'
+    existence-check SELECT + flush happen fast enough on a local connection
+    that they rarely land on the losing side of the race by chance (verified
+    empirically -- 20+ barrier-synchronized threads produced zero collisions
+    even with the lock disabled). So this test forces the exact interleaving
+    the lock exists to close: worker A is paused, via a Session.flush
+    override, on the specific flush that has a pending INSERT (not
+    SQLAlchemy's harmless autoflush-before-SELECT), which is after A's own
+    existence check already returned "no user". Worker B then runs its own
+    require_user(..., create=True) to completion -- unblocked -- and commits
+    a real row. Only then is A released to run its flush, guaranteeing A's
+    INSERT is attempted against an identity that now genuinely exists.
+    Without the lock, A's flush raises IntegrityError; with it, A blocks on
+    the advisory lock until B's transaction ends, then sees B's row via its
+    own (lock-gated) existence check and returns it instead of colliding.
+    """
+    from app.core.auth import CurrentUser
+    from app.domain import require_user
+
+    engine = create_engine(POSTGRES_TEST_URL, pool_size=10, max_overflow=5)
+    subject = "test_pg_conc_first_time_subject"
+
+    with Session(engine) as session:
+        session.execute(text("DELETE FROM users WHERE provider_subject = :subject"), {"subject": subject})
+        session.commit()
+
+    try:
+        a_paused = threading.Event()
+        b_done = threading.Event()
+        errors: list[Exception] = []
+        created_ids: list[int] = []
+        lock = threading.Lock()
+
+        def worker_a() -> None:
+            try:
+                with Session(engine) as session:
+                    original_flush = session.flush
+
+                    def paused_flush(*args: object, **kwargs: object) -> None:
+                        # Only the flush with a pending insert is the race
+                        # window -- pausing on autoflush's earlier no-op
+                        # call (before the existence SELECT) would let A's
+                        # own SELECT run after B commits and just see B's
+                        # row normally, proving nothing.
+                        if session.new:
+                            a_paused.set()
+                            b_done.wait(timeout=5)
+                        return original_flush(*args, **kwargs)
+
+                    session.flush = paused_flush  # type: ignore[method-assign]
+                    user = require_user(session, CurrentUser(subject), create=True)
+                    session.commit()
+                    with lock:
+                        created_ids.append(user.id)
+            except Exception as error:
+                with lock:
+                    errors.append(error)
+            finally:
+                a_paused.set()
+
+        def worker_b() -> None:
+            a_paused.wait(timeout=5)
+            try:
+                with Session(engine) as session:
+                    user = require_user(session, CurrentUser(subject), create=True)
+                    session.commit()
+                    with lock:
+                        created_ids.append(user.id)
+            except Exception as error:
+                with lock:
+                    errors.append(error)
+            finally:
+                b_done.set()
+
+        thread_a = threading.Thread(target=worker_a)
+        thread_b = threading.Thread(target=worker_b)
+        thread_a.start()
+        thread_b.start()
+        thread_a.join(timeout=10)
+        thread_b.join(timeout=10)
+
+        assert not errors, f"Concurrent first-time user creation produced errors: {errors}"
+        assert len(set(created_ids)) == 1, f"Both requests must resolve to the same user row, got {created_ids}"
+
+        with Session(engine) as session:
+            rows = session.execute(
+                text("SELECT id FROM users WHERE provider_subject = :subject"), {"subject": subject}
+            ).all()
+            assert len(rows) == 1, f"Expected exactly one user row, found {len(rows)}"
+    finally:
+        with Session(engine) as session:
+            session.execute(text("DELETE FROM users WHERE provider_subject = :subject"), {"subject": subject})
+            session.commit()
+        engine.dispose()

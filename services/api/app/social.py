@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from .domain import (
     round_image_data_bulk,
     stored_user,
 )
+from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
     ActivityReaction,
@@ -645,6 +646,8 @@ def get_user_courses(
 @router.put("/api/v1/me/follows/{target_user_id}", response_model=FollowOut)
 def follow_user(
     target_user_id: int,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> FollowOut:
@@ -658,6 +661,7 @@ def follow_user(
         raise HTTPException(404, "User not found")
     lock_user_pair_transaction(session, user.id, target_user_id)
     follow = session.scalar(select(Follow).where(Follow.follower_id == user.id, Follow.followed_id == target_user_id))
+    created: list[AppNotification] = []
     if follow is None:
         follow = Follow(follower_id=user.id, followed_id=target_user_id)
         session.add(follow)
@@ -667,24 +671,29 @@ def follow_user(
             AppNotification.notification_type == "followed_you",
         ))
         if existing is None and _notifications_enabled(session, target_user_id):
-            session.add(AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you"))
+            notification = AppNotification(recipient_user_id=target_user_id, actor_user_id=user.id, notification_type="followed_you")
+            session.add(notification)
+            created.append(notification)
         mutual = session.scalar(select(Follow.id).where(
             Follow.follower_id == target_user_id, Follow.followed_id == user.id,
         )) is not None
         if mutual:
-            _notify_mutual_follow(session, user.id, target_user_id)
+            created.extend(_notify_mutual_follow(session, user.id, target_user_id))
         session.commit()
+        if created:
+            background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     else:
         mutual = session.scalar(select(Follow.id).where(Follow.follower_id == target_user_id, Follow.followed_id == user.id)) is not None
     return FollowOut(user=_summary(session, target), is_mutual=mutual, followed_at=follow.created_at)
 
 
-def _notify_mutual_follow(session: Session, user_id: int, other_id: int) -> None:
+def _notify_mutual_follow(session: Session, user_id: int, other_id: int) -> list[AppNotification]:
     """Notify both sides once a follow completes a mutual pair.
 
     Called only from the branch that just created a fresh Follow row, so this
     fires exactly once per pair -- right when the second follow lands.
     """
+    created: list[AppNotification] = []
     for recipient_id, actor_id in ((user_id, other_id), (other_id, user_id)):
         if not _notifications_enabled(session, recipient_id):
             continue
@@ -694,7 +703,10 @@ def _notify_mutual_follow(session: Session, user_id: int, other_id: int) -> None
             AppNotification.notification_type == "mutual_follow",
         ))
         if existing is None:
-            session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=actor_id, notification_type="mutual_follow"))
+            notification = AppNotification(recipient_user_id=recipient_id, actor_user_id=actor_id, notification_type="mutual_follow")
+            session.add(notification)
+            created.append(notification)
+    return created
 
 
 @router.get("/api/v1/me/notifications", response_model=NotificationPageOut)
@@ -768,6 +780,8 @@ def list_notifications(
 @router.put("/api/v1/me/contacts", status_code=204)
 def link_contacts(
     payload: ContactLinkIn,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -781,8 +795,9 @@ def link_contacts(
         session.execute(delete(LinkedContact).where(LinkedContact.user_id == user.id))
     existing_hashes = set(session.scalars(select(LinkedContact.identifier_hash).where(LinkedContact.user_id == user.id)).all())
     session.add_all(LinkedContact(user_id=user.id, identifier_hash=value) for value in hashes - existing_hashes)
+    created: list[AppNotification] = []
     try:
-        notify_linked_contacts(session, user, current, settings)
+        created = notify_linked_contacts(session, user, current, settings)
     except HTTPException as error:
         # Contact storage is useful independently of the optional join alert.
         # A later preferences save or contact sync retries the idempotent match.
@@ -792,6 +807,8 @@ def link_contacts(
             error.status_code,
         )
     session.commit()
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return Response(status_code=204)
 
 
@@ -820,7 +837,7 @@ def unlink_contacts(
     return Response(status_code=204)
 
 
-def _notify_reaction(session: Session, actor_id: int, event: ActivityEvent) -> None:
+def _notify_reaction(session: Session, actor_id: int, event: ActivityEvent) -> list[AppNotification]:
     """Notify a round's owner when someone reacts to it.
 
     Only round-backed events carry a subject_id AppNotification can reference
@@ -829,27 +846,31 @@ def _notify_reaction(session: Session, actor_id: int, event: ActivityEvent) -> N
     notify.
     """
     if event.subject_type not in ("round", "rating_round") or event.actor_user_id == actor_id:
-        return
+        return []
     recipient_id = event.actor_user_id
     if actor_id in _blocked_ids(session, recipient_id) or not _notifications_enabled(session, recipient_id):
-        return
+        return []
     existing = session.scalar(select(AppNotification.id).where(
         AppNotification.recipient_user_id == recipient_id,
         AppNotification.actor_user_id == actor_id,
         AppNotification.notification_type == "reacted_to_round",
         AppNotification.subject_id == event.subject_id,
     ))
-    if existing is None:
-        session.add(AppNotification(
-            recipient_user_id=recipient_id,
-            actor_user_id=actor_id,
-            notification_type="reacted_to_round",
-            subject_id=event.subject_id,
-        ))
+    if existing is not None:
+        return []
+    notification = AppNotification(
+        recipient_user_id=recipient_id,
+        actor_user_id=actor_id,
+        notification_type="reacted_to_round",
+        subject_id=event.subject_id,
+    )
+    session.add(notification)
+    return [notification]
 
 
-def notify_linked_contacts(session: Session, user: User, current: CurrentUser, settings: Settings) -> None:
+def notify_linked_contacts(session: Session, user: User, current: CurrentUser, settings: Settings) -> list[AppNotification]:
     """Notify contact owners when a verified account completes onboarding or syncs contacts."""
+    created: list[AppNotification] = []
     for identity in {_identifier_hash(settings, value) for value in verified_identifiers(current, settings)}:
         recipients = session.scalars(select(LinkedContact.user_id).where(
             LinkedContact.identifier_hash == identity,
@@ -864,7 +885,10 @@ def notify_linked_contacts(session: Session, user: User, current: CurrentUser, s
                 AppNotification.notification_type == "contact_joined",
             ))
             if existing is None:
-                session.add(AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined"))
+                notification = AppNotification(recipient_user_id=recipient_id, actor_user_id=user.id, notification_type="contact_joined")
+                session.add(notification)
+                created.append(notification)
+    return created
 
 
 def _identifier_hash(settings: Settings, value: str) -> str:
@@ -1076,6 +1100,8 @@ def get_activity(
 def add_reaction(
     event_id: int,
     reaction: str,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> ReactionOut:
@@ -1086,8 +1112,10 @@ def add_reaction(
     existing = session.scalar(select(ActivityReaction).where(ActivityReaction.event_id == event_id, ActivityReaction.user_id == user.id, ActivityReaction.reaction == reaction))
     if existing is None:
         session.add(ActivityReaction(event_id=event_id, user_id=user.id, reaction=reaction))
-        _notify_reaction(session, user.id, event)
+        created = _notify_reaction(session, user.id, event)
         session.commit()
+        if created:
+            background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     count, reacted = _reaction_state(session, event_id, user.id)
     return ReactionOut(event_id=event_id, reaction=reaction, reaction_count=count, viewer_reacted=reacted)
 

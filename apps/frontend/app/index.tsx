@@ -13,13 +13,17 @@ type ProfileState = 'checking' | 'needs-onboarding' | 'error'
 
 export default function Index() {
   const router = useRouter()
-  const { returnToGetStarted, signOut, updateUserProfile, updateProfileImage } = useAuthGate()
+  const { returnToGetStarted, signOut, updateUserProfile, updateProfileImage, registerPushToken } = useAuthGate()
   const { getAuthHeaders } = useAuthHeaders()
   const [profileState, setProfileState] = useState<ProfileState>('checking')
 
   const checkSavedProfile = useCallback(async () => {
     setProfileState('checking')
     try {
+      // Push registration for a returning, opted-in user is handled once
+      // per sign-in by AuthProvider's ClerkUserControls (covers every
+      // signed-in route, not just this one -- see its own comment) --
+      // this call is only for onboarding-state routing.
       await getProfile(await getAuthHeaders())
       router.replace('/home')
     } catch (reason) {
@@ -74,6 +78,11 @@ export default function Index() {
     [getAuthHeaders],
   )
 
+  const requestOnboardingPushPermission = useCallback(
+    () => { void registerPushToken() },
+    [registerPushToken],
+  )
+
   if (profileState === 'checking') {
     return (
       <SafeAreaView style={styles.statusScreen}>
@@ -118,6 +127,7 @@ export default function Index() {
             linkContacts={linkOnboardingContacts}
             searchUsers={searchOnboardingUsers}
             followUser={followOnboardingUser}
+            requestPushPermission={requestOnboardingPushPermission}
             onComplete={(destination) => router.replace(destination === 'profile' ? '/profile' : '/home')}
             onExit={goBack}
           />

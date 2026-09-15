@@ -7,15 +7,23 @@ import * as FileSystem from 'expo-file-system'
 import * as Linking from 'expo-linking'
 import { useRouter } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
-import { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { getProfile } from '../api/client'
 import { GetStartedScreen } from '../components/GetStartedScreen'
+import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
+import { ApiHeaders, buildAuthHeaders } from './useAuthToken'
 
 const ssoRedirectScheme = 'golfrank'
 const ssoRedirectPath = 'sso-callback'
+
+// Bounded retry for the sign-in push-registration preference check below
+// (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts).
+const PROFILE_CHECK_ATTEMPTS = 2
+const PROFILE_CHECK_RETRY_DELAY_MS = 2000
 
 WebBrowser.maybeCompleteAuthSession()
 
@@ -24,6 +32,14 @@ type AuthGateActions = {
   profileImageUrl: string | null
   returnToGetStarted: () => boolean
   signOut: () => Promise<void>
+  // Explicit opt-in push registration (onboarding's Enable button,
+  // notification-settings' re-enable toggle) -- routes through the same
+  // in-flight-promise tracking sign-out awaits, so an explicit opt-in call
+  // is covered by the same race protection as the silent mount-time one.
+  // Resolves to whether the token was actually registered, so a caller
+  // that needs to retry (the startup check below) can tell success from a
+  // swallowed failure; most callers just fire-and-forget it.
+  registerPushToken: () => Promise<boolean>
   updateProfileImage: (file: string) => Promise<void>
   updateUserProfile: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
 }
@@ -33,6 +49,7 @@ const AuthGateContext = createContext<AuthGateActions>({
   profileImageUrl: null,
   returnToGetStarted: () => false,
   signOut: async () => undefined,
+  registerPushToken: async () => false,
   updateProfileImage: async () => undefined,
   updateUserProfile: async () => undefined,
 })
@@ -46,8 +63,102 @@ function userInitials(user: { firstName?: string | null; lastName?: string | nul
   return name.split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR'
 }
 
+// Shared by ClerkUserControls and DevelopmentAuthGate: checks a returning,
+// signed-in user's persisted notifications preference once and registers
+// the device if it's an explicit `true`. Each caller's own startup effect
+// only covers a first mount through its own gate -- without this running
+// in BOTH, a returning user in whichever mode lacks it stays unregistered
+// on every fresh app launch until they happen to revisit notification
+// settings, since nothing else ever calls registerPushToken() on its own.
+function useStartupPushRegistrationCheck(
+  ready: boolean,
+  getAuthHeadersForCheck: () => Promise<ApiHeaders>,
+  registerPushToken: () => Promise<boolean>,
+) {
+  const hasChecked = useRef(false)
+  useEffect(() => {
+    if (!ready || hasChecked.current) return
+    void (async () => {
+      // Bounded retry (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts): the
+      // flag above is only set to true once an attempt actually resolves
+      // (success or exhausted retries), never before the first attempt --
+      // marking it complete up front meant a single transient failure (a
+      // network blip on app open) permanently blocked registration for the
+      // rest of the session, since there's no other trigger to recheck
+      // once this effect's own deps stop changing.
+      for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
+        try {
+          const profile = await getProfile(await getAuthHeadersForCheck())
+          // A brand-new, not-yet-onboarded account 404s on every attempt --
+          // registration for that case only ever happens through
+          // onboarding's own explicit Enable tap, never from this check.
+          if (profile.onboarding_data?.notifications !== true) {
+            hasChecked.current = true
+            return
+          }
+          // registerPushToken() swallows its own failures (a stale Expo
+          // token fetch, a transient registration PUT) the same way
+          // getProfile above doesn't -- without retrying it specifically,
+          // a failure here after a successful profile lookup would still
+          // mark the check done and never try again for the rest of the
+          // mounted session.
+          for (let regAttempt = 1; regAttempt <= PROFILE_CHECK_ATTEMPTS; regAttempt++) {
+            if (await registerPushToken()) {
+              hasChecked.current = true
+              return
+            }
+            if (regAttempt < PROFILE_CHECK_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+            }
+          }
+          hasChecked.current = true
+          return
+        } catch {
+          if (attempt === PROFILE_CHECK_ATTEMPTS) {
+            hasChecked.current = true
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+        }
+      }
+    })()
+  }, [ready, getAuthHeadersForCheck, registerPushToken])
+}
+
 function DevelopmentAuthGate({ children }: { children: ReactNode }) {
-  return <>{children}</>
+  // Without this provider, useAuthGate() falls through to AuthGateContext's
+  // default value -- registerPushToken there is a silent no-op -- so
+  // onboarding's Enable button and notification-settings would persist the
+  // preference without ever requesting permission or registering a token.
+  // README.md documents EXPO_PUBLIC_AUTH_MODE=development as a real
+  // on-device workflow (no Clerk account needed), so push delivery must be
+  // exercisable here too. getToken is unused: buildAuthHeaders returns the
+  // X-Development-Subject header directly in this mode without calling it.
+  const getAuthHeadersForCheck = useCallback(() => buildAuthHeaders(async () => null), [])
+  const registerPushToken = useCallback(
+    () => requestAndRegisterPushToken(getAuthHeadersForCheck),
+    [getAuthHeadersForCheck],
+  )
+  // A returning user (notifications already true on record from a prior
+  // onboarding Enable tap or notification-settings save) must not stay
+  // unregistered on every fresh app launch just because development mode
+  // has no equivalent of ClerkUserControls' own startup check.
+  useStartupPushRegistrationCheck(true, getAuthHeadersForCheck, registerPushToken)
+  return (
+    <AuthGateContext.Provider
+      value={{
+        profileInitials: 'GR',
+        profileImageUrl: null,
+        returnToGetStarted: () => false,
+        signOut: async () => undefined,
+        registerPushToken,
+        updateProfileImage: async () => undefined,
+        updateUserProfile: async () => undefined,
+      }}
+    >
+      {children}
+    </AuthGateContext.Provider>
+  )
 }
 
 const { height: screenHeight } = Dimensions.get('window')
@@ -1207,13 +1318,116 @@ const authStyles = StyleSheet.create({
 
 function ClerkUserControls({ children }: { children: ReactNode }) {
   const router = useRouter()
-  const { signOut } = useAuth()
+  const { signOut, getToken } = useAuth()
   const { isLoaded, user } = useUser()
   // useUser() returns user: undefined while Clerk is still loading. Treat that as
   // "not ready" — not "missing phone" — or every cold start falsely opens the gate
   // and router.replace('/') even for users who already verified a phone.
   const needsPhone = Boolean(isLoaded && user && !hasVerifiedPhone(user))
   const wasPhoneGated = useRef(false)
+  // Tracks the in-flight registration PUT so sign-out can wait for it before
+  // issuing its unregister DELETE. Without this, a slow registration request
+  // can resolve after sign-out's DELETE and re-create/reassign the token to
+  // the account that just signed out -- that account would then keep
+  // receiving pushes meant for whoever signs in next on this device.
+  // Tracks the in-flight registration PUT (from the registerPushToken
+  // context action below) so sign-out can wait for it before issuing its
+  // unregister DELETE. Without this, a slow registration request can
+  // resolve after sign-out's DELETE and re-create/reassign the token to
+  // the account that just signed out -- that account would then keep
+  // receiving pushes meant for whoever signs in next on this device.
+  //
+  // Deliberately not an effect keyed on sign-in: OS notification
+  // permission is device-wide, not per-account consent, so silently
+  // registering here whenever permission happens to already be granted
+  // (e.g. a previous account on this device granted it) would register a
+  // brand-new, not-yet-onboarded account before it has made any choice of
+  // its own. Registration only ever happens from a confirmed per-account
+  // opt-in: onboarding's Enable button, notification-settings' re-enable
+  // toggle, or (for an already-onboarded returning user) app/index.tsx
+  // checking that account's own saved preference once its profile loads.
+  // A Set, not a single slot: registerPushToken can be called more than
+  // once before the first call settles (e.g. it fires once on app open for
+  // a returning user, and the user reaches notification-settings and saves
+  // "enabled" again before that first call finishes). A single ref would
+  // let the second call's promise overwrite the first's, so sign-out below
+  // would only wait for the newer one -- the older PUT could then complete
+  // after sign-out's DELETE and resurrect the token anyway. Self-pruning:
+  // each promise removes itself once settled.
+  const pendingRegistrations = useRef<Set<Promise<boolean>>>(new Set())
+  // Set synchronously as the very first thing sign-out does, before any
+  // await -- Promise.all(pendingRegistrations.current) below only awaits
+  // whatever was already in the Set at the moment it's called; it can never
+  // observe a registration that starts afterward (or is mid-flight through
+  // registerPushToken's own synchronous prologue right as sign-out begins).
+  // This flag closes that gap at the source instead: once sign-out has
+  // started, registerPushToken refuses to start a new PUT at all, so
+  // nothing can land after the DELETE and resurrect the token.
+  const isSigningOut = useRef(false)
+
+  // Memoized: this is exposed through useAuthGate() and consumers (e.g.
+  // app/index.tsx's checkSavedProfile) depend on it in their own
+  // useCallback/useEffect dependency arrays. An unmemoized new closure every
+  // render would make every such dependency array "change" every render too,
+  // re-running those effects in an infinite loop.
+  const registerPushToken = useCallback(() => {
+    if (isSigningOut.current) return Promise.resolve(false)
+    // Track this explicit opt-in call, so sign-out's wait below covers this
+    // path too -- otherwise an untracked PUT here could complete after
+    // sign-out's DELETE and resurrect the token for the signed-out account.
+    const promise = requestAndRegisterPushToken(() => buildAuthHeaders(getToken))
+    pendingRegistrations.current.add(promise)
+    void promise.finally(() => pendingRegistrations.current.delete(promise))
+    return promise
+  }, [getToken])
+
+  // Memoized for the same reason as registerPushToken above, and passed as
+  // a prop to PhoneSetupScreen (rather than having that file import
+  // useAuthGate itself, which would create a circular import with this
+  // one) -- an unverified-phone user cancelling out of that screen is a
+  // real, distinct sign-out path from useAuthGate().signOut(), and must
+  // get the same push cleanup or a push-enabled account that never
+  // verifies its phone keeps a live token after signing out here.
+  const signOutWithPushCleanup = useCallback(async () => {
+    // Synchronous and first: see the comment on isSigningOut above.
+    isSigningOut.current = true
+    try {
+      if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
+      await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
+      await signOut()
+    } catch (error) {
+      // unregisterCurrentPushToken and the tracked registrations never
+      // throw (both swallow their own failures) -- only Clerk's raw
+      // signOut() can reject here. If it does, the user is still
+      // authenticated and this component stays mounted, so the guard must
+      // not stay stuck: otherwise every later registration attempt
+      // (startup, notification-settings) would silently no-op until the
+      // app restarts, with no way for the still-signed-in user to restore
+      // push delivery.
+      isSigningOut.current = false
+      // The unregister DELETE just above already completed successfully
+      // (it's what got us into this catch at all -- only signOut() itself
+      // can throw here), so the still-authenticated account now has no
+      // registered token. The startup check has already run for this
+      // mount and won't run again, so without actively restoring
+      // registration here, an opted-in user gets no further pushes until
+      // they happen to revisit notification settings or restart the app.
+      // But this must re-confirm consent first, exactly like the startup
+      // check does -- unconditionally calling registerPushToken() here
+      // would silently register (or prompt for OS permission) an account
+      // whose saved preference is false or null, the same implicit-consent
+      // bug this file fixes everywhere else it can arise.
+      void (async () => {
+        try {
+          const profile = await getProfile(await buildAuthHeaders(getToken))
+          if (profile.onboarding_data?.notifications === true) void registerPushToken()
+        } catch {
+          // Can't confirm consent -- do nothing rather than guess.
+        }
+      })()
+      throw error
+    }
+  }, [getToken, registerPushToken, signOut])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
   // that gate opens or closes. Unmounting the stack during SMS verification was
@@ -1231,13 +1445,26 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
     }
   }, [isLoaded, needsPhone, router])
 
+  // Runs here rather than only from app/index.tsx: Expo Router mounts a
+  // deep-linked target route (e.g. golfrank://course/1) directly as
+  // `children` below without ever passing through index.tsx, so a check
+  // that lived only there would leave a phone-verified, opted-in user who
+  // signs in from a deep link unregistered until some later flow happened
+  // to run it. This runs once per phone-verified sign-in regardless of
+  // which route mounts first -- the ref resets naturally on the next
+  // sign-in because ClerkUserControls itself unmounts on sign-out (see
+  // ClerkAuthGate's <Show when="signed-out"> below).
+  const getAuthHeadersForCheck = useCallback(() => buildAuthHeaders(getToken), [getToken])
+  useStartupPushRegistrationCheck(isLoaded && !needsPhone, getAuthHeadersForCheck, registerPushToken)
+
   return (
     <AuthGateContext.Provider
       value={{
         profileInitials: userInitials(user),
         profileImageUrl: user?.hasImage ? user.imageUrl : null,
         returnToGetStarted: () => false,
-        signOut,
+        signOut: signOutWithPushCleanup,
+        registerPushToken,
         updateProfileImage: async (file) => {
           if (!user) throw new Error('Your account is not ready yet. Please try again.')
           // Clerk's `file` param accepts a string only as a base64 data URI, not a
@@ -1258,7 +1485,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
         {children}
         {needsPhone ? (
           <View style={authStyles.phoneGateOverlay}>
-            <PhoneSetupScreen />
+            <PhoneSetupScreen signOut={signOutWithPushCleanup} />
           </View>
         ) : null}
       </View>

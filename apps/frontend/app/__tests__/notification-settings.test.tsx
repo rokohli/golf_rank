@@ -1,0 +1,142 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+
+import NotificationSettings from '../notification-settings'
+
+const mockGetProfile = jest.fn()
+const mockGetLinkedContactStatus = jest.fn()
+const mockSavePreferences = jest.fn()
+const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
+const mockRegisterPushToken = jest.fn()
+const mockUnregisterCurrentPushToken = jest.fn()
+const mockRouterBack = jest.fn()
+
+jest.mock('@expo/vector-icons', () => {
+  const { Text } = require('react-native')
+  return { Feather: ({ name }: { name: string }) => <Text>{name}</Text> }
+})
+
+jest.mock('expo-contacts', () => ({
+  Fields: { Emails: 'emails', PhoneNumbers: 'phoneNumbers' },
+  requestPermissionsAsync: jest.fn(),
+  getContactsAsync: jest.fn(),
+}))
+
+jest.mock('expo-router', () => {
+  const React = require('react')
+  return {
+    Stack: { Screen: () => null },
+    useFocusEffect: (callback: () => void) => React.useEffect(callback, [callback]),
+    useRouter: () => ({ back: mockRouterBack }),
+  }
+})
+
+jest.mock('../../src/api/client', () => ({
+  getProfile: (...args: unknown[]) => mockGetProfile(...args),
+  getLinkedContactStatus: (...args: unknown[]) => mockGetLinkedContactStatus(...args),
+  savePreferences: (...args: unknown[]) => mockSavePreferences(...args),
+  deleteLinkedContacts: jest.fn(),
+  syncLinkedContacts: jest.fn(),
+}))
+
+jest.mock('../../src/auth/useAuthToken', () => ({
+  useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
+}))
+
+jest.mock('../../src/auth/AuthProvider', () => ({
+  useAuthGate: () => ({ registerPushToken: (...args: unknown[]) => mockRegisterPushToken(...args) }),
+}))
+
+jest.mock('../../src/notifications/pushTokens', () => ({
+  unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
+}))
+
+const profile = {
+  home_region: 'Monterey, CA',
+  max_green_fee: 700,
+  difficulty: 'any' as const,
+  access: 'any' as const,
+  onboarding_data: { first_name: 'Alice', last_name: 'Golfer', username: 'alice', notifications: false },
+}
+
+describe('NotificationSettings', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockGetProfile.mockResolvedValue(profile)
+    mockGetLinkedContactStatus.mockResolvedValue({ linked: false, contact_count: 0 })
+    mockSavePreferences.mockResolvedValue(undefined)
+  })
+
+  it('registers a push token when the user re-enables notifications', async () => {
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent(screen.getByLabelText('Allow notifications'), 'valueChange', true)
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockRegisterPushToken).toHaveBeenCalledTimes(1)
+    expect(mockUnregisterCurrentPushToken).not.toHaveBeenCalled()
+    expect(mockRouterBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-registers on save for an already-enabled account, even without touching the switch, so a device with a lost token catches up', async () => {
+    // Distinct from the null-preference case below: here the preference is
+    // already an explicit `true` on record, so opening and saving without
+    // touching the switch is not new consent -- it's this device catching
+    // up to a decision the user already made (e.g. a prior registration
+    // failed transiently, or OS permission was granted later in Settings).
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      onboarding_data: { ...profile.onboarding_data, notifications: true },
+    })
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockRegisterPushToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not register a push token from a legacy/never-chosen account (notifications: null) that opens and saves without touching the switch', async () => {
+    // Regression test: `enabled` initializes to true for a null preference
+    // (matching notifications_enabled()'s "not false" default for the
+    // in-app feed) -- merely opening this screen and pressing Save without
+    // ever touching the switch must not read as consent for push, or it
+    // would silently trigger the native OS permission prompt.
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      onboarding_data: { ...profile.onboarding_data, notifications: null },
+    })
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+    expect(mockUnregisterCurrentPushToken).not.toHaveBeenCalled()
+    // Regression test: skipping registration this session isn't enough --
+    // persisting `true` (enabled's display default for null) would read as
+    // explicit consent on the NEXT app mount and silently trigger
+    // registration there instead. The untouched null preference must be
+    // written back unchanged.
+    expect(mockSavePreferences.mock.calls[0][0].onboarding_data.notifications).toBeNull()
+  })
+
+  it('unregisters the push token when the user disables notifications', async () => {
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      onboarding_data: { ...profile.onboarding_data, notifications: true },
+    })
+    render(<NotificationSettings />)
+    await screen.findByText('Stay in the loop')
+
+    fireEvent(screen.getByLabelText('Allow notifications'), 'valueChange', false)
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(mockSavePreferences).toHaveBeenCalledTimes(1))
+    expect(mockUnregisterCurrentPushToken).toHaveBeenCalledTimes(1)
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
+})

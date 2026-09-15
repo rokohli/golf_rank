@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Lock
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text
@@ -60,6 +60,7 @@ from .models import (
     PlanConstraint,
     PlanGeneration,
     Profile,
+    PushToken,
     RankingConfidence,
     RankingSnapshot,
     Round,
@@ -75,6 +76,7 @@ from .models import (
     UserMute,
 )
 from .plans import router as plans_router
+from .push_notifications import router as push_notifications_router, run_push_delivery_task
 from .planner_narrative import build_planner_narrative_provider
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
@@ -159,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(rounds_router, dependencies=authenticated_dependencies)
     app.include_router(course_state_router, dependencies=authenticated_dependencies)
     app.include_router(social_router, dependencies=authenticated_dependencies)
+    app.include_router(push_notifications_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
     app.include_router(course_photo_uploads_router)
     # admin_rate_limit depends on require_admin, so a non-admin gets its 404
@@ -220,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.put("/api/v1/me/onboarding-preferences", response_model=ProfileOut)
     def save_preferences(
         payload: OnboardingPreferencesIn,
+        background: BackgroundTasks,
         _rate_limit: None = Depends(authenticated_rate_limit),
         user: CurrentUser = Depends(current_user),
         session: Session = Depends(get_session),
@@ -253,14 +257,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from .ranking import seed_onboarding_rankings
 
             seed_onboarding_rankings(session, stored_user.id, preferences.onboarding_data)
+        created_notifications: list = []
         try:
             # Re-attempt on every authenticated preferences save so a transient
             # Clerk outage during first onboarding cannot suppress this optional
             # notification forever. Matching is idempotent.
-            notify_linked_contacts(session, stored_user, user, settings)
+            created_notifications = notify_linked_contacts(session, stored_user, user, settings)
         except HTTPException as error:
             logger.warning("contact_join_matching_skipped user_id=%s status=%s", stored_user.id, error.status_code)
         session.commit()
+        if created_notifications:
+            background.add_task(run_push_delivery_task, app, [n.id for n in created_notifications])
         return ProfileOut(
             home_region=profile.home_region,
             max_green_fee=preferences.max_green_fee,
@@ -374,6 +381,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "activity": rows(ActivityEvent, ActivityEvent.actor_user_id == stored_user.id),
             "activity_reactions": rows(ActivityReaction, ActivityReaction.user_id == stored_user.id),
             "linked_contacts": rows(LinkedContact, LinkedContact.user_id == stored_user.id),
+            "push_tokens": rows(PushToken, PushToken.user_id == stored_user.id),
             "notifications": rows(
                 AppNotification,
                 AppNotification.recipient_user_id == stored_user.id,

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .db import get_session
 from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, stored_user
+from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
     AppNotification,
@@ -234,7 +235,7 @@ def _notify_tagged_companions(
     round_id: int,
     friend_user_ids: list[int],
     previously_tagged_ids: set[int],
-) -> None:
+) -> list[AppNotification]:
     """Notify friends newly added as round companions.
 
     Only the delta is notified -- re-saving a round with the same companions
@@ -242,6 +243,7 @@ def _notify_tagged_companions(
     friend_user_ids is pre-validated by _validate_friend_ids, so every
     recipient here is already a followed, non-blocked user.
     """
+    created: list[AppNotification] = []
     for recipient_id in friend_user_ids:
         if recipient_id in previously_tagged_ids or recipient_id == actor_id:
             continue
@@ -254,12 +256,15 @@ def _notify_tagged_companions(
             AppNotification.subject_id == round_id,
         ))
         if existing is None:
-            session.add(AppNotification(
+            notification = AppNotification(
                 recipient_user_id=recipient_id,
                 actor_user_id=actor_id,
                 notification_type="tagged_in_round",
                 subject_id=round_id,
-            ))
+            )
+            session.add(notification)
+            created.append(notification)
+    return created
 
 
 def _refresh_course_state(session: Session, user_id: int, course_id: int) -> None:
@@ -336,6 +341,8 @@ def _delete_round_activity_event(session: Session, user_id: int, round_id: int) 
 @router.post("", response_model=RoundOut, status_code=201)
 def create_round(
     payload: RoundIn,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> RoundOut:
@@ -356,7 +363,7 @@ def create_round(
         session.add(RoundNote(round_id=round_.id, body=payload.note))
     friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
     _replace_companions(session, round_.id, friend_ids, payload.guest_names)
-    _notify_tagged_companions(session, user.id, round_.id, friend_ids, set())
+    created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, set())
     _refresh_course_state(session, user.id, course_id)
     session.add(
         ActivityEvent(
@@ -369,6 +376,8 @@ def create_round(
         )
     )
     session.commit()
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return _round_out(session, round_)
 
 
@@ -463,10 +472,13 @@ def get_round(
 def update_round(
     round_id: int,
     payload: RoundPatch,
+    request: Request,
+    background: BackgroundTasks,
     current: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> RoundOut:
     user = require_user(session, current)
+    created: list[AppNotification] = []
     round_ = session.scalar(
         select(Round).where(Round.id == round_id, Round.user_id == user.id)
     )
@@ -501,7 +513,7 @@ def update_round(
         ).all())
         friend_ids = _validate_friend_ids(session, user.id, payload.friend_user_ids)
         _replace_companions(session, round_.id, friend_ids, payload.guest_names)
-        _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
+        created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
     event = session.scalar(
         select(ActivityEvent).where(
             ActivityEvent.subject_type.in_(("round", "rating_round")),
@@ -520,6 +532,8 @@ def update_round(
         event.event_data = event_data
     _refresh_course_state(session, user.id, round_.course_id)
     session.commit()
+    if created:
+        background.add_task(run_push_delivery_task, request.app, [n.id for n in created])
     return _round_out(session, round_)
 
 

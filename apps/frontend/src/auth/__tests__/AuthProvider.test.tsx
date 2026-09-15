@@ -14,6 +14,11 @@ const mockResetPassword = jest.fn()
 const mockSignUpCreate = jest.fn()
 const mockSetProfileImage = jest.fn()
 const mockReadAsStringAsync = jest.fn()
+const mockSignOut = jest.fn()
+const mockGetToken = jest.fn().mockResolvedValue('test-clerk-token')
+const mockRequestAndRegisterPushToken = jest.fn()
+const mockUnregisterCurrentPushToken = jest.fn()
+const mockGetProfile = jest.fn().mockRejectedValue(new Error('not onboarded'))
 let mockUrlListener: ((event: { url: string }) => void) | null = null
 let mockUser: {
   firstName: string
@@ -27,9 +32,27 @@ jest.mock('@clerk/expo', () => ({
   ClerkProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Show: ({ children, when }: { children: React.ReactNode; when: string }) =>
     when === (mockUser ? 'signed-in' : 'signed-out') ? <>{children}</> : null,
-  useAuth: () => ({ signOut: jest.fn() }),
+  // Resolves to a real token: ClerkUserControls' own registration check
+  // calls buildAuthHeaders(getToken) directly (not mocked away, unlike
+  // requestAndRegisterPushToken/unregisterCurrentPushToken below), and
+  // buildAuthHeaders throws "Sign in required" on a falsy token -- an
+  // unconfigured jest.fn() here would make getProfile silently unreachable.
+  // A stable reference (not a fresh jest.fn() per call), matching the real
+  // Clerk SDK's own getToken identity -- ClerkUserControls' startup-check
+  // effect depends on it (via a useCallback wrapper), and a new identity
+  // every render would re-run that effect on every render too.
+  useAuth: () => ({ signOut: mockSignOut, getToken: mockGetToken }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
   useUser: () => ({ isLoaded: true, isSignedIn: mockUser !== null, user: mockUser }),
+}))
+
+jest.mock('../../notifications/pushTokens', () => ({
+  requestAndRegisterPushToken: (...args: unknown[]) => mockRequestAndRegisterPushToken(...args),
+  unregisterCurrentPushToken: (...args: unknown[]) => mockUnregisterCurrentPushToken(...args),
+}))
+
+jest.mock('../../api/client', () => ({
+  getProfile: (...args: unknown[]) => mockGetProfile(...args),
 }))
 
 jest.mock('expo-file-system', () => ({
@@ -108,6 +131,11 @@ describe('AuthProvider', () => {
     mockUrlListener = null
     mockUser = null
     jest.clearAllMocks()
+    // Default: no saved preference on record (a brand-new/not-yet-onboarded
+    // account 404s the same way) -- ClerkUserControls' own registration
+    // check silently no-ops on this, matching production. Tests below that
+    // care about the check override it explicitly.
+    mockGetProfile.mockRejectedValue(new Error('not onboarded'))
   })
 
   it('converts a picked local file to a base64 data URI before handing it to Clerk', async () => {
@@ -143,6 +171,486 @@ describe('AuthProvider', () => {
     expect(mockSetProfileImage).toHaveBeenCalledWith({ file: 'data:image/jpeg;base64,ZmFrZWJhc2U2NA==' })
   })
 
+  it('unregisters the push token before delegating sign-out', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function SignOutProbe() {
+      const { signOut } = useAuthGate()
+      return (
+        <Pressable onPress={() => void signOut()}>
+          <Text>Sign out</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(mockUnregisterCurrentPushToken).toHaveBeenCalledTimes(1)
+    expect(callOrder).toEqual(['unregister', 'signOut'])
+  })
+
+  it('waits for an in-flight registerPushToken() call before unregistering on sign-out, so a slow PUT cannot land afterward and revive the token', async () => {
+    // registerPushToken() is what onboarding's Enable button and
+    // notification-settings' re-enable toggle both call (via useAuthGate()).
+    // It must be tracked in the same pendingRegistration ref sign-out
+    // awaits, or an untracked call here reopens the exact race this guards
+    // against: enable, then sign out quickly, and the abandoned PUT
+    // completes after the DELETE and re-associates the token with the
+    // account that just signed out.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    let resolveRegistration: () => void = () => undefined
+    mockRequestAndRegisterPushToken.mockImplementation(
+      () => new Promise<void>((resolve) => { resolveRegistration = () => { callOrder.push('registration-resolved'); resolve() } }),
+    )
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function OptInAndSignOutProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Enable notifications</Text>
+          </Pressable>
+          <Pressable onPress={() => void signOut()}>
+            <Text>Sign out</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <OptInAndSignOutProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Enable notifications'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+
+    // Sign out while registration is still in flight -- without the fix,
+    // unregister/signOut would run immediately here.
+    fireEvent.press(screen.getByText('Sign out'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual([])
+
+    resolveRegistration()
+
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(callOrder).toEqual(['registration-resolved', 'unregister', 'signOut'])
+  })
+
+  it('waits for every concurrent registerPushToken() call, not just the most recent, before unregistering on sign-out', async () => {
+    // Two calls can be in flight at once -- e.g. registration on app open
+    // for a returning user, then the user saves "enabled" again from
+    // notification-settings before the first call has settled. A single
+    // tracked promise would let the second call's promise overwrite the
+    // first's, so sign-out would only wait for the newer one and the older
+    // PUT could complete after the DELETE and resurrect the token anyway.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    const callOrder: string[] = []
+    let resolveFirst: () => void = () => undefined
+    let resolveSecond: () => void = () => undefined
+    mockRequestAndRegisterPushToken
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = () => { callOrder.push('first-resolved'); resolve() } }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSecond = () => { callOrder.push('second-resolved'); resolve() } }))
+    mockUnregisterCurrentPushToken.mockImplementation(async () => { callOrder.push('unregister') })
+    mockSignOut.mockImplementation(async () => { callOrder.push('signOut') })
+
+    function TwoRegistrationsProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+          <Pressable onPress={() => void signOut()}>
+            <Text>Sign out</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <TwoRegistrationsProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Register'))
+    fireEvent.press(screen.getByText('Register'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2))
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual([])
+
+    // Resolve only the newer call -- without the fix, sign-out would
+    // proceed here since it only ever tracked the latest promise.
+    resolveSecond()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callOrder).toEqual(['second-resolved'])
+
+    resolveFirst()
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(callOrder).toEqual(['second-resolved', 'first-resolved', 'unregister', 'signOut'])
+  })
+
+  it('refuses to start a new registration once sign-out has begun, even before the DELETE lands', async () => {
+    // Promise.all(pendingRegistrations.current) inside sign-out only awaits
+    // whatever was already in the Set at the moment it's called -- it can
+    // never observe a registration that starts afterward. Relying on that
+    // alone would let a registerPushToken() call that begins while sign-out
+    // is still in flight (e.g. mid-DELETE) issue an untracked PUT that
+    // lands after sign-out finishes and resurrects the token.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    let resolveUnregister: () => void = () => undefined
+    mockUnregisterCurrentPushToken.mockImplementation(() => new Promise<void>((resolve) => { resolveUnregister = resolve }))
+    mockSignOut.mockResolvedValue(undefined)
+
+    function SignOutThenRegisterProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void signOut()}>
+            <Text>Sign out</Text>
+          </Pressable>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutThenRegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    // Sign-out is now in flight, blocked on the held-open unregister call.
+    fireEvent.press(screen.getByText('Register'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+
+    resolveUnregister()
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('resets the sign-out guard when Clerk sign-out itself fails, so a still-signed-in user can register again', async () => {
+    // unregisterCurrentPushToken and tracked registrations never throw
+    // (both swallow their own failures) -- only Clerk's raw signOut() can
+    // reject here. If it does, the user is still authenticated and this
+    // component stays mounted, so the guard must not stay stuck forever.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockUnregisterCurrentPushToken.mockResolvedValue(undefined)
+    mockSignOut.mockRejectedValueOnce(new Error('network down'))
+    mockRequestAndRegisterPushToken.mockResolvedValue(undefined)
+    // First call is the startup check on mount -- rejected so it doesn't
+    // itself register and confuse this test's call counts (matches the
+    // "not yet onboarded" default used elsewhere). Second call is the
+    // sign-out recovery's own re-confirmation, which must see an explicit
+    // true to be allowed to restore registration at all.
+    mockGetProfile
+      .mockRejectedValueOnce(new Error('not onboarded'))
+      .mockResolvedValueOnce({ onboarding_data: { notifications: true } })
+
+    function SignOutThenRegisterProbe() {
+      const { registerPushToken, signOut } = useAuthGate()
+      return (
+        <>
+          <Pressable onPress={() => void signOut().catch(() => undefined)}>
+            <Text>Sign out</Text>
+          </Pressable>
+          <Pressable onPress={() => void registerPushToken()}>
+            <Text>Register</Text>
+          </Pressable>
+        </>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutThenRegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+
+    // The unregister DELETE already completed before signOut() rejected,
+    // so the catch block itself restores registration -- proving the
+    // still-authenticated account isn't left without a token.
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+
+    // And the guard isn't left permanently stuck either: a later, separate
+    // registration attempt must still work too, not be silently refused.
+    fireEvent.press(screen.getByText('Register'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not restore registration on a failed sign-out for an account without explicit consent on record', async () => {
+    // Regression test: the sign-out-failure recovery above must re-confirm
+    // the saved preference before restoring registration, the same as the
+    // startup check does -- an earlier version called registerPushToken()
+    // unconditionally, which would silently register (or prompt for OS
+    // permission) an account whose preference is false or null.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockUnregisterCurrentPushToken.mockResolvedValue(undefined)
+    mockSignOut.mockRejectedValueOnce(new Error('network down'))
+    // Startup check's own call, then the sign-out recovery's -- both see a
+    // preference that isn't an explicit true.
+    mockGetProfile
+      .mockRejectedValueOnce(new Error('not onboarded'))
+      .mockResolvedValueOnce({ onboarding_data: { notifications: false } })
+
+    function SignOutProbe() {
+      const { signOut } = useAuthGate()
+      return (
+        <Pressable onPress={() => void signOut().catch(() => undefined)}>
+          <Text>Sign out</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(2))
+
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('registers this device for a phone-verified, opted-in user even when the mounted route is not app/index.tsx', async () => {
+    // Regression test: Expo Router mounts a deep-linked target route
+    // directly as `children` without ever passing through index.tsx, so a
+    // registration check that only lived there would leave a signed-in,
+    // opted-in user unregistered. This must run from the authenticated
+    // shell itself regardless of which route is mounted.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    render(
+      <AuthProvider>
+        <Text>Some deep-linked screen, not index.tsx</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not register when the saved preference is not an explicit true', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: false } })
+
+    render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(1))
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('checks the saved preference only once per sign-in, not on every re-render', async () => {
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    const { rerender } = render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(1))
+
+    rerender(
+      <AuthProvider>
+        <Text>Screen, re-rendered</Text>
+      </AuthProvider>,
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockGetProfile).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries the preference check after a transient failure instead of giving up for the whole session', async () => {
+    // Regression test: marking the check "done" before the first attempt
+    // resolved meant a single network blip on app open permanently blocked
+    // registration for the rest of the session, with nothing left to
+    // retrigger it.
+    jest.useFakeTimers()
+    try {
+      process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+      process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+      mockUser = {
+        firstName: 'Rohan',
+        hasImage: false,
+        imageUrl: '',
+        phoneNumbers: [{ verification: { status: 'verified' } }],
+        setProfileImage: mockSetProfileImage,
+      }
+      mockGetProfile
+        .mockRejectedValueOnce(new Error('network blip'))
+        .mockResolvedValueOnce({ onboarding_data: { notifications: true } })
+
+      render(
+        <AuthProvider>
+          <Text>Screen</Text>
+        </AuthProvider>,
+      )
+
+      await jest.advanceTimersByTimeAsync(0)
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
+
+      await jest.advanceTimersByTimeAsync(2000)
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(mockGetProfile).toHaveBeenCalledTimes(2)
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('retries the registration itself after a transient failure, not just the profile fetch', async () => {
+    // Regression test: requestAndRegisterPushToken swallows its own
+    // failures (a stale Expo token fetch, a transient registration PUT) --
+    // unlike getProfile, it never throws. The retry loop added for the
+    // profile fetch above didn't cover this: a failure here after a
+    // successful profile lookup would still mark the check done (since
+    // registerPushToken() was fired-and-forgotten) and never retry for the
+    // rest of the mounted session.
+    jest.useFakeTimers()
+    try {
+      process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+      process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+      mockUser = {
+        firstName: 'Rohan',
+        hasImage: false,
+        imageUrl: '',
+        phoneNumbers: [{ verification: { status: 'verified' } }],
+        setProfileImage: mockSetProfileImage,
+      }
+      mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+      mockRequestAndRegisterPushToken
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+
+      render(
+        <AuthProvider>
+          <Text>Screen</Text>
+        </AuthProvider>,
+      )
+
+      await jest.advanceTimersByTimeAsync(0)
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+
+      await jest.advanceTimersByTimeAsync(2000)
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2)
+      // The profile fetch itself must not be repeated -- only the
+      // registration attempt needed retrying.
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('does not support admin-development as a no-Clerk auth mode', () => {
     process.env.EXPO_PUBLIC_AUTH_MODE = 'admin-development'
 
@@ -165,6 +673,55 @@ describe('AuthProvider', () => {
     )
 
     expect(screen.getByText('Onboarding form')).toBeOnTheScreen()
+  })
+
+  it('registers a push token in development mode instead of silently no-op-ing', async () => {
+    // Regression test: EXPO_PUBLIC_AUTH_MODE=development is a documented,
+    // real on-device workflow (README.md) for local development without a
+    // Clerk account. Without its own AuthGateContext.Provider,
+    // DevelopmentAuthGate fell through to the default context's
+    // registerPushToken, a silent no-op -- so onboarding's Enable button
+    // and notification-settings couldn't exercise push registration at all
+    // in this mode.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+
+    function RegisterProbe() {
+      const { registerPushToken } = useAuthGate()
+      return (
+        <Pressable onPress={() => void registerPushToken()}>
+          <Text>Register</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <RegisterProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Register'))
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+  })
+
+  it('registers a returning development-mode user on startup, without any explicit action', async () => {
+    // Regression test: the registerPushToken action above only fires on an
+    // explicit user action (onboarding's Enable tap, notification-settings
+    // save) -- ClerkUserControls has its own startup check for a returning,
+    // already-opted-in user, but DevelopmentAuthGate had no equivalent, so
+    // a returning dev-mode user with notifications already true on record
+    // stayed unregistered on every fresh app launch.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'development'
+    mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+
+    render(
+      <AuthProvider>
+        <Text>Screen</Text>
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
   })
 
   it('shows the premium get started screen before Clerk auth for signed-out users', () => {

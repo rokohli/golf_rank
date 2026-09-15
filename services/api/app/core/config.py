@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     readiness_cache_seconds: float = 5.0
     operations_alert_webhook_url: str | None = None
     operations_alert_webhook_timeout_seconds: float = 2.0
+    expo_push_api_url: str = "https://exp.host/--/api/v2/push/send"
+    expo_push_timeout_seconds: float = 5.0
+    # Bounds concurrent Expo delivery attempts from the request process --
+    # BackgroundTasks for a sync callable still runs on Starlette's shared
+    # AnyIO worker threadpool (the same one sync route handlers use), so an
+    # unbounded number of deliveries could still exhaust it during an Expo
+    # slowdown even though delivery is off the request's own thread. Mirrors
+    # course_photo_scoring_max_concurrent's non-blocking-semaphore pattern.
+    push_delivery_max_concurrent: int = 8
     rate_limit_alert_window_seconds: int = 300
     rate_limit_backend_failure_alert_threshold: int = 3
     rate_limit_denial_alert_threshold: int = 50
@@ -233,6 +242,7 @@ class Settings(BaseSettings):
             "COURSE_PHOTO_SCORING_TIMEOUT_SECONDS": self.course_photo_scoring_timeout_seconds,
             "COURSE_PHOTO_SCORING_MAX_CONCURRENT": self.course_photo_scoring_max_concurrent,
             "COURSE_PHOTO_SCORING_MAX_ATTEMPTS": self.course_photo_scoring_max_attempts,
+            "PUSH_DELIVERY_MAX_CONCURRENT": self.push_delivery_max_concurrent,
         }
         for name, value in positive_scoring_settings.items():
             if value <= 0:
