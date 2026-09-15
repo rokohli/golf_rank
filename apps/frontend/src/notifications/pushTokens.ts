@@ -97,9 +97,14 @@ async function registerCurrentToken(getAuthHeaders: () => Promise<ApiHeaders>): 
 // effect keyed only on OS permission: permission is device-wide, not
 // per-account consent, so a different account that previously granted it
 // on this device is not evidence *this* account opted in.
-export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<void> {
+// Returns whether the token was actually registered -- callers that only
+// want the existing fire-and-forget behavior can ignore it (`void
+// registerPushToken()`), but a caller that needs to know whether to retry
+// (e.g. the startup check below) has no other way to tell success from a
+// swallowed failure, since every failure path here is intentionally silent.
+export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<boolean> {
   try {
-    if (!Device.isDevice) return
+    if (!Device.isDevice) return false
     if (Platform.OS === 'android') {
       await withTimeout(Notifications.setNotificationChannelAsync('default', {
         name: 'Default',
@@ -112,12 +117,14 @@ export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<
       const requested = await withTimeout(Notifications.requestPermissionsAsync(), PUSH_OPERATION_TIMEOUT_MS)
       status = requested.status
     }
-    if (status !== 'granted') return
+    if (status !== 'granted') return false
     await registerCurrentToken(getAuthHeaders)
+    return true
   } catch {
     // Timeout, permission denial, an unsupported environment (simulator,
     // Expo Go without a projectId), or a transient network error are all
     // expected, silent paths -- push is additive to the existing in-app inbox.
+    return false
   }
 }
 

@@ -69,7 +69,9 @@ describe('requestAndRegisterPushToken', () => {
     // getPermissionsAsync already returns 'granted' in beforeEach -- this is
     // the same call path a returning, already-opted-in user goes through,
     // and it must stay silent (no OS dialog) for them.
-    await requestAndRegisterPushToken(getAuthHeaders)
+    mockRegisterPushToken.mockResolvedValue(undefined)
+
+    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBe(true)
 
     expect(mockGetExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: 'test-project-id' })
     expect(mockRegisterPushToken).toHaveBeenCalledWith(
@@ -94,7 +96,7 @@ describe('requestAndRegisterPushToken', () => {
     mockGetPermissionsAsync.mockResolvedValue({ status: 'undetermined' })
     mockRequestPermissionsAsync.mockResolvedValue({ status: 'denied' })
 
-    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBeUndefined()
+    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBe(false)
     expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })
 
@@ -110,7 +112,7 @@ describe('requestAndRegisterPushToken', () => {
   it('swallows a registration API failure instead of throwing', async () => {
     mockRegisterPushToken.mockRejectedValue(new Error('network down'))
 
-    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBeUndefined()
+    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBe(false)
   })
 
   it('never hangs forever if an Expo/OS call stalls -- resolves once the internal timeout fires', async () => {
@@ -119,7 +121,7 @@ describe('requestAndRegisterPushToken', () => {
       mockGetPermissionsAsync.mockReturnValue(new Promise(() => undefined)) // never resolves
       const settled = requestAndRegisterPushToken(getAuthHeaders)
       await jest.advanceTimersByTimeAsync(5000)
-      await expect(settled).resolves.toBeUndefined()
+      await expect(settled).resolves.toBe(false)
       expect(mockRegisterPushToken).not.toHaveBeenCalled()
     } finally {
       jest.useRealTimers()
@@ -140,7 +142,7 @@ describe('requestAndRegisterPushToken', () => {
 
       const settled = requestAndRegisterPushToken(getAuthHeaders)
       await jest.advanceTimersByTimeAsync(5000)
-      await expect(settled).resolves.toBeUndefined()
+      await expect(settled).resolves.toBe(false)
       expect(capturedSignal?.aborted).toBe(true)
     } finally {
       jest.useRealTimers()

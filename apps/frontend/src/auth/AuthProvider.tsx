@@ -36,7 +36,10 @@ type AuthGateActions = {
   // notification-settings' re-enable toggle) -- routes through the same
   // in-flight-promise tracking sign-out awaits, so an explicit opt-in call
   // is covered by the same race protection as the silent mount-time one.
-  registerPushToken: () => Promise<void>
+  // Resolves to whether the token was actually registered, so a caller
+  // that needs to retry (the startup check below) can tell success from a
+  // swallowed failure; most callers just fire-and-forget it.
+  registerPushToken: () => Promise<boolean>
   updateProfileImage: (file: string) => Promise<void>
   updateUserProfile: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
 }
@@ -46,7 +49,7 @@ const AuthGateContext = createContext<AuthGateActions>({
   profileImageUrl: null,
   returnToGetStarted: () => false,
   signOut: async () => undefined,
-  registerPushToken: async () => undefined,
+  registerPushToken: async () => false,
   updateProfileImage: async () => undefined,
   updateUserProfile: async () => undefined,
 })
@@ -70,7 +73,7 @@ function userInitials(user: { firstName?: string | null; lastName?: string | nul
 function useStartupPushRegistrationCheck(
   ready: boolean,
   getAuthHeadersForCheck: () => Promise<ApiHeaders>,
-  registerPushToken: () => Promise<void>,
+  registerPushToken: () => Promise<boolean>,
 ) {
   const hasChecked = useRef(false)
   useEffect(() => {
@@ -86,11 +89,29 @@ function useStartupPushRegistrationCheck(
       for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
         try {
           const profile = await getProfile(await getAuthHeadersForCheck())
-          hasChecked.current = true
           // A brand-new, not-yet-onboarded account 404s on every attempt --
           // registration for that case only ever happens through
           // onboarding's own explicit Enable tap, never from this check.
-          if (profile.onboarding_data?.notifications === true) void registerPushToken()
+          if (profile.onboarding_data?.notifications !== true) {
+            hasChecked.current = true
+            return
+          }
+          // registerPushToken() swallows its own failures (a stale Expo
+          // token fetch, a transient registration PUT) the same way
+          // getProfile above doesn't -- without retrying it specifically,
+          // a failure here after a successful profile lookup would still
+          // mark the check done and never try again for the rest of the
+          // mounted session.
+          for (let regAttempt = 1; regAttempt <= PROFILE_CHECK_ATTEMPTS; regAttempt++) {
+            if (await registerPushToken()) {
+              hasChecked.current = true
+              return
+            }
+            if (regAttempt < PROFILE_CHECK_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+            }
+          }
+          hasChecked.current = true
           return
         } catch {
           if (attempt === PROFILE_CHECK_ATTEMPTS) {
@@ -1333,7 +1354,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // would only wait for the newer one -- the older PUT could then complete
   // after sign-out's DELETE and resurrect the token anyway. Self-pruning:
   // each promise removes itself once settled.
-  const pendingRegistrations = useRef<Set<Promise<void>>>(new Set())
+  const pendingRegistrations = useRef<Set<Promise<boolean>>>(new Set())
   // Set synchronously as the very first thing sign-out does, before any
   // await -- Promise.all(pendingRegistrations.current) below only awaits
   // whatever was already in the Set at the moment it's called; it can never
@@ -1350,7 +1371,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
   // render would make every such dependency array "change" every render too,
   // re-running those effects in an infinite loop.
   const registerPushToken = useCallback(() => {
-    if (isSigningOut.current) return Promise.resolve()
+    if (isSigningOut.current) return Promise.resolve(false)
     // Track this explicit opt-in call, so sign-out's wait below covers this
     // path too -- otherwise an untracked PUT here could complete after
     // sign-out's DELETE and resurrect the token for the signed-out account.
@@ -1384,9 +1405,17 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
       // app restarts, with no way for the still-signed-in user to restore
       // push delivery.
       isSigningOut.current = false
+      // The unregister DELETE just above already completed successfully
+      // (it's what got us into this catch at all -- only signOut() itself
+      // can throw here), so the still-authenticated account now has no
+      // registered token. The startup check has already run for this
+      // mount and won't run again, so without actively restoring
+      // registration here, an opted-in user gets no further pushes until
+      // they happen to revisit notification settings or restart the app.
+      void registerPushToken()
       throw error
     }
-  }, [getToken, signOut])
+  }, [getToken, registerPushToken, signOut])
 
   // Keep the app navigator mounted under the phone gate, and reset to `/` when
   // that gate opens or closes. Unmounting the stack during SMS verification was

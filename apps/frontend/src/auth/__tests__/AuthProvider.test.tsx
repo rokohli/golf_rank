@@ -15,6 +15,7 @@ const mockSignUpCreate = jest.fn()
 const mockSetProfileImage = jest.fn()
 const mockReadAsStringAsync = jest.fn()
 const mockSignOut = jest.fn()
+const mockGetToken = jest.fn().mockResolvedValue('test-clerk-token')
 const mockRequestAndRegisterPushToken = jest.fn()
 const mockUnregisterCurrentPushToken = jest.fn()
 const mockGetProfile = jest.fn().mockRejectedValue(new Error('not onboarded'))
@@ -36,7 +37,11 @@ jest.mock('@clerk/expo', () => ({
   // requestAndRegisterPushToken/unregisterCurrentPushToken below), and
   // buildAuthHeaders throws "Sign in required" on a falsy token -- an
   // unconfigured jest.fn() here would make getProfile silently unreachable.
-  useAuth: () => ({ signOut: mockSignOut, getToken: jest.fn().mockResolvedValue('test-clerk-token') }),
+  // A stable reference (not a fresh jest.fn() per call), matching the real
+  // Clerk SDK's own getToken identity -- ClerkUserControls' startup-check
+  // effect depends on it (via a useCallback wrapper), and a new identity
+  // every render would re-run that effect on every render too.
+  useAuth: () => ({ signOut: mockSignOut, getToken: mockGetToken }),
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
   useUser: () => ({ isLoaded: true, isSignedIn: mockUser !== null, user: mockUser }),
 }))
@@ -419,10 +424,15 @@ describe('AuthProvider', () => {
     fireEvent.press(screen.getByText('Sign out'))
     await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
 
-    // Sign-out failed -- registration must work again, not be permanently
-    // stuck refusing every future call.
-    fireEvent.press(screen.getByText('Register'))
+    // The unregister DELETE already completed before signOut() rejected,
+    // so the catch block itself restores registration -- proving the
+    // still-authenticated account isn't left without a token.
     await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1))
+
+    // And the guard isn't left permanently stuck either: a later, separate
+    // registration attempt must still work too, not be silently refused.
+    fireEvent.press(screen.getByText('Register'))
+    await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2))
   })
 
   it('registers this device for a phone-verified, opted-in user even when the mounted route is not app/index.tsx', async () => {
@@ -537,6 +547,52 @@ describe('AuthProvider', () => {
 
       expect(mockGetProfile).toHaveBeenCalledTimes(2)
       expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('retries the registration itself after a transient failure, not just the profile fetch', async () => {
+    // Regression test: requestAndRegisterPushToken swallows its own
+    // failures (a stale Expo token fetch, a transient registration PUT) --
+    // unlike getProfile, it never throws. The retry loop added for the
+    // profile fetch above didn't cover this: a failure here after a
+    // successful profile lookup would still mark the check done (since
+    // registerPushToken() was fired-and-forgotten) and never retry for the
+    // rest of the mounted session.
+    jest.useFakeTimers()
+    try {
+      process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+      process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+      mockUser = {
+        firstName: 'Rohan',
+        hasImage: false,
+        imageUrl: '',
+        phoneNumbers: [{ verification: { status: 'verified' } }],
+        setProfileImage: mockSetProfileImage,
+      }
+      mockGetProfile.mockResolvedValue({ onboarding_data: { notifications: true } })
+      mockRequestAndRegisterPushToken
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+
+      render(
+        <AuthProvider>
+          <Text>Screen</Text>
+        </AuthProvider>,
+      )
+
+      await jest.advanceTimersByTimeAsync(0)
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(1)
+
+      await jest.advanceTimersByTimeAsync(2000)
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2)
+      // The profile fetch itself must not be repeated -- only the
+      // registration attempt needed retrying.
+      expect(mockGetProfile).toHaveBeenCalledTimes(1)
     } finally {
       jest.useRealTimers()
     }
