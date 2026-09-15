@@ -1412,7 +1412,19 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
       // mount and won't run again, so without actively restoring
       // registration here, an opted-in user gets no further pushes until
       // they happen to revisit notification settings or restart the app.
-      void registerPushToken()
+      // But this must re-confirm consent first, exactly like the startup
+      // check does -- unconditionally calling registerPushToken() here
+      // would silently register (or prompt for OS permission) an account
+      // whose saved preference is false or null, the same implicit-consent
+      // bug this file fixes everywhere else it can arise.
+      void (async () => {
+        try {
+          const profile = await getProfile(await buildAuthHeaders(getToken))
+          if (profile.onboarding_data?.notifications === true) void registerPushToken()
+        } catch {
+          // Can't confirm consent -- do nothing rather than guess.
+        }
+      })()
       throw error
     }
   }, [getToken, registerPushToken, signOut])

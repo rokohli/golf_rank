@@ -400,6 +400,14 @@ describe('AuthProvider', () => {
     mockUnregisterCurrentPushToken.mockResolvedValue(undefined)
     mockSignOut.mockRejectedValueOnce(new Error('network down'))
     mockRequestAndRegisterPushToken.mockResolvedValue(undefined)
+    // First call is the startup check on mount -- rejected so it doesn't
+    // itself register and confuse this test's call counts (matches the
+    // "not yet onboarded" default used elsewhere). Second call is the
+    // sign-out recovery's own re-confirmation, which must see an explicit
+    // true to be allowed to restore registration at all.
+    mockGetProfile
+      .mockRejectedValueOnce(new Error('not onboarded'))
+      .mockResolvedValueOnce({ onboarding_data: { notifications: true } })
 
     function SignOutThenRegisterProbe() {
       const { registerPushToken, signOut } = useAuthGate()
@@ -433,6 +441,51 @@ describe('AuthProvider', () => {
     // registration attempt must still work too, not be silently refused.
     fireEvent.press(screen.getByText('Register'))
     await waitFor(() => expect(mockRequestAndRegisterPushToken).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not restore registration on a failed sign-out for an account without explicit consent on record', async () => {
+    // Regression test: the sign-out-failure recovery above must re-confirm
+    // the saved preference before restoring registration, the same as the
+    // startup check does -- an earlier version called registerPushToken()
+    // unconditionally, which would silently register (or prompt for OS
+    // permission) an account whose preference is false or null.
+    process.env.EXPO_PUBLIC_AUTH_MODE = 'clerk'
+    process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_123'
+    mockUser = {
+      firstName: 'Rohan',
+      hasImage: false,
+      imageUrl: '',
+      phoneNumbers: [{ verification: { status: 'verified' } }],
+      setProfileImage: mockSetProfileImage,
+    }
+    mockUnregisterCurrentPushToken.mockResolvedValue(undefined)
+    mockSignOut.mockRejectedValueOnce(new Error('network down'))
+    // Startup check's own call, then the sign-out recovery's -- both see a
+    // preference that isn't an explicit true.
+    mockGetProfile
+      .mockRejectedValueOnce(new Error('not onboarded'))
+      .mockResolvedValueOnce({ onboarding_data: { notifications: false } })
+
+    function SignOutProbe() {
+      const { signOut } = useAuthGate()
+      return (
+        <Pressable onPress={() => void signOut().catch(() => undefined)}>
+          <Text>Sign out</Text>
+        </Pressable>
+      )
+    }
+
+    render(
+      <AuthProvider>
+        <SignOutProbe />
+      </AuthProvider>,
+    )
+
+    fireEvent.press(screen.getByText('Sign out'))
+    await waitFor(() => expect(mockSignOut).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockGetProfile).toHaveBeenCalledTimes(2))
+
+    expect(mockRequestAndRegisterPushToken).not.toHaveBeenCalled()
   })
 
   it('registers this device for a phone-verified, opted-in user even when the mounted route is not app/index.tsx', async () => {
