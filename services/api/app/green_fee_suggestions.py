@@ -19,7 +19,7 @@ from .core.auth import CurrentUser, current_user
 from .core.rate_limit import green_fee_suggestion_rate_limit
 from .db import get_session
 from .domain import require_course, require_user
-from .models import CourseGreenFeeSuggestion, CourseGreenFeeSuggestionStatus
+from .models import Course, CourseGreenFeeSuggestion, CourseGreenFeeSuggestionStatus
 from .schemas import GreenFeeSuggestionOut, GreenFeeSuggestionRequest
 
 router = APIRouter(tags=["green-fee-suggestions"])
@@ -64,7 +64,17 @@ def submit_green_fee_suggestion(
 ) -> GreenFeeSuggestionOut:
     user = require_user(session, current, create=True)
     course = require_course(session, course_id)
-    if course.green_fee is not None:
+    # Serializes concurrent submissions for the same course, and reads
+    # green_fee fresh (not the possibly-stale value already loaded onto
+    # `course`) under that lock. Without this, two different users
+    # submitting agreeing fees at nearly the same moment can each read the
+    # pending set under READ COMMITTED before the other's row commits --
+    # both see only their own submission, and a qualifying pair never gets
+    # applied until someone happens to submit a third time.
+    locked_green_fee = session.execute(
+        select(Course.green_fee).where(Course.id == course.id).with_for_update()
+    ).scalar_one()
+    if locked_green_fee is not None:
         raise HTTPException(409, "This course already has a known green fee.")
 
     existing = session.scalar(
