@@ -59,12 +59,17 @@ def image_out(
     )
     return CourseImageOut(
         id=image.id,
-        url=storage_image_url(settings.course_image_base_url, image.storage_key),
+        # USER rows are always storage_key-based; OFFICIAL/WIKIMEDIA/OPENVERSE
+        # rows are always external_url-based (see the one-locator CHECK
+        # constraint on CourseImage) -- external_url must be tried first so
+        # this stays correct when this function is reused (via
+        # course_photo_moderation._admin_photo_out) for non-USER rows.
+        url=image.external_url or storage_image_url(settings.course_image_base_url, image.storage_key),
         alt_text=image.alt_text,
-        source_name=None,
-        source_url=None,
-        license_name=None,
-        license_url=None,
+        source_name=image.source_name,
+        source_url=image.source_url,
+        license_name=image.license_name,
+        license_url=image.license_url,
         position=image.position,
         is_hero=image.is_hero,
         source_type=image.source_type,

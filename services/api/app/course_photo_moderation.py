@@ -1,4 +1,4 @@
-"""Admin moderation of user-submitted course photos.
+"""Admin moderation of user-submitted and Openverse-matched course photos.
 
 SCOPE -- moderation governs hero-image eligibility, not visibility. A PENDING
 photo is already visible in the course gallery (domain.course_image_data) and
@@ -6,13 +6,19 @@ on its round's feed posting (domain.round_image_data); approving it only makes
 it eligible to win its tier in CourseImageService._resolve. Rejecting likewise
 does not hide anything: it means "never eligible to be the hero". The one
 action that changes what anyone sees is DELETE, which removes the row and the
-R2 object -- the flow course_photo_uploads.discard_upload defers to.
+R2 object -- the flow course_photo_uploads.discard_upload defers to. (Note:
+Openverse rows are never visible in the gallery at all -- domain.py excludes
+them, like Wikimedia, as hero-fallback-only -- so PENDING there just means
+"not yet eligible to be shown as the hero".)
 
 Every route here is admin-only (core/admin.require_admin) and answers 404 for a
 non-admin, so the surface can't be enumerated with an ordinary token. Every
-route is also scoped to source_type == USER: OFFICIAL and WIKIMEDIA rows are
-curated by the offline scripts (scripts/refresh_course_photos.py,
-scripts/score_course_photos.py) and must never be mutated from here.
+route is scoped to source_type in {USER, OPENVERSE}: OFFICIAL rows are curated
+exclusively by the offline scripts, and WIKIMEDIA rows are fully automatic with
+no review band (scripts/refresh_course_photos.py, scripts/score_course_photos.py)
+-- both must never be mutated from here. `feature_course_photo` stays USER-only:
+there is no "feature an Openverse photo" concept, since an approved Openverse
+row already wins its tier via _rank_key without an explicit human pick.
 """
 
 from datetime import datetime, timezone
@@ -27,7 +33,7 @@ from .course_images.repository import CourseImageRepository
 from .course_photo_uploads import image_out
 from .db import get_session
 from .domain import batch_uploader_usernames, delete_permanent_objects, require_user, uploader_username
-from .models import Course, CourseImage, CourseImageModeration, CourseImageModerationAction
+from .models import Course, CourseImage, CourseImageModeration, CourseImageModerationAction, CourseImageSource
 from .schemas import (
     AdminCoursePhotoOut,
     AdminCoursePhotoPage,
@@ -45,6 +51,14 @@ _STATUSES = {
     "pending": CourseImageModeration.PENDING,
     "approved": CourseImageModeration.APPROVED,
     "rejected": CourseImageModeration.REJECTED,
+}
+
+# The only two tiers this router is allowed to touch -- OFFICIAL and
+# WIKIMEDIA remain fully excluded regardless of what a caller requests.
+_MODERATABLE_SOURCE_TYPES = (CourseImageSource.USER, CourseImageSource.OPENVERSE)
+_SOURCE_TYPE_FILTERS = {
+    "user": CourseImageSource.USER,
+    "openverse": CourseImageSource.OPENVERSE,
 }
 
 
@@ -87,17 +101,22 @@ def _admin_photo_out(
         course_hero_locked=hero_locked,
         is_scoring=is_scoring,
         scoring_exhausted=scoring_exhausted,
+        match_confidence_score=image.match_confidence_score,
+        matched_query=image.matched_query,
+        creator_name=image.creator_name,
+        creator_url=image.creator_url,
+        provider_asset_id=image.provider_asset_id,
     )
 
 
-def _require_user_photo(session: Session, image_id: int) -> CourseImage:
-    """Loads and locks one USER photo, or 404s.
+def _require_moderatable_photo(session: Session, image_id: int) -> CourseImage:
+    """Loads and locks one USER or OPENVERSE photo, or 404s.
 
-    A row that exists but isn't USER-sourced 404s exactly like a missing one --
-    the same status a non-admin gets, so no response distinguishes "no such
-    photo" from "not yours to moderate".
+    A row that exists but isn't in a moderatable tier 404s exactly like a
+    missing one -- the same status a non-admin gets, so no response
+    distinguishes "no such photo" from "not yours to moderate".
     """
-    image = _repository.lock_image_for_moderation(session, image_id)
+    image = _repository.lock_image_for_moderation(session, image_id, source_types=_MODERATABLE_SOURCE_TYPES)
     if image is None:
         raise HTTPException(404, "Not found")
     return image
@@ -119,6 +138,7 @@ def list_course_photos(
     request: Request,
     status: str = Query(default="pending"),
     course_id: int | None = Query(default=None),
+    source_type: str | None = Query(default=None),
     cursor: int | None = Query(default=None),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     _admin: CurrentUser = Depends(require_admin),
@@ -126,11 +146,16 @@ def list_course_photos(
 ) -> AdminCoursePhotoPage:
     if status not in _STATUSES:
         raise HTTPException(422, "status must be pending, approved, or rejected")
+    if source_type is not None and source_type not in _SOURCE_TYPE_FILTERS:
+        raise HTTPException(422, "source_type must be user or openverse")
     settings = request.app.state.settings
 
+    source_types = (
+        (_SOURCE_TYPE_FILTERS[source_type],) if source_type is not None else _MODERATABLE_SOURCE_TYPES
+    )
     # One extra row tells us whether another page exists without a second query.
     rows = _repository.moderation_queue(
-        session, status=_STATUSES[status], course_id=course_id,
+        session, status=_STATUSES[status], course_id=course_id, source_types=source_types,
         cursor=cursor, limit=limit + 1,
     )
     has_more = len(rows) > limit
@@ -172,15 +197,17 @@ def approve_course_photo(
     admin: CurrentUser = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> AdminCoursePhotoOut:
-    """Makes a photo eligible to win the USER tier. Idempotent.
+    """Makes a photo eligible to win its tier (USER or OPENVERSE). Idempotent.
 
     Deliberately does not touch is_hero: approval grants eligibility and lets
-    _rank_key order the photo by quality_score, while is_hero is reserved for a
-    human's explicit pick (see feature_course_photo). Auto-approval by the
-    scorer relies on the same separation.
+    _rank_key order the photo within its tier, while is_hero is reserved for a
+    human's explicit USER-tier pick (see feature_course_photo) -- an approved
+    Openverse row simply wins its tier via _rank_key with no separate feature
+    step. Auto-approval (the scorer for USER, the live resolver for Openverse)
+    relies on the same separation.
     """
     user = require_user(session, admin, create=True)
-    image = _require_user_photo(session, image_id)
+    image = _require_moderatable_photo(session, image_id)
     _repository.set_moderation(
         session, image,
         status=CourseImageModeration.APPROVED,
@@ -205,7 +232,7 @@ def reject_course_photo(
     DELETE to actually remove a photo.
     """
     user = require_user(session, admin, create=True)
-    image = _require_user_photo(session, image_id)
+    image = _require_moderatable_photo(session, image_id)
     _repository.set_moderation(
         session, image,
         status=CourseImageModeration.REJECTED,
@@ -260,7 +287,7 @@ def delete_course_photo(
     add_user_image's optimistic retry loop, turning a rare collision into a
     common one.
     """
-    image = _require_user_photo(session, image_id)
+    image = _require_moderatable_photo(session, image_id)
     storage_key = image.storage_key
     _repository.delete_image(session, image)
     if storage_key:

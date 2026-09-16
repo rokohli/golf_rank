@@ -70,7 +70,7 @@ export type CourseImage = {
 
 // Normalized shape from CourseImageService.resolveCourseHeroImage -- the
 // frontend renders off `type` alone and never needs provider-specific logic.
-export type HeroImageType = 'OFFICIAL' | 'USER' | 'WIKIMEDIA' | 'NONE'
+export type HeroImageType = 'OFFICIAL' | 'USER' | 'OPENVERSE' | 'WIKIMEDIA' | 'NONE'
 
 export type HeroImage = {
   type: HeroImageType

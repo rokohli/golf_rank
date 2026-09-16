@@ -25,6 +25,7 @@ from .core.rate_limit import (
     readiness_rate_limit,
 )
 from .catalog import miles_between, router as catalog_router
+from .course_image_admin import router as course_image_admin_router
 from .course_images.service import CourseImageService
 from .course_photo_moderation import router as course_photo_moderation_router
 from .course_photo_uploads import router as course_photo_uploads_router
@@ -154,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine,
         course_image_base_url=settings.course_image_base_url,
         wikimedia_cache_positive_ttl_seconds=settings.wikimedia_cache_positive_ttl_seconds,
+        openverse_cache_positive_ttl_seconds=settings.openverse_cache_positive_ttl_seconds,
     )
     authenticated_dependencies = [Depends(authenticated_rate_limit)]
     app.include_router(ranking_router, dependencies=authenticated_dependencies)
@@ -167,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # admin_rate_limit depends on require_admin, so a non-admin gets its 404
     # before the limiter ever reaches Redis.
     app.include_router(course_photo_moderation_router, dependencies=[Depends(admin_rate_limit)])
+    app.include_router(course_image_admin_router, dependencies=[Depends(admin_rate_limit)])
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
 

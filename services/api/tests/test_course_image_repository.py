@@ -254,3 +254,130 @@ def test_has_featured_hero_is_false_for_approved_but_unfeatured(session: Session
     )
 
     assert CourseImageRepository().has_featured_hero(session, course.id) is False
+
+
+def test_add_openverse_image_sets_approved_and_auto_approved(session: Session) -> None:
+    course = make_course(session)
+    repo = CourseImageRepository()
+
+    image = repo.add_openverse_image(
+        session, course.id,
+        external_url="https://example.com/ov.jpg", thumbnail_url="https://example.com/ov-thumb.jpg",
+        alt_text="alt", source_name="Flickr", source_url="https://flickr.com/x",
+        license_name="BY-SA", license_url="https://creativecommons.org/licenses/by-sa/4.0/",
+        width=2000, height=1200, provider_asset_id="asset-1", creator_name="Jane",
+        creator_url="https://example.com/jane", match_confidence_score=85,
+        match_score_reasons=["+50 exact match"], matched_query="q",
+    )
+
+    assert image.source_type == CourseImageSource.OPENVERSE
+    assert image.moderation_status == CourseImageModeration.APPROVED
+    assert image.is_hero is True
+    assert image.moderation_action == "auto_approved"
+    assert image.provider_asset_id == "asset-1"
+
+
+def test_add_openverse_review_candidate_is_pending_not_hero(session: Session) -> None:
+    course = make_course(session)
+    repo = CourseImageRepository()
+
+    image = repo.add_openverse_review_candidate(
+        session, course.id,
+        external_url="https://example.com/ov.jpg", thumbnail_url=None,
+        alt_text="alt", source_name="Flickr", source_url=None,
+        license_name="BY", license_url=None,
+        width=1600, height=1000, provider_asset_id="asset-2", creator_name=None,
+        creator_url=None, match_confidence_score=55, match_score_reasons=["+30"], matched_query="q",
+    )
+
+    assert image.moderation_status == CourseImageModeration.PENDING
+    assert image.is_hero is False
+
+    # never eligible as the resolver's hero while pending
+    assert repo.best_openverse_image(session, course.id) is None
+
+
+def test_find_openverse_image_by_asset_dedupes_reruns(session: Session) -> None:
+    course = make_course(session)
+    repo = CourseImageRepository()
+    repo.add_openverse_review_candidate(
+        session, course.id,
+        external_url="https://example.com/ov.jpg", thumbnail_url=None, alt_text="alt",
+        source_name=None, source_url=None, license_name="BY", license_url=None,
+        width=1600, height=1000, provider_asset_id="asset-dupe", creator_name=None,
+        creator_url=None, match_confidence_score=55, match_score_reasons=[], matched_query="q",
+    )
+
+    assert repo.find_openverse_image_by_asset(session, course.id, "asset-dupe") is not None
+    assert repo.find_openverse_image_by_asset(session, course.id, "asset-missing") is None
+
+
+def test_sibling_course_names_scoped_to_shared_facility(session: Session) -> None:
+    repo = CourseImageRepository()
+    black = Course(
+        name="Bethpage Black", facility_name="Bethpage State Park", course_name="Bethpage Black",
+        region="Farmingdale, NY", latitude=40.74, longitude=-73.46,
+    )
+    green = Course(
+        name="Bethpage Green", facility_name="Bethpage State Park", course_name="Bethpage Green",
+        region="Farmingdale, NY", latitude=40.74, longitude=-73.46,
+    )
+    unrelated = Course(name="Some Other Course", region="Elsewhere, NY", latitude=1.0, longitude=1.0)
+    session.add_all([black, green, unrelated])
+    session.commit()
+
+    siblings = repo.sibling_course_names(session, black)
+    assert siblings == ["Bethpage Green"]
+    assert repo.sibling_course_names(session, unrelated) == []
+
+
+def test_moderation_queue_defaults_to_user_only(session: Session) -> None:
+    course = make_course(session)
+    repo = CourseImageRepository()
+    session.add_all([
+        CourseImage(
+            course_id=course.id, external_url="https://example.com/ov.jpg", position=0,
+            source_type=CourseImageSource.OPENVERSE, moderation_status=CourseImageModeration.PENDING,
+        ),
+        CourseImage(
+            course_id=course.id, storage_key="user/1.jpg", position=1,
+            source_type=CourseImageSource.USER, moderation_status=CourseImageModeration.PENDING,
+        ),
+    ])
+    session.commit()
+
+    default_queue = repo.moderation_queue(session, status=CourseImageModeration.PENDING)
+    assert [img.source_type for img in default_queue] == [CourseImageSource.USER]
+
+    openverse_queue = repo.moderation_queue(
+        session, status=CourseImageModeration.PENDING, source_types=(CourseImageSource.OPENVERSE,),
+    )
+    assert [img.source_type for img in openverse_queue] == [CourseImageSource.OPENVERSE]
+
+    both_queue = repo.moderation_queue(
+        session, status=CourseImageModeration.PENDING,
+        source_types=(CourseImageSource.USER, CourseImageSource.OPENVERSE),
+    )
+    assert len(both_queue) == 2
+
+
+def test_lock_image_for_moderation_filters_by_requested_source_types(session: Session) -> None:
+    """lock_image_for_moderation is itself source-type-agnostic -- it returns
+    whatever `source_types` the caller asks for. The OFFICIAL/WIKIMEDIA
+    exclusion is enforced by the caller (course_photo_moderation.py's
+    _MODERATABLE_SOURCE_TYPES constant only ever contains USER/OPENVERSE),
+    not by this method -- see test_course_photo_moderation.py for that
+    router-level guarantee."""
+    course = make_course(session)
+    repo = CourseImageRepository()
+    official = CourseImage(
+        course_id=course.id, external_url="https://example.com/official.jpg", position=0,
+        source_type=CourseImageSource.OFFICIAL, moderation_status=CourseImageModeration.APPROVED,
+    )
+    session.add(official)
+    session.commit()
+
+    assert repo.lock_image_for_moderation(session, official.id) is None  # default is USER-only
+    assert repo.lock_image_for_moderation(
+        session, official.id, source_types=(CourseImageSource.OFFICIAL,),
+    ) is not None

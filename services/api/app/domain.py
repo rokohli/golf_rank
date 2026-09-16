@@ -234,12 +234,12 @@ def course_identity_ids_bulk(session: Session, courses) -> dict[int, set[int]]:
     return result
 
 
-def is_wikimedia_negative_cached(course: Course) -> bool:
+def _is_negative_cached(course: Course, provider: str) -> bool:
     negative_caches = getattr(course, "negative_caches", None)
     if negative_caches is not None:
         now = datetime.now(timezone.utc)
         for row in negative_caches:
-            if row.provider == "wikimedia":
+            if row.provider == provider:
                 expires_at = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
                 if expires_at > now:
                     return True
@@ -247,8 +247,16 @@ def is_wikimedia_negative_cached(course: Course) -> bool:
     session = object_session(course)
     if session is not None:
         from .course_images.repository import CourseImageRepository
-        return CourseImageRepository().get_negative_cache(session, course.id, "wikimedia") is not None
+        return CourseImageRepository().get_negative_cache(session, course.id, provider) is not None
     return False
+
+
+def is_wikimedia_negative_cached(course: Course) -> bool:
+    return _is_negative_cached(course, "wikimedia")
+
+
+def is_openverse_negative_cached(course: Course) -> bool:
+    return _is_negative_cached(course, "openverse")
 
 
 DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS = 30 * 24 * 3600
@@ -282,13 +290,19 @@ def _hero_dict(hero_type: str, image: CourseImage, url: str, course_name: str) -
 
 def course_card_hero_data(course: Course) -> dict:
     """Cheap, read-only mirror of CourseImageService.resolve_hero_image()'s
-    OFFICIAL/USER/WIKIMEDIA ordering for list/search payloads, which are
-    rendered from already-loaded rows and can't afford one Wikimedia lookup +
-    lock per card. Any change to that priority order must be mirrored here."""
+    OFFICIAL/USER/OPENVERSE/WIKIMEDIA ordering for list/search payloads, which
+    are rendered from already-loaded rows and can't afford one external-provider
+    lookup + lock per card. Any change to that priority order must be mirrored
+    here."""
     session = object_session(course)
     image_base_url = session.info.get("course_image_base_url") if session is not None else None
     positive_ttl = (
         session.info.get("wikimedia_cache_positive_ttl_seconds", DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS)
+        if session is not None
+        else DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS
+    )
+    openverse_positive_ttl = (
+        session.info.get("openverse_cache_positive_ttl_seconds", DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS)
         if session is not None
         else DEFAULT_WIKIMEDIA_CACHE_POSITIVE_TTL_SECONDS
     )
@@ -318,6 +332,15 @@ def course_card_hero_data(course: Course) -> dict:
     if users:
         best_img, best_url = min(users, key=lambda pair: _rank_key(pair[0]))
         return _hero_dict("USER", best_img, best_url, course.name)
+
+    openverses = [
+        pair for pair in approved_with_url
+        if (pair[0].source_type or "").lower() == CourseImageSource.OPENVERSE
+        and not is_wikimedia_stale(pair[0], openverse_positive_ttl)
+    ]
+    if openverses and not is_openverse_negative_cached(course):
+        best_img, best_url = min(openverses, key=lambda pair: _rank_key(pair[0]))
+        return _hero_dict("OPENVERSE", best_img, best_url, course.name)
 
     wikimedias = [
         pair for pair in approved_with_url
@@ -431,9 +454,11 @@ def course_image_data(course: Course) -> list[dict]:
     """All of a course's photos, regardless of moderation_status -- moderation
     only gates hero-image eligibility (see CourseImageRepository.approved_images,
     used independently by CourseImageService.resolve_hero_image), never whether
-    a photo appears in the course's own gallery. Wikimedia is excluded here: it
-    only ever serves as a hero-image fallback (CourseImageService._resolve),
-    never as a gallery photo.
+    a photo appears in the course's own gallery. Wikimedia and Openverse are
+    excluded here: both only ever serve as a hero-image fallback
+    (CourseImageService._resolve), never as a gallery photo -- for Openverse
+    this also guarantees a PENDING review-band candidate can never leak into
+    the public, unauthenticated gallery before a human approves it.
 
     This gallery has no per-viewer context (it backs the unauthenticated course
     detail endpoint too), so a round-linked photo can only be included once its
@@ -451,7 +476,7 @@ def course_image_data(course: Course) -> list[dict]:
     )
     output = []
     for image in course.images:
-        if (image.source_type or "").lower() == CourseImageSource.WIKIMEDIA:
+        if (image.source_type or "").lower() in (CourseImageSource.WIKIMEDIA, CourseImageSource.OPENVERSE):
             continue
         if image.round_id is not None and round_visibility.get(image.round_id) != "public":
             continue

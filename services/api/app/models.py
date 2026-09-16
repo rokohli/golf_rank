@@ -106,9 +106,10 @@ class CourseImageSource:
 
     OFFICIAL = "official"
     USER = "user"
+    OPENVERSE = "openverse"
     WIKIMEDIA = "wikimedia"
 
-    ALL = (OFFICIAL, USER, WIKIMEDIA)
+    ALL = (OFFICIAL, USER, OPENVERSE, WIKIMEDIA)
 
 
 class CourseImageModeration:
@@ -224,6 +225,20 @@ class CourseImage(Base):
     moderation_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Openverse-specific provenance/scoring fields. All nullable -- only
+    # populated for source_type == OPENVERSE rows.
+    provider_asset_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    creator_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    creator_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # The deterministic course-match point score (see
+    # app/course_images/providers/openverse_scoring.py) -- a different scale
+    # and meaning than quality_score above (Gemini's 0-10 photo-quality score
+    # for USER uploads), so it gets its own column rather than reusing that one.
+    match_confidence_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    match_score_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Which generated search query produced this candidate -- admin-queue
+    # debugging and the multi-course-resort disambiguation audit trail.
+    matched_query: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

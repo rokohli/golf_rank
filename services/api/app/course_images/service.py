@@ -5,8 +5,8 @@ tests/test_course_image_service.py):
 
     1. Approved OFFICIAL image
     2. Approved USER image
-    3. Approved WIKIMEDIA image already on file (this *is* the Wikimedia cache)
-    4. Live Wikimedia Commons search
+    3. Approved OPENVERSE image already on file, or a live Openverse search
+    4. Approved WIKIMEDIA image already on file, or a live Wikimedia Commons search
     5. NONE
 
 This is the only place that encodes that ordering. Controllers/endpoints call
@@ -21,12 +21,16 @@ from collections import Counter
 from contextlib import contextmanager
 from typing import Protocol
 
+import httpx
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
 from ..core.distributed_lock import RedisLock
 from ..domain import is_wikimedia_stale, storage_image_url
 from ..models import CourseImage, CourseImageSource
+from .openverse_enrichment import OPENVERSE_PROVIDER_NAME, enrich_course
+from .providers.openverse import OpenverseImageProvider
+from .providers.openverse_auth import OpenverseTokenManager
 from .providers.wikimedia import WikimediaImageProvider
 from .repository import CourseImageRepository
 from .types import CourseImageResult, no_image_result
@@ -41,6 +45,10 @@ class HasCourse(Protocol):
     name: str
     latitude: float | None
     longitude: float | None
+    course_name: str | None
+    facility_name: str | None
+    city: str | None
+    admin1_name: str | None
 
 
 class CourseImageMetrics:
@@ -62,6 +70,15 @@ class CourseImageMetrics:
         self.wikimedia_lock_contended = 0
         self.wikimedia_distributed_lock_contended = 0
         self.wikimedia_distributed_lock_unavailable = 0
+        self.openverse_lookups = 0
+        self.openverse_auto_accepted = 0
+        self.openverse_review_queued = 0
+        self.openverse_rejected = 0
+        self.openverse_failures = 0
+        self.openverse_concurrency_limited = 0
+        self.openverse_lock_contended = 0
+        self.openverse_distributed_lock_contended = 0
+        self.openverse_distributed_lock_unavailable = 0
 
     def record_resolution(self, image_type: str, latency_seconds: float) -> None:
         with self._lock:
@@ -88,6 +105,19 @@ class CourseImageMetrics:
                 "wikimedia_lock_contended": self.wikimedia_lock_contended,
                 "wikimedia_distributed_lock_contended": self.wikimedia_distributed_lock_contended,
                 "wikimedia_distributed_lock_unavailable": self.wikimedia_distributed_lock_unavailable,
+                "openverse_lookups": self.openverse_lookups,
+                "openverse_auto_accepted": self.openverse_auto_accepted,
+                "openverse_review_queued": self.openverse_review_queued,
+                "openverse_rejected": self.openverse_rejected,
+                "openverse_failures": self.openverse_failures,
+                "openverse_concurrency_limited": self.openverse_concurrency_limited,
+                "openverse_lock_contended": self.openverse_lock_contended,
+                "openverse_distributed_lock_contended": self.openverse_distributed_lock_contended,
+                "openverse_distributed_lock_unavailable": self.openverse_distributed_lock_unavailable,
+                "openverse_vs_wikimedia_resolution_ratio": (
+                    round(self.openverse_auto_accepted / self.wikimedia_successes, 2)
+                    if self.wikimedia_successes else None
+                ),
             }
 
 
@@ -117,6 +147,7 @@ class CourseImageService:
         settings: Settings,
         repository: CourseImageRepository | None = None,
         wikimedia_provider: WikimediaImageProvider | None = None,
+        openverse_provider: OpenverseImageProvider | None = None,
         metrics: CourseImageMetrics | None = None,
         distributed_lock: RedisLock | None = None,
     ):
@@ -126,6 +157,28 @@ class CourseImageService:
             timeout_seconds=settings.wikimedia_lookup_timeout_seconds,
             confidence_threshold=settings.wikimedia_confidence_threshold,
         )
+        # Unlike Wikimedia (anonymous API, always constructible), Openverse
+        # requires a registered OAuth2 client -- only build a live provider
+        # when one is configured. A None provider means "no Openverse tier
+        # available"; _resolve_openverse falls straight through to Wikimedia.
+        self._openverse_provider = openverse_provider
+        if self._openverse_provider is None and settings.openverse_enabled:
+            token_client = httpx.Client(timeout=settings.openverse_lookup_timeout_seconds)
+            token_manager = OpenverseTokenManager(
+                client=token_client,
+                token_url=settings.openverse_token_url,
+                client_id=settings.openverse_client_id,
+                client_secret=settings.openverse_client_secret,
+                timeout_seconds=settings.openverse_lookup_timeout_seconds,
+            )
+            self._openverse_provider = OpenverseImageProvider(
+                api_base_url=settings.openverse_api_base_url,
+                token_manager=token_manager,
+                timeout_seconds=settings.openverse_lookup_timeout_seconds,
+                auto_accept_threshold=settings.openverse_auto_accept_threshold,
+                min_width=settings.openverse_min_width,
+                allowed_licenses=settings.openverse_allowed_license_set,
+            )
         self.metrics = metrics or CourseImageMetrics()
         # Coalescing runs at two levels. The thread stripe below dedupes
         # concurrent viewers within one process; RedisLock extends that across
@@ -144,9 +197,20 @@ class CourseImageService:
         # coalesces repeat lookups of the *same* course and does nothing to
         # bound concurrency across many distinct cold courses.
         self._wikimedia_concurrency = threading.Semaphore(settings.wikimedia_max_concurrent_lookups)
+        self._openverse_locks = [threading.Lock() for _ in range(64)]
+        self._openverse_concurrency = threading.Semaphore(settings.openverse_max_concurrent_lookups)
+
+    @property
+    def openverse_provider(self) -> OpenverseImageProvider | None:
+        """None when Openverse isn't configured -- callers (e.g. the manual
+        admin refresh endpoint) must check for that before using it."""
+        return self._openverse_provider
 
     def _wikimedia_lock(self, course_id: int) -> threading.Lock:
         return self._wikimedia_locks[course_id % len(self._wikimedia_locks)]
+
+    def _openverse_lock(self, course_id: int) -> threading.Lock:
+        return self._openverse_locks[course_id % len(self._openverse_locks)]
 
     @contextmanager
     def _distributed_lock(self, course_id: int):
@@ -184,11 +248,118 @@ class CourseImageService:
             if result.url is not None:
                 return result
 
+        openverse_result = self._resolve_openverse(session, course)
+        if openverse_result is not None:
+            return openverse_result
+
         wikimedia_result = self._resolve_wikimedia(session, course)
         if wikimedia_result is not None:
             return wikimedia_result
 
         return no_image_result(course.name)
+
+    @contextmanager
+    def _openverse_distributed_lock(self, course_id: int):
+        """Same shape as _distributed_lock, scoped to the Openverse tier's own
+        lock key/TTL so the two tiers' coalescing never collide."""
+        ttl = self._settings.openverse_lookup_timeout_seconds * 2 + 1
+        before = self._distributed.failure_count
+        with self._distributed.try_lock(f"course-image-openverse:{course_id}", ttl_seconds=ttl) as acquired:
+            if self._distributed.failure_count > before:
+                self.metrics.increment("openverse_distributed_lock_unavailable")
+            yield acquired
+
+    def _openverse_cache_result(self, image: CourseImage | None, course_name: str) -> CourseImageResult | None:
+        if image is None:
+            return None
+        result = _to_result(self._settings, image, "OPENVERSE", course_name)
+        return result if result.url is not None else None
+
+    def _openverse_cache_is_stale(self, image: CourseImage) -> bool:
+        return is_wikimedia_stale(image, self._settings.openverse_cache_positive_ttl_seconds)
+
+    def _openverse_cache_snapshot(
+        self, session: Session, course: HasCourse
+    ) -> tuple[CourseImage | None, CourseImageResult | None, bool]:
+        """Same shape as _wikimedia_cache_snapshot, against the Openverse tier.
+        Unlike Wikimedia, there is no coordinate precondition -- Openverse
+        matching is text-based (name/city/state), so a course always has
+        enough to search on as long as it has a name."""
+        negative = self._repository.get_negative_cache(session, course.id, OPENVERSE_PROVIDER_NAME)
+        if negative is not None:
+            return None, None, True
+
+        cached = self._repository.best_openverse_image(session, course.id)
+        cached_result = self._openverse_cache_result(cached, course.name)
+        if cached_result is not None and not self._openverse_cache_is_stale(cached):
+            return cached, cached_result, True
+
+        return cached, cached_result, False
+
+    def _resolve_openverse(self, session: Session, course: HasCourse) -> CourseImageResult | None:
+        if self._openverse_provider is None:
+            cached = self._repository.best_openverse_image(session, course.id)
+            return self._openverse_cache_result(cached, course.name)
+
+        cached, cached_result, stop = self._openverse_cache_snapshot(session, course)
+        if stop:
+            return cached_result
+
+        lock = self._openverse_lock(course.id)
+        if not lock.acquire(blocking=False):
+            self.metrics.increment("openverse_lock_contended")
+            return cached_result
+        try:
+            with self._openverse_distributed_lock(course.id) as acquired:
+                if not acquired:
+                    self.metrics.increment("openverse_distributed_lock_contended")
+                    return cached_result
+                return self._resolve_openverse_locked(session, course, cached)
+        finally:
+            lock.release()
+
+    def _resolve_openverse_locked(
+        self, session: Session, course: HasCourse, cached: CourseImage | None,
+    ) -> CourseImageResult | None:
+        """The guarded half of the Openverse lookup -- mirrors
+        _resolve_wikimedia_locked's structure. Delegates the actual
+        search-and-persist branching to enrich_course (openverse_enrichment.py)
+        so the live path, the admin manual-refresh endpoint, and the offline
+        backfill script share identical auto-accept/review/miss semantics."""
+        if cached is not None:
+            session.expire(cached)
+        cached, cached_result, stop = self._openverse_cache_snapshot(session, course)
+        if stop:
+            return cached_result
+
+        # Release the pooled DB connection before blocking on Openverse, same
+        # rationale as the Wikimedia path.
+        session.commit()
+
+        if not self._openverse_concurrency.acquire(blocking=False):
+            self.metrics.increment("openverse_concurrency_limited")
+            return cached_result
+        try:
+            self.metrics.increment("openverse_lookups")
+            try:
+                outcome = enrich_course(session, self._repository, self._openverse_provider, course, self._settings)
+            except Exception:
+                logger.warning("course_image_openverse_lookup_failed course_id=%s", course.id, exc_info=True)
+                self.metrics.increment("openverse_failures")
+                return cached_result
+        finally:
+            self._openverse_concurrency.release()
+
+        if outcome.status == "auto_accepted":
+            self.metrics.increment("openverse_auto_accepted")
+            return outcome.result
+        if outcome.status == "queued_for_review":
+            self.metrics.increment("openverse_review_queued")
+        else:
+            self.metrics.increment("openverse_rejected")
+        # Review-band and miss outcomes are never shown as the live hero --
+        # fall through to Wikimedia/cached_result.
+        return cached_result
 
     def _wikimedia_cache_result(self, image: CourseImage | None, course_name: str) -> CourseImageResult | None:
         if image is None:

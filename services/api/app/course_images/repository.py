@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import (
+    Course,
     CourseImage,
     CourseImageModeration,
     CourseImageModerationAction,
@@ -74,6 +75,38 @@ class CourseImageRepository:
 
     def best_wikimedia_image(self, session: Session, course_id: int) -> CourseImage | None:
         return self._best_approved(session, course_id, CourseImageSource.WIKIMEDIA)
+
+    def best_openverse_image(self, session: Session, course_id: int) -> CourseImage | None:
+        return self._best_approved(session, course_id, CourseImageSource.OPENVERSE)
+
+    def find_openverse_image_by_asset(
+        self, session: Session, course_id: int, provider_asset_id: str,
+    ) -> CourseImage | None:
+        """Looks up a previously-stored Openverse row (any moderation status)
+        by its Openverse asset id, so re-running enrichment against a course
+        doesn't create duplicate review-queue entries for the same candidate."""
+        return session.scalar(
+            select(CourseImage).where(
+                CourseImage.course_id == course_id,
+                CourseImage.source_type == CourseImageSource.OPENVERSE,
+                CourseImage.provider_asset_id == provider_asset_id,
+            )
+        )
+
+    def sibling_course_names(self, session: Session, course: Course) -> list[str]:
+        """course_name of every other Course row sharing this course's
+        facility_name -- e.g. every other course at the same resort. Empty
+        when this course isn't part of a shared-facility resort, which is
+        the common case and needs no disambiguation guard."""
+        if not course.facility_name:
+            return []
+        return list(session.scalars(
+            select(Course.course_name).where(
+                Course.facility_name == course.facility_name,
+                Course.id != course.id,
+                Course.course_name.is_not(None),
+            )
+        ).all())
 
     def next_position(self, session: Session, course_id: int) -> int:
         """Next `CourseImage.position` for a course: one past the current max, or 0."""
@@ -159,6 +192,116 @@ class CourseImageRepository:
             height=height,
         ))
         session.commit()
+
+    def update_openverse_image(
+        self, session: Session, image: CourseImage, *,
+        external_url: str, thumbnail_url: str | None, alt_text: str,
+        source_name: str | None, source_url: str | None,
+        license_name: str | None, license_url: str | None,
+        width: int | None, height: int | None,
+        provider_asset_id: str | None, creator_name: str | None, creator_url: str | None,
+        match_confidence_score: int, match_score_reasons: list[str], matched_query: str,
+    ) -> None:
+        """Updates an existing auto-accepted Openverse row in place (refreshing
+        a stale cached hero), preserving its position/is_hero/gallery slot."""
+        image.external_url = external_url
+        image.thumbnail_url = thumbnail_url
+        image.alt_text = alt_text
+        image.source_name = source_name
+        image.source_url = source_url
+        image.license_name = license_name
+        image.license_url = license_url
+        image.width = width
+        image.height = height
+        image.provider_asset_id = provider_asset_id
+        image.creator_name = creator_name
+        image.creator_url = creator_url
+        image.match_confidence_score = match_confidence_score
+        image.match_score_reasons = match_score_reasons
+        image.matched_query = matched_query
+        image.created_at = datetime.now(timezone.utc)
+        image.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
+    def add_openverse_image(
+        self, session: Session, course_id: int, *,
+        external_url: str, thumbnail_url: str | None, alt_text: str,
+        source_name: str | None, source_url: str | None,
+        license_name: str | None, license_url: str | None,
+        width: int | None, height: int | None,
+        provider_asset_id: str | None, creator_name: str | None, creator_url: str | None,
+        match_confidence_score: int, match_score_reasons: list[str], matched_query: str,
+    ) -> CourseImage:
+        """Persists an auto-accepted Openverse match as APPROVED/is_hero=True --
+        this is what finally exercises CourseImageModerationAction.AUTO_APPROVED,
+        previously defined but unused by any live code path."""
+        image = CourseImage(
+            course_id=course_id,
+            external_url=external_url,
+            thumbnail_url=thumbnail_url,
+            alt_text=alt_text,
+            source_name=source_name,
+            source_url=source_url,
+            license_name=license_name,
+            license_url=license_url,
+            position=self.next_position(session, course_id),
+            is_hero=True,
+            source_type=CourseImageSource.OPENVERSE,
+            moderation_status=CourseImageModeration.APPROVED,
+            moderation_action=CourseImageModerationAction.AUTO_APPROVED,
+            moderated_at=datetime.now(timezone.utc),
+            width=width,
+            height=height,
+            provider_asset_id=provider_asset_id,
+            creator_name=creator_name,
+            creator_url=creator_url,
+            match_confidence_score=match_confidence_score,
+            match_score_reasons=match_score_reasons,
+            matched_query=matched_query,
+        )
+        session.add(image)
+        session.commit()
+        session.refresh(image)
+        return image
+
+    def add_openverse_review_candidate(
+        self, session: Session, course_id: int, *,
+        external_url: str, thumbnail_url: str | None, alt_text: str,
+        source_name: str | None, source_url: str | None,
+        license_name: str | None, license_url: str | None,
+        width: int | None, height: int | None,
+        provider_asset_id: str | None, creator_name: str | None, creator_url: str | None,
+        match_confidence_score: int, match_score_reasons: list[str], matched_query: str,
+    ) -> CourseImage:
+        """Persists a review-band Openverse candidate as PENDING/is_hero=False
+        -- visible to admins in the moderation queue, never eligible to
+        resolve as the hero until a human approves it."""
+        image = CourseImage(
+            course_id=course_id,
+            external_url=external_url,
+            thumbnail_url=thumbnail_url,
+            alt_text=alt_text,
+            source_name=source_name,
+            source_url=source_url,
+            license_name=license_name,
+            license_url=license_url,
+            position=self.next_position(session, course_id),
+            is_hero=False,
+            source_type=CourseImageSource.OPENVERSE,
+            moderation_status=CourseImageModeration.PENDING,
+            width=width,
+            height=height,
+            provider_asset_id=provider_asset_id,
+            creator_name=creator_name,
+            creator_url=creator_url,
+            match_confidence_score=match_confidence_score,
+            match_score_reasons=match_score_reasons,
+            matched_query=matched_query,
+        )
+        session.add(image)
+        session.commit()
+        session.refresh(image)
+        return image
 
     def find_by_storage_key(self, session: Session, storage_key: str) -> CourseImage | None:
         return session.scalar(select(CourseImage).where(CourseImage.storage_key == storage_key))
@@ -261,17 +404,21 @@ class CourseImageRepository:
 
     def moderation_queue(
         self, session: Session, *, status: str, course_id: int | None = None,
+        source_types: Collection[str] = (CourseImageSource.USER,),
         cursor: int | None = None, limit: int = 50,
     ) -> list[CourseImage]:
         """One page of the moderation queue, oldest first (a queue is FIFO,
-        unlike the feed). Scoped to USER rows: OFFICIAL and WIKIMEDIA photos are
-        curated by the offline scripts and must never be moderated here.
+        unlike the feed). Filtered to `source_types` (default USER only, so
+        every existing caller is unaffected) -- this method itself is
+        source-type-agnostic; it's the caller's job (course_photo_moderation.py
+        never passes OFFICIAL or WIKIMEDIA) to keep those tiers, which are
+        curated by the offline scripts, out of the moderation queue.
 
         Keyset pagination on id rather than OFFSET -- created_at can tie across
         rows inserted in the same transaction, so id is the stable cursor.
         """
         query = select(CourseImage).where(
-            CourseImage.source_type == CourseImageSource.USER,
+            CourseImage.source_type.in_(source_types),
             CourseImage.moderation_status == status,
         )
         if course_id is not None:
@@ -282,9 +429,14 @@ class CourseImageRepository:
             query.order_by(CourseImage.id).limit(limit)
         ).all())
 
-    def lock_image_for_moderation(self, session: Session, image_id: int) -> CourseImage | None:
-        """Loads a USER photo FOR UPDATE so concurrent moderator actions on the
-        same row serialize instead of racing.
+    def lock_image_for_moderation(
+        self, session: Session, image_id: int, *, source_types: Collection[str] = (CourseImageSource.USER,),
+    ) -> CourseImage | None:
+        """Loads a photo FOR UPDATE, filtered to `source_types` (default USER
+        only), so concurrent moderator actions on the same row serialize
+        instead of racing. This method is itself source-type-agnostic -- it's
+        the caller's job (course_photo_moderation.py never passes OFFICIAL or
+        WIKIMEDIA) to keep those tiers out of reach here.
 
         SQLite ignores FOR UPDATE silently, so this lock is only real on
         Postgres -- tests/test_concurrency_locks.py compiles the statement
@@ -293,7 +445,7 @@ class CourseImageRepository:
         return session.scalar(
             select(CourseImage).where(
                 CourseImage.id == image_id,
-                CourseImage.source_type == CourseImageSource.USER,
+                CourseImage.source_type.in_(source_types),
             ).with_for_update()
         )
 

@@ -647,3 +647,91 @@ def test_feature_user_image_refreshes_stale_identity_map_and_sets_approved() -> 
             assert db_img.moderation_status == CourseImageModeration.APPROVED
             assert db_img.moderated_by_user_id == moderator_id
             assert db_img.moderation_action == "featured"
+
+
+# --- Openverse rows in the widened moderation scope -----------------------
+
+def test_openverse_photo_can_be_approved_and_rejected() -> None:
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id, source_type=CourseImageSource.OPENVERSE)
+
+    approved = client.post(f"{BASE}/{image_id}/approve", headers=ADMIN).json()
+    assert approved["moderation_status"] == "approved"
+
+    rejected = client.post(f"{BASE}/{image_id}/reject", json={"reason": "wrong course"}, headers=ADMIN).json()
+    assert rejected["moderation_status"] == "rejected"
+    assert rejected["moderation_reason"] == "wrong course"
+
+
+def test_openverse_photo_can_be_deleted() -> None:
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id, source_type=CourseImageSource.OPENVERSE)
+
+    assert client.delete(f"{BASE}/{image_id}", headers=ADMIN).status_code == 204
+    assert _photo(client, image_id) is None
+
+
+def test_openverse_photo_cannot_be_featured() -> None:
+    """Featuring stays a USER-tier-only concept -- an Openverse row wins its
+    tier via _rank_key without an explicit human pick."""
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id, source_type=CourseImageSource.OPENVERSE)
+
+    response = client.post(f"{BASE}/{image_id}/feature", json={"featured": True}, headers=ADMIN)
+    assert response.status_code == 404
+
+
+def test_official_and_wikimedia_still_404_after_widening_scope() -> None:
+    """The widened {USER, OPENVERSE} scope must not accidentally leak to
+    OFFICIAL/WIKIMEDIA rows."""
+    client = _client()
+    course_id = _course_id(client)
+    official = _add_photo(client, course_id, source_type=CourseImageSource.OFFICIAL,
+                           status=CourseImageModeration.APPROVED)
+    wikimedia = _add_photo(client, course_id, source_type=CourseImageSource.WIKIMEDIA,
+                            status=CourseImageModeration.APPROVED)
+
+    for image_id in (official, wikimedia):
+        assert client.post(f"{BASE}/{image_id}/approve", headers=ADMIN).status_code == 404
+        assert client.post(f"{BASE}/{image_id}/reject", json={}, headers=ADMIN).status_code == 404
+        assert client.delete(f"{BASE}/{image_id}", headers=ADMIN).status_code == 404
+
+
+def test_queue_filters_by_source_type() -> None:
+    client = _client()
+    course_id = _course_id(client)
+    user_photo = _add_photo(client, course_id, source_type=CourseImageSource.USER)
+    openverse_photo = _add_photo(client, course_id, source_type=CourseImageSource.OPENVERSE)
+
+    user_only = client.get(BASE, params={"source_type": "user"}, headers=ADMIN).json()["items"]
+    assert [item["image"]["id"] for item in user_only] == [user_photo]
+
+    openverse_only = client.get(BASE, params={"source_type": "openverse"}, headers=ADMIN).json()["items"]
+    assert [item["image"]["id"] for item in openverse_only] == [openverse_photo]
+
+    both = client.get(BASE, headers=ADMIN).json()["items"]
+    assert {item["image"]["id"] for item in both} == {user_photo, openverse_photo}
+
+
+def test_queue_rejects_an_unknown_source_type() -> None:
+    client = _client()
+    assert client.get(BASE, params={"source_type": "wikimedia"}, headers=ADMIN).status_code == 422
+
+
+def test_approved_openverse_photo_can_win_the_hero_without_featuring() -> None:
+    client = _client()
+    course_id = _course_id(client)
+    image_id = _add_photo(client, course_id, source_type=CourseImageSource.OPENVERSE)
+
+    client.post(f"{BASE}/{image_id}/approve", headers=ADMIN)
+
+    with client.app.state.session_factory() as session:
+        image = session.get(CourseImage, image_id)
+        image.is_hero = True
+        session.commit()
+
+    hero = client.get(f"/api/v1/courses/{course_id}", headers=REGULAR).json()["hero_image"]
+    assert hero["type"] == "OPENVERSE"

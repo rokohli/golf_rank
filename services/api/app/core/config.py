@@ -50,6 +50,28 @@ class Settings(BaseSettings):
     wikimedia_confidence_threshold: float = 0.6
     wikimedia_cache_positive_ttl_seconds: int = 30 * 24 * 3600
     wikimedia_cache_negative_ttl_seconds: int = 3 * 24 * 3600
+    # Openverse is the second-priority external source, ahead of Wikimedia
+    # (OFFICIAL > USER > OPENVERSE > WIKIMEDIA > NONE). Off by default like
+    # Wikimedia's live lookup is on by default -- Openverse requires a
+    # registered OAuth2 client, so it can't be safely on-by-default the way
+    # Wikimedia's anonymous API is.
+    openverse_enabled: bool = False
+    openverse_client_id: str | None = None
+    openverse_client_secret: str | None = None
+    openverse_api_base_url: str = "https://api.openverse.org"
+    openverse_token_url: str = "https://api.openverse.org/v1/auth_tokens/token/"
+    openverse_lookup_timeout_seconds: float = 5.0
+    openverse_max_concurrent_lookups: int = 8
+    # A candidate scoring at or above this is auto-accepted as the hero
+    # without human review. Between review and auto-accept, it's stored as a
+    # PENDING candidate for the admin moderation queue but never shown live.
+    # Below review, it's treated as a miss (negative-cache eligible).
+    openverse_auto_accept_threshold: int = 70
+    openverse_review_threshold: int = 50
+    openverse_cache_positive_ttl_seconds: int = 30 * 24 * 3600
+    openverse_cache_negative_ttl_seconds: int = 3 * 24 * 3600
+    openverse_min_width: int = 1200
+    openverse_allowed_licenses: str = "cc0,pdm,by,by-sa"
     redis_url: str | None = None
     rate_limit_enabled: bool = False
     rate_limit_key_salt: str = "development-rate-limit-key"
@@ -220,6 +242,16 @@ class Settings(BaseSettings):
                 )
         if not 0 <= self.wikimedia_confidence_threshold <= 1:
             raise ValueError("WIKIMEDIA_CONFIDENCE_THRESHOLD must be between 0 and 1")
+        if self.openverse_enabled and not (self.openverse_client_id and self.openverse_client_secret):
+            raise ValueError(
+                "OPENVERSE_CLIENT_ID and OPENVERSE_CLIENT_SECRET are required when Openverse is enabled"
+            )
+        if self.openverse_review_threshold > self.openverse_auto_accept_threshold:
+            raise ValueError(
+                "OPENVERSE_REVIEW_THRESHOLD must be less than or equal to OPENVERSE_AUTO_ACCEPT_THRESHOLD"
+            )
+        if not self.openverse_allowed_license_set:
+            raise ValueError("OPENVERSE_ALLOWED_LICENSES must not be empty")
         for subject in self.admin_subject_set:
             # A bare Clerk user id ("user_2abc") silently matches nothing, since
             # CurrentUser.provider_subject is always prefixed -- that reads as a
@@ -243,6 +275,11 @@ class Settings(BaseSettings):
             "COURSE_PHOTO_SCORING_MAX_CONCURRENT": self.course_photo_scoring_max_concurrent,
             "COURSE_PHOTO_SCORING_MAX_ATTEMPTS": self.course_photo_scoring_max_attempts,
             "PUSH_DELIVERY_MAX_CONCURRENT": self.push_delivery_max_concurrent,
+            "OPENVERSE_LOOKUP_TIMEOUT_SECONDS": self.openverse_lookup_timeout_seconds,
+            "OPENVERSE_MAX_CONCURRENT_LOOKUPS": self.openverse_max_concurrent_lookups,
+            "OPENVERSE_MIN_WIDTH": self.openverse_min_width,
+            "OPENVERSE_AUTO_ACCEPT_THRESHOLD": self.openverse_auto_accept_threshold,
+            "OPENVERSE_REVIEW_THRESHOLD": self.openverse_review_threshold,
         }
         for name, value in positive_scoring_settings.items():
             if value <= 0:
@@ -305,4 +342,12 @@ class Settings(BaseSettings):
             subject.strip()
             for subject in self.ai_planner_allowed_subjects.split(",")
             if subject.strip()
+        }
+
+    @property
+    def openverse_allowed_license_set(self) -> set[str]:
+        return {
+            license_code.strip().lower()
+            for license_code in self.openverse_allowed_licenses.split(",")
+            if license_code.strip()
         }

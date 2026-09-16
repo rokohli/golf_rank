@@ -17,10 +17,11 @@ export type CoursePresentation = {
   tier?: 'green' | 'fairway' | 'rough' | 'bunker'
 }
 
-// Wikimedia is excluded from `course.images` server-side (domain.py's
-// course_image_data) -- it only ever serves as a hero-image fallback, never
-// a gallery entry -- so it has no entry here; an unrecognized source_type
-// (there is currently no such case) sorts last via the `?? 99` fallback below.
+// Wikimedia and Openverse are both excluded from `course.images` server-side
+// (domain.py's course_image_data) -- each only ever serves as a hero-image
+// fallback, never a gallery entry -- so neither has an entry here; an
+// unrecognized source_type (there is currently no such case) sorts last via
+// the `?? 99` fallback below.
 const SOURCE_PRIORITY: Record<string, number> = {
   official: 1,
   user: 2,

@@ -8,17 +8,29 @@ import { CoursePresentation } from '../coursePresentation'
 import { HeroImage } from '../types'
 import { colors, radii } from '../ui/theme'
 
-// Mapbox and Wikimedia both require visible credit wherever their imagery
-// is shown, not just on the course-detail hero -- mirrors HeroAttribution in
-// app/course/[id].tsx but sized for the smaller card/row visuals. Anchored to
-// the top (rather than the bottom, like the detail hero) since every card's
-// own overlays -- story/leader scrims, rating text, the "Saved" pill -- claim
-// the bottom edge; `compact` shortens the label for narrow row thumbnails
-// that can't fit the full attribution text on one line.
+// Mapbox, Wikimedia, and Openverse all require visible credit wherever their
+// imagery is shown, not just on the course-detail hero -- mirrors
+// HeroAttribution in app/course/[id].tsx but sized for the smaller card/row
+// visuals. Anchored to the top (rather than the bottom, like the detail hero)
+// since every card's own overlays -- story/leader scrims, rating text, the
+// "Saved" pill -- claim the bottom edge; `compact` shortens the label for
+// narrow row thumbnails that can't fit the full attribution text on one line.
+type AttributedHeroType = 'WIKIMEDIA' | 'OPENVERSE'
+const ATTRIBUTED_HERO_TYPES: HeroImage['type'][] = ['WIKIMEDIA', 'OPENVERSE']
+const BARE_ATTRIBUTION_FALLBACK: Record<AttributedHeroType, string> = {
+  WIKIMEDIA: 'Wikimedia',
+  OPENVERSE: 'Openverse',
+}
+const FULL_ATTRIBUTION_FALLBACK: Record<AttributedHeroType, string> = {
+  WIKIMEDIA: 'Wikimedia Commons',
+  OPENVERSE: 'Openverse',
+}
+
 function CardAttribution({ heroImage, compact = false }: { heroImage?: HeroImage | null; compact?: boolean }) {
-  if (!heroImage || heroImage.type !== 'WIKIMEDIA') return null
-  const fullLabel = `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
-  const label = compact ? heroImage.attribution ?? 'Wikimedia' : fullLabel
+  if (!heroImage || !ATTRIBUTED_HERO_TYPES.includes(heroImage.type)) return null
+  const attributedType = heroImage.type as AttributedHeroType
+  const fullLabel = `Photo: ${heroImage.attribution ?? FULL_ATTRIBUTION_FALLBACK[attributedType]}`
+  const label = compact ? heroImage.attribution ?? BARE_ATTRIBUTION_FALLBACK[attributedType] : fullLabel
   return (
     <View accessibilityLabel={`Image attribution: ${fullLabel}`} style={[styles.cardAttribution, compact && styles.cardAttributionCompact]}>
       <Text numberOfLines={1} style={[styles.cardAttributionText, compact && styles.cardAttributionTextCompact]}>{label}</Text>

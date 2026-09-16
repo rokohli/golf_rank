@@ -3,6 +3,8 @@ from contextlib import contextmanager
 import pytest
 from sqlalchemy.orm import Session
 
+from app.course_images.providers.openverse import OpenverseLookup, ScoredCandidate
+from app.course_images.providers.openverse_scoring import OpenverseCandidate, ScoreResult
 from app.course_images.providers.wikimedia import WikimediaLookup
 from app.course_images.repository import CourseImageRepository
 from app.course_images.service import CourseImageService
@@ -60,15 +62,71 @@ class FakeWikimediaProvider:
         return self._lookup
 
 
-def make_service(session: Session, *, wikimedia=None, positive_ttl_seconds=None) -> CourseImageService:
+class FakeOpenverseProvider:
+    def __init__(self, lookup: OpenverseLookup | None = None, error: Exception | None = None):
+        self._lookup = lookup
+        self._error = error
+        self.calls = 0
+
+    def search(self, course, *, sibling_course_names=None):
+        self.calls += 1
+        if self._error:
+            raise self._error
+        return self._lookup
+
+
+def make_service(
+    session: Session, *, wikimedia=None, openverse=None, positive_ttl_seconds=None,
+) -> CourseImageService:
     return CourseImageService(
         settings=Settings(
             wikimedia_live_lookup_enabled=True,
+            openverse_enabled=openverse is not None,
             **({"wikimedia_cache_positive_ttl_seconds": positive_ttl_seconds} if positive_ttl_seconds is not None else {}),
         ),
         repository=CourseImageRepository(),
         wikimedia_provider=wikimedia or FakeWikimediaProvider(lookup=WikimediaLookup(None, 0.0, None)),
+        openverse_provider=openverse,
     )
+
+
+def openverse_candidate(**overrides) -> OpenverseCandidate:
+    defaults = dict(
+        id="asset-1", title="Pebble Beach Golf Links, 7th hole", description=None,
+        url="https://example.com/openverse.jpg", thumbnail_url="https://example.com/openverse-thumb.jpg",
+        creator="John Smith", creator_url="https://example.com/john",
+        license="by-sa", license_url="https://creativecommons.org/licenses/by-sa/4.0/",
+        license_version="4.0", source="flickr", foreign_landing_url="https://flickr.com/x/1",
+        width=2000, height=1200, category="photograph", tags=[],
+    )
+    defaults.update(overrides)
+    return OpenverseCandidate(**defaults)
+
+
+def openverse_auto_accept_lookup(course_name: str, *, score: int = 85) -> OpenverseLookup:
+    candidate = openverse_candidate()
+    scored = ScoredCandidate(
+        candidate=candidate, score=ScoreResult(score=score, reasons=["+50 exact match"]), matched_query="q",
+    )
+    result = CourseImageResult(
+        type="OPENVERSE", url=candidate.url, thumbnail_url=candidate.thumbnail_url,
+        attribution="Photo by John Smith · BY-SA 4.0 · via Flickr", license="BY-SA",
+        license_url=candidate.license_url, source_url=candidate.foreign_landing_url,
+        alt_text=f"{course_name} course photo", width=candidate.width, height=candidate.height,
+    )
+    return OpenverseLookup(result=result, top_candidate=scored, review_candidates=[scored])
+
+
+def openverse_review_band_lookup(*, score: int = 60) -> OpenverseLookup:
+    candidate = openverse_candidate(id="asset-review")
+    scored = ScoredCandidate(
+        candidate=candidate, score=ScoreResult(score=score, reasons=["+30 partial match"]), matched_query="q",
+    )
+    return OpenverseLookup(result=None, top_candidate=scored, review_candidates=[scored])
+
+
+def openverse_miss_lookup() -> OpenverseLookup:
+    return OpenverseLookup(result=None, top_candidate=None, review_candidates=[])
 
 
 def wikimedia_lookup(course_name: str, *, confidence: float = 0.9) -> WikimediaLookup:
@@ -399,3 +457,99 @@ def test_holding_the_lock_resolves_normally(session: Session) -> None:
     assert provider.calls == 1
     assert service.metrics.wikimedia_distributed_lock_contended == 0
     assert service.metrics.wikimedia_distributed_lock_unavailable == 0
+
+
+# --- Openverse tier -----------------------------------------------------
+
+def test_openverse_used_when_no_owned_image_and_no_wikimedia(session):
+    course = make_course(session)
+    openverse = FakeOpenverseProvider(lookup=openverse_auto_accept_lookup(course.name))
+
+    result = make_service(session, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "OPENVERSE"
+    assert result.url == "https://example.com/openverse.jpg"
+
+
+def test_openverse_outranks_wikimedia(session):
+    """Priority order: OFFICIAL > USER > OPENVERSE > WIKIMEDIA > NONE."""
+    course = make_course(session)
+    add_image(session, course, source_type=CourseImageSource.WIKIMEDIA, external_url="https://example.com/wiki.jpg")
+    openverse = FakeOpenverseProvider(lookup=openverse_auto_accept_lookup(course.name))
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+
+    result = make_service(session, wikimedia=wikimedia, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "OPENVERSE"
+
+
+def test_official_and_user_still_outrank_openverse(session):
+    course = make_course(session)
+    add_image(session, course, source_type=CourseImageSource.USER, external_url="https://example.com/user.jpg")
+    openverse = FakeOpenverseProvider(lookup=openverse_auto_accept_lookup(course.name))
+
+    result = make_service(session, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "USER"
+    assert openverse.calls == 0  # USER already resolved; Openverse tier never consulted
+
+
+def test_openverse_review_band_does_not_become_hero_falls_to_wikimedia(session):
+    course = make_course(session)
+    openverse = FakeOpenverseProvider(lookup=openverse_review_band_lookup())
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+
+    result = make_service(session, wikimedia=wikimedia, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "WIKIMEDIA"
+    # The review-band candidate was persisted for the moderation queue, as PENDING.
+    pending = [img for img in session.query(CourseImage).filter_by(course_id=course.id).all()]
+    openverse_rows = [img for img in pending if img.source_type == CourseImageSource.OPENVERSE]
+    assert len(openverse_rows) == 1
+    assert openverse_rows[0].moderation_status == CourseImageModeration.PENDING
+
+
+def test_openverse_miss_falls_to_wikimedia(session):
+    course = make_course(session)
+    openverse = FakeOpenverseProvider(lookup=openverse_miss_lookup())
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+
+    result = make_service(session, wikimedia=wikimedia, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "WIKIMEDIA"
+
+
+def test_openverse_failure_falls_open_to_wikimedia(session):
+    course = make_course(session)
+    openverse = FakeOpenverseProvider(error=RuntimeError("openverse unavailable"))
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+
+    result = make_service(session, wikimedia=wikimedia, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.type == "WIKIMEDIA"
+    assert make_service(session).metrics.openverse_failures == 0  # sanity: fresh service starts at zero
+
+
+def test_openverse_disabled_by_default_skips_straight_to_wikimedia(session):
+    """No openverse_provider injected and openverse_enabled defaults False --
+    the tier is a no-op, matching pre-Openverse behavior exactly."""
+    course = make_course(session)
+    wikimedia = FakeWikimediaProvider(lookup=wikimedia_lookup(course.name))
+
+    result = make_service(session, wikimedia=wikimedia).resolve_hero_image(session, course)
+
+    assert result.type == "WIKIMEDIA"
+
+
+def test_cached_approved_openverse_avoids_new_request(session):
+    course = make_course(session)
+    add_image(
+        session, course, source_type=CourseImageSource.OPENVERSE,
+        external_url="https://example.com/cached-openverse.jpg", is_hero=True,
+    )
+    openverse = FakeOpenverseProvider(lookup=openverse_auto_accept_lookup(course.name))
+
+    result = make_service(session, openverse=openverse).resolve_hero_image(session, course)
+
+    assert result.url == "https://example.com/cached-openverse.jpg"
+    assert openverse.calls == 0

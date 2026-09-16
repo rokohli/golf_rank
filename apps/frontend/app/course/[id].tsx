@@ -395,11 +395,18 @@ export function CoursePhotoItem({ courseName, image, index }: { courseName: stri
 
 function HeroButton({ disabled = false, icon, label, onPress }: { disabled?: boolean; icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) { return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.heroButton, disabled && styles.actionDisabled]}><Feather name={icon} size={19} color="#FFF" /></Pressable> }
 
-// Wikimedia requires visible attribution when its imagery is shown;
-// OFFICIAL/USER/NONE need none.
+// Wikimedia and Openverse both require visible attribution when their
+// imagery is shown; OFFICIAL/USER/NONE need none.
+type AttributedHeroType = 'WIKIMEDIA' | 'OPENVERSE'
+const ATTRIBUTED_HERO_TYPES: HeroImage['type'][] = ['WIKIMEDIA', 'OPENVERSE']
+const HERO_ATTRIBUTION_FALLBACK: Record<AttributedHeroType, string> = {
+  WIKIMEDIA: 'Wikimedia Commons',
+  OPENVERSE: 'Openverse',
+}
+
 function HeroAttribution({ heroImage }: { heroImage?: HeroImage | null }) {
-  if (!heroImage || heroImage.type !== 'WIKIMEDIA') return null
-  const credit = `Photo: ${heroImage.attribution ?? 'Wikimedia Commons'}`
+  if (!heroImage || !ATTRIBUTED_HERO_TYPES.includes(heroImage.type)) return null
+  const credit = `Photo: ${heroImage.attribution ?? HERO_ATTRIBUTION_FALLBACK[heroImage.type as AttributedHeroType]}`
   const onPressCredit = heroImage.source_url ? () => void Linking.openURL(heroImage.source_url!) : undefined
   const onPressLicense = heroImage.license_url ? () => void Linking.openURL(heroImage.license_url!) : undefined
   return (

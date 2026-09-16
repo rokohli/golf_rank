@@ -159,6 +159,12 @@ class AdminCoursePhotoOut(BaseModel):
     course_hero_locked: bool = False
     is_scoring: bool = False
     scoring_exhausted: bool = False
+    # Populated only for source_type == openverse rows; null for USER rows.
+    match_confidence_score: int | None = None
+    matched_query: str | None = None
+    creator_name: str | None = None
+    creator_url: str | None = None
+    provider_asset_id: str | None = None
 
 
 class AdminCoursePhotoPage(BaseModel):
@@ -177,7 +183,7 @@ class CoursePhotoFeatureRequest(BaseModel):
 
 
 class CourseHeroImageOut(BaseModel):
-    type: Literal["OFFICIAL", "USER", "WIKIMEDIA", "NONE"]
+    type: Literal["OFFICIAL", "USER", "OPENVERSE", "WIKIMEDIA", "NONE"]
     url: str | None = None
     thumbnail_url: str | None = None
     attribution: str | None = None
