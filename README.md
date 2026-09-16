@@ -32,18 +32,20 @@ REDIS_TEST_URL=redis://localhost:6379/15 pytest -q tests/test_rate_limit.py
 `cf-connecting-ip`, which Cloudflare supplies as one validated client address.
 The API does not use the caller-controlled `X-Forwarded-For` chain for buckets.
 
-### California course catalog
+### US course catalog
 
-The MVP catalog imports OpenGolfAPI data under ODbL 1.0. Preview and apply an idempotent import with:
+The catalog imports OpenGolfAPI data under ODbL 1.0 — a free, key-less API with no documented per-request cost. Preview and apply an idempotent import with:
 
 ```bash
 cd services/api
 python -m app.catalog_import --state CA --dry-run
 python -m app.catalog_import --state CA
 python -m app.catalog_import --onboarding-regions
+python -m app.catalog_import --all-states --dry-run
+python -m app.catalog_import --all-states --throttle-seconds 1.0
 ```
 
-The onboarding-regions mode derives the required state catalogs from users' saved home regions; `--state` remains available for explicit expansion and may be repeated. The job fetches all pages, validates required identity/location fields, upserts by `(source, source_course_id)`, reports errors, and soft-retires provider records omitted from later complete imports. GolfRank must display `Course catalog data © OpenGolfAPI, ODbL 1.0` wherever this catalog is presented.
+The onboarding-regions mode derives the required state catalogs from users' saved home regions; `--state` remains available for explicit expansion and may be repeated. `--all-states` imports all 50 states plus DC in one run; `--throttle-seconds` (default 1.0) pauses between per-state requests to stay within OpenGolfAPI's fair-use limits — check their live docs before a full nationwide backfill, since request-volume limits aren't published in this repo. The job fetches all pages, validates required identity/location fields, upserts by `(source, source_course_id)`, reports per-state and summary counts (including any states whose fetch failed, which don't abort the rest of the run), and soft-retires provider records omitted from later complete imports. GolfRank must display `Course catalog data © OpenGolfAPI, ODbL 1.0` wherever this catalog is presented.
 
 ## Mobile client
 

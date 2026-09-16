@@ -1,5 +1,6 @@
 import argparse
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -215,31 +216,85 @@ def onboarding_states(session: Session) -> list[str]:
     })
 
 
+def run_state_imports(
+    session: Session,
+    states: list[str],
+    *,
+    dry_run: bool = False,
+    throttle_seconds: float = 0.0,
+) -> dict[str, ImportReport]:
+    """Import each state in turn, isolating one state's failure from the rest.
+
+    A 51-region backfill hitting an upstream hiccup on one state shouldn't
+    lose progress already made on the others, so fetch failures are recorded
+    as report errors instead of aborting the run.
+    """
+
+    reports: dict[str, ImportReport] = {}
+    for index, state in enumerate(states):
+        if index and throttle_seconds:
+            time.sleep(throttle_seconds)
+        try:
+            records = fetch_state_courses(state)
+        except httpx.HTTPError as exc:
+            reports[state] = ImportReport(errors=[f"fetch failed: {exc}"])
+            continue
+        reports[state] = import_courses(session, records, state=state, dry_run=dry_run)
+    return reports
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import a state catalog from OpenGolfAPI (ODbL-1.0).")
     parser.add_argument("--state", action="append", dest="states", help="Two-letter state code; repeat for multiple states")
+    parser.add_argument("--all-states", action="store_true", help="Import every US state plus DC")
     parser.add_argument("--onboarding-regions", action="store_true", help="Import states requested in saved onboarding regions")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--throttle-seconds",
+        type=float,
+        default=1.0,
+        help="Delay between per-state requests to stay within OpenGolfAPI's fair-use limits (default: 1.0)",
+    )
     args = parser.parse_args()
     session_factory = make_session_factory(make_engine(Settings().database_url))
     with session_factory() as session:
         states = {state.upper() for state in (args.states or [])}
+        if args.all_states:
+            states.update(STATE_NAMES.keys())
         if args.onboarding_regions or not states:
             states.update(onboarding_states(session))
         unknown = sorted(states - STATE_NAMES.keys())
         if unknown:
             parser.error(f"unknown state codes: {', '.join(unknown)}")
         if not states:
-            parser.error("no importable onboarding regions found; pass --state XX")
-        for state in sorted(states):
-            records = fetch_state_courses(state)
-            report = import_courses(session, records, state=state, dry_run=args.dry_run)
+            parser.error("no importable onboarding regions found; pass --state XX or --all-states")
+        reports = run_state_imports(
+            session, sorted(states), dry_run=args.dry_run, throttle_seconds=args.throttle_seconds
+        )
+        failed_states = []
+        for state, report in reports.items():
             print(
                 f"state={state} fetched={report.fetched} inserted={report.inserted} updated={report.updated} "
                 f"retired={report.retired} invalid={report.invalid} dry_run={args.dry_run}"
             )
             for error in report.errors[:20]:
                 print(f"state={state} error: {error}")
+            if any(error.startswith("fetch failed:") for error in report.errors):
+                failed_states.append(state)
+        totals = ImportReport(
+            fetched=sum(report.fetched for report in reports.values()),
+            inserted=sum(report.inserted for report in reports.values()),
+            updated=sum(report.updated for report in reports.values()),
+            retired=sum(report.retired for report in reports.values()),
+            invalid=sum(report.invalid for report in reports.values()),
+        )
+        print(
+            f"summary states={len(reports)} failed_states={len(failed_states)} fetched={totals.fetched} "
+            f"inserted={totals.inserted} updated={totals.updated} retired={totals.retired} "
+            f"invalid={totals.invalid} dry_run={args.dry_run}"
+        )
+        if failed_states:
+            print(f"summary failed_state_codes={','.join(sorted(failed_states))}")
 
 
 if __name__ == "__main__":
