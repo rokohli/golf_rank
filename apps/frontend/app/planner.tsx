@@ -3,7 +3,7 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-rou
 import { useCallback, useState } from 'react'
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { createPlan, deletePlan, generateAIItinerary, getPlan, getPlans, savePlan, updatePlan } from '../src/api/client'
+import { ApiResponseError, createPlan, deletePlan, generateAIItinerary, getPlan, getPlans, savePlan, updatePlan } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { CourseVisual, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
@@ -132,7 +132,11 @@ export default function Planner() {
       setAIGeneration(generated)
       setTrips(await getPlans(headers))
     } catch (reason) {
-      setError(message(reason, 'Unable to organize this trip with AI.'))
+      if (reason instanceof ApiResponseError && reason.status === 429) {
+        setError('AI trip planning has hit its usage limit for now. Please try again later.')
+      } else {
+        setError(message(reason, 'Unable to organize this trip with AI.'))
+      }
     } finally {
       setWorking(false)
     }
@@ -195,15 +199,29 @@ export default function Planner() {
 }
 
 function PlanResult({ plan, aiGeneration, onAI, onSave, onDelete, working }: { plan: GolfPlan; aiGeneration: AIGolfPlan | null; onAI: () => void; onSave: () => void; onDelete: () => void; working: boolean }) {
+  const aiCopy = aiGeneration ? aiResultCopy(aiGeneration) : null
   return <View style={styles.result}>
     <View style={styles.resultHeader}><View><Text style={styles.resultTitle}>{plan.title}</Text><Text style={styles.resultDates}>{formatDateRange(plan.start_date, plan.end_date)}</Text></View><View style={styles.status}><Text style={styles.statusText}>{plan.status}</Text></View></View>
-    {aiGeneration ? <View style={aiGeneration.generation_status === 'generated' ? styles.aiSummary : styles.aiFallback}><Text style={styles.aiLabel}>{aiGeneration.generation_status === 'generated' ? 'AI ORGANIZED' : 'DETERMINISTIC PLAN KEPT'}</Text><Text style={styles.aiSummaryText}>{aiGeneration.generated_summary}</Text></View> : null}
+    {aiGeneration && aiCopy ? <View style={aiGeneration.generation_status === 'generated' ? styles.aiSummary : styles.aiFallback}><Text style={styles.aiLabel}>{aiCopy.label}</Text>{aiCopy.note ? <Text style={styles.aiFallbackNote}>{aiCopy.note}</Text> : null}<Text style={styles.aiSummaryText}>{aiGeneration.generated_summary}</Text></View> : null}
     {!plan.candidates.length ? <View style={styles.empty}><Text style={styles.muted}>No courses match this request. Try another destination, budget, or set of must-haves.</Text></View> : null}
     {plan.candidates.map((candidate) => <View key={candidate.course.id} style={styles.candidate}><View style={styles.thumb}><CourseVisual course={displayCourse(candidate.course)} height={64} /></View><View style={styles.flex}><Text style={styles.courseTitle}>{candidate.course.name}</Text><Text style={styles.muted}>{candidate.distance_miles == null ? candidate.course.region : `${candidate.distance_miles.toFixed(1)} mi · ${candidate.course.region}`}</Text>{candidate.reasons.map((reason) => <Text key={reason} style={styles.reason}>• {reason}</Text>)}{candidate.caveats.map((caveat) => <Text key={caveat} style={styles.caveat}>• {caveat}</Text>)}</View></View>)}
     {plan.itinerary.length ? <><Text style={styles.itineraryTitle}>ITINERARY</Text>{plan.itinerary.map((item) => <View key={item.id} style={styles.itineraryRow}><Text style={styles.itineraryDate}>{formatDate(item.date)}</Text><View style={styles.flex}><Text style={styles.courseTitle}>{item.title}</Text><Text style={styles.muted}>{item.details.availability_verified ? 'Availability verified' : 'Tee-time availability unverified'}{item.course?.tee_time_url ? ' · Official booking link available' : ''}</Text></View></View>)}</> : null}
     {plan.candidates.length ? <Pressable accessibilityRole="button" accessibilityLabel="Organize itinerary with AI" disabled={working} onPress={onAI} style={styles.aiAction}>{working ? <ActivityIndicator color={colors.pine} /> : <><Feather name="cpu" size={15} color={colors.pine} /><Text style={styles.aiActionText}>Organize itinerary with AI</Text></>}</Pressable> : null}
     <View style={styles.actions}><Pressable accessibilityRole="button" disabled={working || plan.status === 'saved'} onPress={onSave} style={[styles.secondary, plan.status === 'saved' && styles.disabled]}><Feather name="bookmark" size={15} color={colors.pine} /><Text style={styles.secondaryText}>{plan.status === 'saved' ? 'Saved' : 'Save trip'}</Text></Pressable><Pressable accessibilityRole="button" disabled={working} onPress={onDelete} style={styles.delete}><Text style={styles.deleteText}>Delete</Text></Pressable></View>
   </View>
+}
+
+const AI_UNAVAILABLE_REASONS = new Set(['disabled', 'restricted'])
+
+function aiResultCopy(aiGeneration: AIGolfPlan): { label: string; note: string | null } {
+  if (aiGeneration.generation_status === 'generated') return { label: 'AI ORGANIZED', note: null }
+  if (aiGeneration.fallback_reason && AI_UNAVAILABLE_REASONS.has(aiGeneration.fallback_reason)) {
+    return { label: 'AI PLANNING UNAVAILABLE', note: 'AI trip planning isn’t turned on for your account yet — here’s your itinerary organized by our default ranking.' }
+  }
+  if (aiGeneration.fallback_reason === 'monthly_cost_limit') {
+    return { label: 'AI PLANNING PAUSED', note: 'We’ve reached this month’s AI planning limit — here’s your itinerary organized by our default ranking.' }
+  }
+  return { label: 'DETERMINISTIC PLAN KEPT', note: null }
 }
 
 function Field({ label, help, ...props }: { label: string; help?: string } & React.ComponentProps<typeof TextInput>) { return <View style={styles.fieldWrap}><Text style={styles.label}>{label}</Text><TextInput accessibilityLabel={label} placeholderTextColor={colors.muted} style={styles.field} {...props} />{help ? <Text style={styles.help}>{help}</Text> : null}</View> }
@@ -224,5 +242,5 @@ const styles = StyleSheet.create({
   result: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 14, borderWidth: 1, gap: 12, padding: 14 }, resultHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' }, resultTitle: { color: colors.ink, fontFamily: 'Georgia', fontSize: 20 }, resultDates: { color: colors.muted, fontSize: 10, marginTop: 4 }, status: { backgroundColor: colors.pineSoft, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 5 }, statusText: { color: colors.pine, fontSize: 8, fontWeight: '800', textTransform: 'uppercase' }, candidate: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, paddingTop: 12 }, thumb: { borderRadius: 8, overflow: 'hidden', width: 76 }, courseTitle: { color: colors.ink, fontSize: 11, fontWeight: '800' }, muted: { color: colors.muted, fontSize: 9, lineHeight: 14 }, reason: { color: colors.pineDark, fontSize: 9, lineHeight: 14, marginTop: 3 }, caveat: { color: '#8A6844', fontSize: 9, lineHeight: 14, marginTop: 2 }, itineraryTitle: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1 }, itineraryRow: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, paddingTop: 10 }, itineraryDate: { color: colors.pine, fontSize: 9, fontWeight: '800', width: 46 }, actions: { flexDirection: 'row', gap: 10 }, secondary: { alignItems: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, flex: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 40 }, secondaryText: { color: colors.pine, fontSize: 10, fontWeight: '800' }, delete: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 }, deleteText: { color: colors.error, fontSize: 10, fontWeight: '800' }, disabled: { opacity: 0.55 },
   empty: { alignItems: 'center', gap: 8, padding: 18 }, tripRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }, tripTitle: { color: colors.ink, fontSize: 12, fontWeight: '800', marginBottom: 4 },
   refine: { alignItems: 'center', alignSelf: 'flex-start', borderColor: colors.pine, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, paddingHorizontal: 13, paddingVertical: 8 }, refineText: { color: colors.pine, fontSize: 10, fontWeight: '800' },
-  aiSummary: { backgroundColor: colors.pineSoft, borderRadius: 10, gap: 4, padding: 11 }, aiFallback: { backgroundColor: '#F6F1E8', borderRadius: 10, gap: 4, padding: 11 }, aiLabel: { color: colors.pine, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 }, aiSummaryText: { color: colors.ink, fontSize: 10, lineHeight: 15 }, aiAction: { alignItems: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 40 }, aiActionText: { color: colors.pine, fontSize: 10, fontWeight: '800' },
+  aiSummary: { backgroundColor: colors.pineSoft, borderRadius: 10, gap: 4, padding: 11 }, aiFallback: { backgroundColor: '#F6F1E8', borderRadius: 10, gap: 4, padding: 11 }, aiLabel: { color: colors.pine, fontSize: 8, fontWeight: '800', letterSpacing: 0.8 }, aiFallbackNote: { color: '#8A6844', fontSize: 9, lineHeight: 14 }, aiSummaryText: { color: colors.ink, fontSize: 10, lineHeight: 15 }, aiAction: { alignItems: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 40 }, aiActionText: { color: colors.pine, fontSize: 10, fontWeight: '800' },
 })
