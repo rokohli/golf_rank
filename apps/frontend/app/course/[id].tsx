@@ -572,15 +572,17 @@ function FeeSuggestion({ error, input, onCancel, onChangeInput, onStart, onSubmi
   error: string | null; input: string; onCancel: () => void; onChangeInput: (value: string) => void
   onStart: () => void; onSubmit: () => void; open: boolean; submitted: boolean; submitting: boolean
 }) {
-  if (submitted) return <Text style={styles.feeSuggestionNote}>Thanks — we’ll apply this once another golfer confirms a similar fee.</Text>
-  if (!open) return <Pressable accessibilityRole="button" onPress={onStart}><Text style={styles.feeSuggestionLink}>Suggest a green fee</Text></Pressable>
-  return <View style={styles.detailDropdown}>
-    <Text style={styles.detailHelp}>What did you pay for a round here?</Text>
-    <TextInput accessibilityLabel="Suggested green fee" keyboardType="number-pad" maxLength={4} onChangeText={onChangeInput} placeholder="$" style={styles.detailInput} value={input} />
-    {error ? <Text accessibilityRole="alert" style={styles.ratingError}>{error}</Text> : null}
+  if (submitted) return <View style={styles.feeSuggestionNote}><Feather name="check-circle" size={14} color={colors.gold} /><Text style={styles.feeSuggestionNoteText}>Thanks — we’ll apply this once another golfer confirms a similar fee.</Text></View>
+  if (!open) return <Pressable accessibilityRole="button" onPress={onStart} style={styles.feeSuggestionChip}><Feather name="plus" size={12} color={colors.gold} /><Text style={styles.feeSuggestionChipText}>Suggest a green fee</Text></Pressable>
+  return <View style={styles.feeSuggestionCard}>
+    <Text style={styles.feeSuggestionHelp}>What did you pay for a round here?</Text>
+    <TextInput accessibilityLabel="Suggested green fee" keyboardType="number-pad" maxLength={4} onChangeText={onChangeInput} placeholder="$" placeholderTextColor={colors.muted} style={styles.feeSuggestionInput} value={input} />
+    {error ? <Text accessibilityRole="alert" style={styles.feeSuggestionError}>{error}</Text> : null}
     <View style={styles.feeSuggestionActions}>
-      <SaveDetailButton label="Submit" loading={submitting} onPress={onSubmit} />
-      <Pressable accessibilityRole="button" disabled={submitting} onPress={onCancel}><Text style={styles.retryText}>Cancel</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={submitting} onPress={onCancel}><Text style={styles.feeSuggestionCancel}>Cancel</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityState={{ disabled: submitting }} disabled={submitting} onPress={onSubmit} style={styles.feeSuggestionSubmit}>
+        {submitting ? <ActivityIndicator color={colors.pineDark} size="small" /> : <Text style={styles.feeSuggestionSubmitText}>Submit</Text>}
+      </Pressable>
     </View>
   </View>
 }
@@ -591,7 +593,18 @@ const styles = StyleSheet.create({
   hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' }, back: { left: 14, position: 'absolute', top: 14 }, heroActions: { flexDirection: 'row', gap: 8, position: 'absolute', right: 14, top: 14 }, heroButton: { alignItems: 'center', backgroundColor: 'rgba(16,56,42,0.88)', borderColor: 'rgba(255,255,255,0.35)', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
   heroAttribution: { bottom: 46, left: 12, right: 12, position: 'absolute', flexDirection: 'row' }, heroAttributionCredit: { flexShrink: 1 }, heroAttributionLicense: { flexShrink: 1 }, heroAttributionText: { color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   coursePanel: { backgroundColor: colors.pine, borderRadius: 14, marginHorizontal: -18, marginTop: -38, paddingHorizontal: 22, paddingTop: 24, zIndex: 2 }, title: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 25, lineHeight: 31 }, location: { color: '#D0DAD4', fontSize: 12, marginTop: 7 }, access: { color: '#D0DAD4', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 15, textTransform: 'uppercase' },
-  feeSuggestionLink: { color: '#F8F7F3', fontSize: 10, fontWeight: '800', marginTop: 14, textDecorationLine: 'underline' }, feeSuggestionNote: { color: '#D0DAD4', fontSize: 10, lineHeight: 15, marginTop: 14 }, feeSuggestionActions: { alignItems: 'center', flexDirection: 'row', gap: 14, justifyContent: 'flex-end' },
+  feeSuggestionChip: { alignItems: 'center', alignSelf: 'flex-start', borderColor: 'rgba(209,154,53,0.65)', borderRadius: 14, borderStyle: 'dashed', borderWidth: 1, flexDirection: 'row', gap: 6, marginTop: 14, paddingHorizontal: 11, paddingVertical: 7 },
+  feeSuggestionChipText: { color: colors.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.4, textTransform: 'uppercase' },
+  feeSuggestionNote: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 14 },
+  feeSuggestionNoteText: { color: '#D0DAD4', flex: 1, fontSize: 10, lineHeight: 15 },
+  feeSuggestionCard: { backgroundColor: 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.22)', borderRadius: 12, borderWidth: 1, gap: 10, marginTop: 14, padding: 14 },
+  feeSuggestionHelp: { color: '#D0DAD4', fontSize: 10, lineHeight: 15 },
+  feeSuggestionInput: { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.28)', borderRadius: 8, borderWidth: 1, color: '#F8F7F3', fontSize: 13, fontWeight: '700', minHeight: 42, paddingHorizontal: 11 },
+  feeSuggestionError: { color: '#E7A08C', fontSize: 9 },
+  feeSuggestionActions: { alignItems: 'center', flexDirection: 'row', gap: 16, justifyContent: 'flex-end' },
+  feeSuggestionCancel: { color: '#D0DAD4', fontSize: 11, fontWeight: '800' },
+  feeSuggestionSubmit: { alignItems: 'center', backgroundColor: colors.gold, borderRadius: 17, justifyContent: 'center', minHeight: 34, minWidth: 88, paddingHorizontal: 14 },
+  feeSuggestionSubmitText: { color: colors.pineDark, fontSize: 10, fontWeight: '800' },
   facts: { borderTopColor: 'rgba(255,255,255,0.23)', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', marginTop: 18 }, fact: { alignItems: 'center', flex: 1, minHeight: 94, paddingHorizontal: 4, paddingTop: 17 }, factBorder: { borderLeftColor: 'rgba(255,255,255,0.23)', borderLeftWidth: StyleSheet.hairlineWidth }, factValue: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 22 }, factLabel: { color: '#D0DAD4', fontSize: 7, fontWeight: '800', letterSpacing: 1, marginTop: 7, textAlign: 'center', textTransform: 'uppercase' }, factSecondary: { color: '#D0DAD4', fontSize: 8, marginTop: 4, textAlign: 'center' },
   ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 },
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 7, minWidth: 70 }, actionIcon: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 24, borderWidth: 1, height: 48, justifyContent: 'center', width: 48 }, actionIconPressed: { backgroundColor: colors.pine, borderColor: colors.pine }, actionLabel: { color: colors.ink, fontSize: 10 }, actionLabelPressed: { color: colors.pine, fontWeight: '700' }, actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },
