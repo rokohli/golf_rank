@@ -1,7 +1,16 @@
 import httpx
 from sqlalchemy import select
 
-from app.catalog_import import fetch_state_courses, import_courses, normalize_access, normalize_course_name, onboarding_states, state_code_from_region
+from app.catalog_import import (
+    STATE_NAMES,
+    fetch_state_courses,
+    import_courses,
+    normalize_access,
+    normalize_course_name,
+    onboarding_states,
+    run_state_imports,
+    state_code_from_region,
+)
 from app.course_images.repository import CourseImageRepository
 from app.db import make_engine, make_session_factory
 from app.models import Base, Course, CourseImage, CourseImageSource, Profile, User
@@ -98,6 +107,26 @@ def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records(
         assert stored.status == "retired"
 
 
+def test_catalog_import_dedupes_repeated_ids_within_a_single_fetch() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    record = {
+        "id": "provider-dup", "name": "Repeated Links", "course_name": "Repeated Links",
+        "latitude": 34.1, "longitude": -118.2, "city": "Los Angeles", "type": None,
+        "holes": 18, "par": 71,
+    }
+    with session_factory() as session:
+        # OpenGolfAPI has been observed returning the same course id twice
+        # within one state's paginated results; a bulk insert of both would
+        # otherwise violate the (source, source_course_id) unique constraint.
+        report = import_courses(session, [record, dict(record)], state="CA")
+        assert report.fetched == 2
+        assert report.inserted == 1
+        assert report.duplicate == 1
+        assert session.scalar(select(Course.id).where(Course.source_course_id == "provider-dup")) is not None
+
+
 def test_catalog_dry_run_does_not_write_and_access_normalization_is_conservative() -> None:
     engine = make_engine("sqlite+pysqlite://")
     Base.metadata.create_all(engine)
@@ -148,6 +177,35 @@ def test_catalog_import_removes_stripped_trademark_artifacts_from_course_names()
     assert normalize_course_name("Spyglass Hilltm Golf Course") == "Spyglass Hill Golf Course"
     assert normalize_course_name("The Haytm") == "The Hay"
     assert normalize_course_name("Timber Creek Golf Club") == "Timber Creek Golf Club"
+
+
+def test_run_state_imports_isolates_one_state_failure_from_the_rest(monkeypatch) -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+
+    def fake_fetch(state: str, *, client=None) -> list[dict]:
+        if state == "CA":
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", "https://example.com"))
+        return [{
+            "id": f"provider-{state}", "name": "Some Links", "course_name": "Some Links",
+            "latitude": 34.1, "longitude": -118.2, "city": "Somewhere", "type": None,
+            "holes": 18, "par": 72,
+        }]
+
+    monkeypatch.setattr("app.catalog_import.fetch_state_courses", fake_fetch)
+
+    with session_factory() as session:
+        reports = run_state_imports(session, ["CA", "OR"], throttle_seconds=0.0)
+
+    assert reports["CA"].fetched == 0
+    assert reports["CA"].errors == ["fetch failed: boom"]
+    assert reports["OR"].inserted == 1
+
+
+def test_all_states_flag_covers_every_state_plus_dc() -> None:
+    assert len(STATE_NAMES) == 51
+    assert "DC" in STATE_NAMES
 
 
 def test_catalog_import_applies_record_overrides_for_known_inaccurate_upstream_data() -> None:
