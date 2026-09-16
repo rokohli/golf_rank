@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
 import Planner from '../planner'
+import { ApiResponseError } from '../../src/api/client'
 
 const mockCreatePlan = jest.fn()
 const mockDeletePlan = jest.fn()
@@ -29,15 +30,26 @@ jest.mock('expo-router', () => {
   }
 })
 
-jest.mock('../../src/api/client', () => ({
-  createPlan: (...args: unknown[]) => mockCreatePlan(...args),
-  deletePlan: (...args: unknown[]) => mockDeletePlan(...args),
-  getPlan: (...args: unknown[]) => mockGetPlan(...args),
-  getPlans: (...args: unknown[]) => mockGetPlans(...args),
-  generateAIItinerary: (...args: unknown[]) => mockGenerateAIItinerary(...args),
-  savePlan: (...args: unknown[]) => mockSavePlan(...args),
-  updatePlan: (...args: unknown[]) => mockUpdatePlan(...args),
-}))
+jest.mock('../../src/api/client', () => {
+  class ApiResponseError extends Error {
+    status: number
+    constructor(message: string, status: number) {
+      super(message)
+      this.name = 'ApiResponseError'
+      this.status = status
+    }
+  }
+  return {
+    ApiResponseError,
+    createPlan: (...args: unknown[]) => mockCreatePlan(...args),
+    deletePlan: (...args: unknown[]) => mockDeletePlan(...args),
+    getPlan: (...args: unknown[]) => mockGetPlan(...args),
+    getPlans: (...args: unknown[]) => mockGetPlans(...args),
+    generateAIItinerary: (...args: unknown[]) => mockGenerateAIItinerary(...args),
+    savePlan: (...args: unknown[]) => mockSavePlan(...args),
+    updatePlan: (...args: unknown[]) => mockUpdatePlan(...args),
+  }
+})
 
 jest.mock('../../src/auth/useAuthToken', () => ({
   useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
@@ -154,5 +166,79 @@ describe('trip planner', () => {
     ))
     expect(await screen.findByText('AI ORGANIZED')).toBeOnTheScreen()
     expect(screen.getByText('A validated AI-organized Monterey itinerary.')).toBeOnTheScreen()
+  })
+
+  it('shows an "unavailable" fallback state when AI planning is disabled or the caller is not enrolled', async () => {
+    mockGenerateAIItinerary.mockResolvedValue({
+      ...plan,
+      generation_status: 'fallback',
+      generated_summary: 'Your itinerary, organized by our default ranking.',
+      fallback_reason: 'disabled',
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Monterey weekend')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+    await screen.findByRole('button', { name: 'Organize itinerary with AI' })
+
+    fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
+
+    expect(await screen.findByText('AI PLANNING UNAVAILABLE')).toBeOnTheScreen()
+    expect(screen.getByText(/isn’t turned on for your account yet/)).toBeOnTheScreen()
+    expect(screen.getByText('Your itinerary, organized by our default ranking.')).toBeOnTheScreen()
+  })
+
+  it('shows a "paused" fallback state when the monthly AI cost limit is hit', async () => {
+    mockGenerateAIItinerary.mockResolvedValue({
+      ...plan,
+      generation_status: 'fallback',
+      generated_summary: 'Your itinerary, organized by our default ranking.',
+      fallback_reason: 'monthly_cost_limit',
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Monterey weekend')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+    await screen.findByRole('button', { name: 'Organize itinerary with AI' })
+
+    fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
+
+    expect(await screen.findByText('AI PLANNING PAUSED')).toBeOnTheScreen()
+    expect(screen.getByText(/reached this month’s AI planning limit/)).toBeOnTheScreen()
+  })
+
+  it('keeps the plain deterministic-fallback label for transient AI failures', async () => {
+    mockGenerateAIItinerary.mockResolvedValue({
+      ...plan,
+      generation_status: 'fallback',
+      generated_summary: 'Your itinerary, organized by our default ranking.',
+      fallback_reason: 'timeout',
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Monterey weekend')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+    await screen.findByRole('button', { name: 'Organize itinerary with AI' })
+
+    fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
+
+    expect(await screen.findByText('DETERMINISTIC PLAN KEPT')).toBeOnTheScreen()
+  })
+
+  it('shows a friendly message when AI planning is rate limited', async () => {
+    mockGenerateAIItinerary.mockRejectedValue(new ApiResponseError('Too Many Requests', 429))
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Monterey weekend')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+    await screen.findByRole('button', { name: 'Organize itinerary with AI' })
+
+    fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('AI trip planning is busy right now. Please try again in a few minutes.')
   })
 })
