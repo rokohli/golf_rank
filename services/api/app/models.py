@@ -101,6 +101,40 @@ class Course(Base):
     )
 
 
+class CourseGreenFeeSuggestionStatus:
+    PENDING = "pending"
+    APPLIED = "applied"
+
+
+class CourseGreenFeeSuggestion(Base):
+    """A user-submitted green-fee estimate for a course. Two or more
+    suggestions landing within green_fee_suggestions.FEE_AGREEMENT_TOLERANCE
+    of each other auto-apply their average to Course.green_fee -- but only
+    when the canonical value is still null (see submit_green_fee_suggestion),
+    so a pair of accounts can never silently overwrite an already-verified
+    import value, only fill a gap. One row per (course, user): resubmitting
+    updates the existing row (and resets it to PENDING) rather than creating
+    a second one, so a user can correct their own estimate."""
+
+    __tablename__ = "course_green_fee_suggestions"
+    __table_args__ = (
+        UniqueConstraint("course_id", "submitted_by_user_id", name="uq_green_fee_suggestion_course_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    submitted_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    suggested_fee: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default=CourseGreenFeeSuggestionStatus.PENDING,
+        server_default=CourseGreenFeeSuggestionStatus.PENDING,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CourseImageSource:
     """Priority-ordered provenance of a stored course image (highest first)."""
 

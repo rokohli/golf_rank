@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, updateRound } from '../../src/api/client'
+import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, suggestGreenFee, updateRound } from '../../src/api/client'
 import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset, uploadCoursePhoto } from '../../src/api/coursePhotoUpload'
 import { ApiHeaders, useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
@@ -44,6 +44,11 @@ export default function CourseDetail() {
   const [utilityError, setUtilityError] = useState<string | null>(null)
   const [openDetails, setOpenDetails] = useState<'personal' | 'friends' | null>(null)
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  const [suggestingFee, setSuggestingFee] = useState(false)
+  const [feeInput, setFeeInput] = useState('')
+  const [feeSubmitting, setFeeSubmitting] = useState(false)
+  const [feeError, setFeeError] = useState<string | null>(null)
+  const [feeSubmitted, setFeeSubmitted] = useState(false)
 
   useEffect(() => {
     mounted.current = true
@@ -251,6 +256,30 @@ export default function CourseDetail() {
     }
   }, [course, publicCourse?.tee_time_url])
 
+  const submitFeeSuggestion = useCallback(async () => {
+    if (!numericCourseId) return
+    const parsed = Number(feeInput.replace(/[^\d]/g, ''))
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 1000) {
+      setFeeError('Enter a green fee between $1 and $1000.')
+      return
+    }
+    setFeeSubmitting(true)
+    setFeeError(null)
+    try {
+      const headers = await getAuthHeaders()
+      const result = await suggestGreenFee(numericCourseId, parsed, headers)
+      setFeeSubmitted(true)
+      setSuggestingFee(false)
+      if (result.course_green_fee != null) {
+        setPublicCourse((current) => current ? { ...current, green_fee: result.course_green_fee } : current)
+      }
+    } catch (reason) {
+      setFeeError(errorMessage(reason, 'Unable to submit this fee. Please try again.'))
+    } finally {
+      setFeeSubmitting(false)
+    }
+  }, [feeInput, getAuthHeaders, numericCourseId])
+
   // Expo Router's focus effect runs on first display and again after the rating flow closes.
   useFocusEffect(useCallback(() => {
     void refreshRating()
@@ -303,7 +332,13 @@ export default function CourseDetail() {
         <View style={[styles.heroActions, { top: insets.top + 12 }]}><HeroButton disabled={!numericCourseId || saveLoading} icon="bookmark" label={isSaved ? 'Remove saved course' : 'Save course'} onPress={() => void toggleSaved()} /><HeroButton icon="share" label="Share course" onPress={() => void shareCourse()} /></View>
         <HeroAttribution heroImage={course.heroImage} />
       </View>
-      <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}</View>
+      <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}
+        {numericCourseId && publicCourse?.green_fee == null ? <FeeSuggestion
+          error={feeError} input={feeInput} onCancel={() => { setSuggestingFee(false); setFeeError(null) }}
+          onChangeInput={setFeeInput} onStart={() => setSuggestingFee(true)} onSubmit={() => void submitFeeSuggestion()}
+          open={suggestingFee} submitted={feeSubmitted} submitting={feeSubmitting}
+        /> : null}
+      </View>
 
       <View style={styles.ratingSummary}>
         <View style={styles.ratingBlock}>
@@ -533,12 +568,30 @@ function PersonalDetails({ courseId, courseName, getAuthHeaders, onPhotosChanged
   </View>
 }
 function DetailDisclosureRow({ disabled = false, expanded, label, onPress, value }: { disabled?: boolean; expanded: boolean; label: string; onPress: () => void; value: string }) { return <Pressable accessibilityLabel={`${label}, ${value}`} accessibilityRole="button" accessibilityState={{ disabled, expanded }} disabled={disabled} onPress={onPress} style={[styles.detailDisclosureRow, disabled && styles.actionDisabled]}><Text style={styles.detailRowLabel}>{label}</Text><Text style={styles.detailRowValue}>{value}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={17} color={colors.pineDark} /></Pressable> }
+function FeeSuggestion({ error, input, onCancel, onChangeInput, onStart, onSubmit, open, submitted, submitting }: {
+  error: string | null; input: string; onCancel: () => void; onChangeInput: (value: string) => void
+  onStart: () => void; onSubmit: () => void; open: boolean; submitted: boolean; submitting: boolean
+}) {
+  if (submitted) return <Text style={styles.feeSuggestionNote}>Thanks — we’ll apply this once another golfer confirms a similar fee.</Text>
+  if (!open) return <Pressable accessibilityRole="button" onPress={onStart}><Text style={styles.feeSuggestionLink}>Suggest a green fee</Text></Pressable>
+  return <View style={styles.detailDropdown}>
+    <Text style={styles.detailHelp}>What did you pay for a round here?</Text>
+    <TextInput accessibilityLabel="Suggested green fee" keyboardType="number-pad" maxLength={4} onChangeText={onChangeInput} placeholder="$" style={styles.detailInput} value={input} />
+    {error ? <Text accessibilityRole="alert" style={styles.ratingError}>{error}</Text> : null}
+    <View style={styles.feeSuggestionActions}>
+      <SaveDetailButton label="Submit" loading={submitting} onPress={onSubmit} />
+      <Pressable accessibilityRole="button" disabled={submitting} onPress={onCancel}><Text style={styles.retryText}>Cancel</Text></Pressable>
+    </View>
+  </View>
+}
+
 function SaveDetailButton({ label, loading, onPress }: { label: string; loading: boolean; onPress: () => void }) { return <Pressable accessibilityRole="button" accessibilityState={{ disabled: loading }} disabled={loading} onPress={onPress} style={styles.detailSave}>{loading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.detailSaveText}>{label}</Text>}</Pressable> }
 
 const styles = StyleSheet.create({
   hero: { marginHorizontal: -18, marginTop: -18, position: 'relative' }, back: { left: 14, position: 'absolute', top: 14 }, heroActions: { flexDirection: 'row', gap: 8, position: 'absolute', right: 14, top: 14 }, heroButton: { alignItems: 'center', backgroundColor: 'rgba(16,56,42,0.88)', borderColor: 'rgba(255,255,255,0.35)', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
   heroAttribution: { bottom: 46, left: 12, right: 12, position: 'absolute', flexDirection: 'row' }, heroAttributionCredit: { flexShrink: 1 }, heroAttributionLicense: { flexShrink: 1 }, heroAttributionText: { color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: '500', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   coursePanel: { backgroundColor: colors.pine, borderRadius: 14, marginHorizontal: -18, marginTop: -38, paddingHorizontal: 22, paddingTop: 24, zIndex: 2 }, title: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 25, lineHeight: 31 }, location: { color: '#D0DAD4', fontSize: 12, marginTop: 7 }, access: { color: '#D0DAD4', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 15, textTransform: 'uppercase' },
+  feeSuggestionLink: { color: '#F8F7F3', fontSize: 10, fontWeight: '800', marginTop: 14, textDecorationLine: 'underline' }, feeSuggestionNote: { color: '#D0DAD4', fontSize: 10, lineHeight: 15, marginTop: 14 }, feeSuggestionActions: { alignItems: 'center', flexDirection: 'row', gap: 14, justifyContent: 'flex-end' },
   facts: { borderTopColor: 'rgba(255,255,255,0.23)', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', marginTop: 18 }, fact: { alignItems: 'center', flex: 1, minHeight: 94, paddingHorizontal: 4, paddingTop: 17 }, factBorder: { borderLeftColor: 'rgba(255,255,255,0.23)', borderLeftWidth: StyleSheet.hairlineWidth }, factValue: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 22 }, factLabel: { color: '#D0DAD4', fontSize: 7, fontWeight: '800', letterSpacing: 1, marginTop: 7, textAlign: 'center', textTransform: 'uppercase' }, factSecondary: { color: '#D0DAD4', fontSize: 8, marginTop: 4, textAlign: 'center' },
   ratingSummary: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingBottom: 18 }, ratingBlock: { alignItems: 'center', flex: 1, minHeight: 92 }, ratingDivider: { backgroundColor: colors.line, marginHorizontal: 14, width: StyleSheet.hairlineWidth }, ratingLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 6, textTransform: 'uppercase' }, ratingValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 32, marginTop: 4 }, ratingScale: { color: colors.pineDark, fontSize: 15 }, ratingCount: { color: colors.muted, fontSize: 10, marginTop: 5 }, notRated: { color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 18 }, personalLoader: { marginBottom: 8, marginTop: 18 }, ratingError: { color: colors.error, fontSize: 9, marginTop: 5 },
   actions: { flexDirection: 'row', justifyContent: 'space-around' }, action: { alignItems: 'center', gap: 7, minWidth: 70 }, actionIcon: { alignItems: 'center', borderColor: colors.pineDark, borderRadius: 24, borderWidth: 1, height: 48, justifyContent: 'center', width: 48 }, actionIconPressed: { backgroundColor: colors.pine, borderColor: colors.pine }, actionLabel: { color: colors.ink, fontSize: 10 }, actionLabelPressed: { color: colors.pine, fontWeight: '700' }, actionDisabled: { opacity: 0.55 }, saveError: { color: colors.error, fontSize: 10, textAlign: 'center' },

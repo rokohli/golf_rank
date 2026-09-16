@@ -12,6 +12,7 @@ const mockCreateSavedList = jest.fn()
 const mockSaveCourseToList = jest.fn()
 const mockRemoveCourseFromList = jest.fn()
 const mockUpdateRound = jest.fn()
+const mockSuggestGreenFee = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({
   'Content-Type': 'application/json',
   Authorization: 'Bearer test-token',
@@ -58,6 +59,7 @@ jest.mock('../../../src/api/client', () => ({
   getSavedLists: (...args: unknown[]) => mockGetSavedLists(...args),
   removeCourseFromList: (...args: unknown[]) => mockRemoveCourseFromList(...args),
   saveCourseToList: (...args: unknown[]) => mockSaveCourseToList(...args),
+  suggestGreenFee: (...args: unknown[]) => mockSuggestGreenFee(...args),
   updateRound: (...args: unknown[]) => mockUpdateRound(...args),
 }))
 
@@ -483,6 +485,42 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('PAR')).toBeNull()
     expect(screen.queryByText('GREEN FEE')).toBeNull()
     expect(screen.queryByText('SLOPE')).toBeNull()
+  })
+
+  it('offers a fee suggestion form only when the course has no known green fee', async () => {
+    render(<CourseDetail />)
+
+    await screen.findByText('Test Links')
+    expect(screen.queryByText('Suggest a green fee')).toBeNull()
+  })
+
+  it('lets a golfer suggest a green fee when none is known and shows the resulting state', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
+    mockSuggestGreenFee.mockResolvedValue({ course_id: 7, suggested_fee: 60, applied: false, course_green_fee: null })
+
+    render(<CourseDetail />)
+    await screen.findByText('Test Links')
+
+    fireEvent.press(screen.getByText('Suggest a green fee'))
+    fireEvent.changeText(screen.getByLabelText('Suggested green fee'), '60')
+    fireEvent.press(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(mockSuggestGreenFee).toHaveBeenCalledWith(7, 60, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+    expect(await screen.findByText(/Thanks — we.ll apply this once another golfer confirms/)).toBeOnTheScreen()
+  })
+
+  it('rejects an out-of-range suggested fee before calling the API', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
+
+    render(<CourseDetail />)
+    await screen.findByText('Test Links')
+
+    fireEvent.press(screen.getByText('Suggest a green fee'))
+    fireEvent.changeText(screen.getByLabelText('Suggested green fee'), '0')
+    fireEvent.press(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a green fee between $1 and $1000.')
+    expect(mockSuggestGreenFee).not.toHaveBeenCalled()
   })
 
   it('uses distinct icons for rating and logging a round', async () => {

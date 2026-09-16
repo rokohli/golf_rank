@@ -114,6 +114,13 @@ export type Course = {
   distance_miles?: number | null
 }
 
+export type GreenFeeSuggestion = {
+  course_id: number
+  suggested_fee: number
+  applied: boolean
+  course_green_fee: number | null
+}
+
 export type BlockedUser = UserSummary & { blocked_at: string }
 
 export type MutedUser = {
