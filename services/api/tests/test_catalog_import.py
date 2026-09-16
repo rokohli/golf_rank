@@ -107,6 +107,26 @@ def test_catalog_import_is_idempotent_nullable_and_soft_retires_missing_records(
         assert stored.status == "retired"
 
 
+def test_catalog_import_dedupes_repeated_ids_within_a_single_fetch() -> None:
+    engine = make_engine("sqlite+pysqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    record = {
+        "id": "provider-dup", "name": "Repeated Links", "course_name": "Repeated Links",
+        "latitude": 34.1, "longitude": -118.2, "city": "Los Angeles", "type": None,
+        "holes": 18, "par": 71,
+    }
+    with session_factory() as session:
+        # OpenGolfAPI has been observed returning the same course id twice
+        # within one state's paginated results; a bulk insert of both would
+        # otherwise violate the (source, source_course_id) unique constraint.
+        report = import_courses(session, [record, dict(record)], state="CA")
+        assert report.fetched == 2
+        assert report.inserted == 1
+        assert report.duplicate == 1
+        assert session.scalar(select(Course.id).where(Course.source_course_id == "provider-dup")) is not None
+
+
 def test_catalog_dry_run_does_not_write_and_access_normalization_is_conservative() -> None:
     engine = make_engine("sqlite+pysqlite://")
     Base.metadata.create_all(engine)

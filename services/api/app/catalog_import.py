@@ -41,6 +41,7 @@ class ImportReport:
     updated: int = 0
     retired: int = 0
     invalid: int = 0
+    duplicate: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -115,6 +116,13 @@ def import_courses(session: Session, records: list[dict], *, state: str, dry_run
         if not source_id or not name or latitude is None or longitude is None:
             report.invalid += 1
             report.errors.append(f"invalid record id={source_id!r} name={name!r}: missing identity, name, or coordinates")
+            continue
+        if source_id in seen_ids:
+            # OpenGolfAPI has been observed returning the same course id twice
+            # within one state's paginated results (e.g. a page-overlap glitch).
+            # Keep the first occurrence and skip the rest rather than trying to
+            # bulk-insert the same (source, source_course_id) twice.
+            report.duplicate += 1
             continue
         seen_ids.add(source_id)
         access, is_public = normalize_access(record.get("type"))
@@ -275,7 +283,7 @@ def main() -> None:
         for state, report in reports.items():
             print(
                 f"state={state} fetched={report.fetched} inserted={report.inserted} updated={report.updated} "
-                f"retired={report.retired} invalid={report.invalid} dry_run={args.dry_run}"
+                f"retired={report.retired} invalid={report.invalid} duplicate={report.duplicate} dry_run={args.dry_run}"
             )
             for error in report.errors[:20]:
                 print(f"state={state} error: {error}")
@@ -287,11 +295,12 @@ def main() -> None:
             updated=sum(report.updated for report in reports.values()),
             retired=sum(report.retired for report in reports.values()),
             invalid=sum(report.invalid for report in reports.values()),
+            duplicate=sum(report.duplicate for report in reports.values()),
         )
         print(
             f"summary states={len(reports)} failed_states={len(failed_states)} fetched={totals.fetched} "
             f"inserted={totals.inserted} updated={totals.updated} retired={totals.retired} "
-            f"invalid={totals.invalid} dry_run={args.dry_run}"
+            f"invalid={totals.invalid} duplicate={totals.duplicate} dry_run={args.dry_run}"
         )
         if failed_states:
             print(f"summary failed_state_codes={','.join(sorted(failed_states))}")
