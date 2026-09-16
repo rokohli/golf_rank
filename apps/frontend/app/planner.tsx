@@ -133,7 +133,7 @@ export default function Planner() {
       setTrips(await getPlans(headers))
     } catch (reason) {
       if (reason instanceof ApiResponseError && reason.status === 429) {
-        setError('AI trip planning is busy right now. Please try again in a few minutes.')
+        setError('AI trip planning has hit its usage limit for now. Please try again later.')
       } else {
         setError(message(reason, 'Unable to organize this trip with AI.'))
       }

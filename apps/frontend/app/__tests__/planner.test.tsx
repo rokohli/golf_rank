@@ -239,6 +239,6 @@ describe('trip planner', () => {
 
     fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('AI trip planning is busy right now. Please try again in a few minutes.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('AI trip planning has hit its usage limit for now. Please try again later.')
   })
 })
