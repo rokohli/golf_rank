@@ -125,3 +125,34 @@ def test_cors_wildcard_origin_disables_credentials() -> None:
     assert response.headers["access-control-allow-origin"] == "*"
     assert response.headers.get("access-control-allow-credentials") != "true"
 
+
+def test_cors_headers_are_present_on_unhandled_500_errors() -> None:
+    settings = Settings(
+        allowed_hosts="testserver",
+        cors_origins="https://getfairway.app,http://localhost:3000",
+    )
+    app = create_app(settings)
+
+    @app.get("/simulate-unhandled-500")
+    def trigger_error():
+        raise RuntimeError("Simulated unhandled exception")
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Allowed origin receives CORS header even on 500
+    response = client.get(
+        "/simulate-unhandled-500",
+        headers={"Origin": "https://getfairway.app"},
+    )
+    assert response.status_code == 500
+    assert response.headers["access-control-allow-origin"] == "https://getfairway.app"
+
+    # Untrusted origin does not receive CORS header on 500
+    untrusted = client.get(
+        "/simulate-unhandled-500",
+        headers={"Origin": "https://attacker.example"},
+    )
+    assert untrusted.status_code == 500
+    assert "access-control-allow-origin" not in untrusted.headers
+
+

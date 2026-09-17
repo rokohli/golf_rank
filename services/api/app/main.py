@@ -187,15 +187,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     if settings.cors_origin_list:
         allow_all = "*" in settings.cors_origin_list
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"] if allow_all else settings.cors_origin_list,
-            allow_credentials=not allow_all,
-            allow_methods=["*"],
-            allow_headers=["*"],
-            expose_headers=["X-Request-ID"],
-            max_age=600,
-        )
+        build_stack = app.build_middleware_stack
+
+        def build_middleware_stack_with_cors():
+            return CORSMiddleware(
+                build_stack(),
+                allow_origins=["*"] if allow_all else settings.cors_origin_list,
+                allow_credentials=not allow_all,
+                allow_methods=["*"],
+                allow_headers=["*"],
+                expose_headers=["X-Request-ID"],
+                max_age=600,
+            )
+
+        app.build_middleware_stack = build_middleware_stack_with_cors
     readiness_lock = Lock()
     readiness_cache: dict[str, float | bool] = {
         "expires_at": 0.0,
