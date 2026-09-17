@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — Fairway</title>
+  <meta name="description" content="Fairway Privacy Policy detailing our data practices, location usage, contact hashing, and AI processing.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- TEMPLATE NOTICE: This document is a preliminary draft template pending formal legal review prior to production App Store submission. -->
+  <header class="site-header">
+    <div class="header-container">
+      <a href="index.html" class="brand-link" aria-label="Fairway Home">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+          <line x1="4" y1="22" x2="4" y2="15"></line>
+        </svg>
+        <span>Fairway</span>
+      </a>
+      <nav aria-label="Main Navigation">
+        <ul class="nav-links">
+          <li><a href="index.html#features" class="nav-link">Features</a></li>
+          <li><a href="terms.html" class="nav-link">Terms</a></li>
+          <li><a href="privacy.html" class="nav-link" style="color: var(--pine); font-weight: 600;">Privacy</a></li>
+          <li><a href="index.html#download" class="nav-cta">Get the App</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <article class="prose-container">
+      <header class="legal-header">
+        <h1>Privacy Policy</h1>
+        <p class="legal-meta">Last Updated: September 17, 2026</p>
+      </header>
+
+      <div class="template-alert" role="note">
+        <strong>Legal Template Notice:</strong> This document represents a working privacy draft for Fairway. It is subject to formal legal review and counsel sign-off prior to commercial release on the Apple App Store.
+      </div>
+
+      <div class="legal-content">
+        <h2>1. Overview and Commitment</h2>
+        <p>
+          Fairway ("we," "our," or "us") respects your privacy. We are committed to being transparent about the data we collect, how it is used to deliver our golf course ranking, discovery, and round-logging features, and the control you have over your personal information.
+        </p>
+        <p>
+          This Privacy Policy applies to the Fairway mobile applications, websites, and APIs. We do not sell your personal data to advertisers or data brokers.
+        </p>
+
+        <h2>2. Information We Collect</h2>
+
+        <h3>A. Account and Profile Information</h3>
+        <p>
+          When you create an account, we collect information needed to authenticate you and establish your golfer profile. This may include your username, first and last name, email address, and phone number. Account authentication is handled through industry-standard identity providers (such as Clerk).
+        </p>
+
+        <h3>B. Location Data</h3>
+        <p>
+          Fairway offers location-based golf course discovery on our Discover screen. If you grant location permissions on your mobile device:
+        </p>
+        <ul>
+          <li>We use your precise or approximate geographic coordinates (latitude and longitude) solely to measure distances to golf courses and display courses within your specified search radius (e.g., 10, 25, 50, or 100 miles).</li>
+          <li>Location access occurs only while actively using the application upon your explicit request (e.g., tapping "Use Current Location").</li>
+          <li><strong>No Background Tracking:</strong> Fairway does not monitor, track, or record your location when the app is in the background or closed.</li>
+          <li>You may revoke location permissions at any time through your device operating system settings and search courses manually by city or state.</li>
+        </ul>
+
+        <h3>C. Contacts and Friend Discovery (Privacy-Preserving Hashing)</h3>
+        <p>
+          To help you connect with golfers you know, Fairway offers an optional contact discovery feature during onboarding or in your friends settings:
+        </p>
+        <ul>
+          <li><strong>Zero Plaintext Storage:</strong> We do not store your address book, full names of your contacts, or unencrypted phone numbers on our servers.</li>
+          <li><strong>Cryptographic Hashing:</strong> Contact phone numbers are normalized and converted into cryptographically hashed identifiers (using HMAC-SHA256 with a server-side salt key) before comparison.</li>
+          <li>Only if another user has independently registered with a matching hashed identifier will you be shown a mutual connection suggestion. Unmatched contact hashes cannot be reversed to discover phone numbers.</li>
+          <li>Contact permission is entirely optional; you can decline contact access and search for friends directly by username.</li>
+        </ul>
+
+        <h3>D. Course Photography and AI Quality Processing</h3>
+        <p>
+          When you upload photos of golf courses or round memories:
+        </p>
+        <ul>
+          <li>Photos are stored in secure cloud object storage (such as Cloudflare R2).</li>
+          <li><strong>AI Quality Scoring:</strong> Course photos submitted for public hero consideration may be processed by artificial intelligence models (such as Google Gemini) to evaluate image sharpness, orientation, lighting, and composition. This automated scoring evaluates visual quality only; it does not perform biometric identification or facial recognition.</li>
+          <li>You can delete photos you have submitted at any time through the app.</li>
+        </ul>
+
+        <h3>E. Round Activity and Course Ratings</h3>
+        <p>
+          We store information about rounds you choose to record, including courses played, scores, personal ratings, head-to-head course comparisons, and friends tagged in your group. You can configure the visibility of your rounds (e.g., public or friends-only) in your Account Settings.
+        </p>
+
+        <h2>3. How We Use Your Information</h2>
+        <p>We use the information we collect to:</p>
+        <ul>
+          <li>Provide, maintain, and personalize the Fairway mobile experience.</li>
+          <li>Calculate aggregated community course ratings and head-to-head course rankings.</li>
+          <li>Help you discover courses and tee-time availability near your location or travel destination.</li>
+          <li>Generate AI-assisted golf trip itineraries when you use the AI Planner feature.</li>
+          <li>Prevent spam, fraud, abusive ratings, and rate-limit violations.</li>
+          <li>Send transactional notifications (e.g., friend requests, round tags, and system updates) if push notifications are enabled.</li>
+        </ul>
+
+        <h2>4. Third-Party Service Providers</h2>
+        <p>We work with trusted third-party service providers who assist in operating our infrastructure under strict data protection terms:</p>
+        <ul>
+          <li><strong>Clerk:</strong> User authentication and identity management.</li>
+          <li><strong>Cloudflare R2:</strong> Cloud storage for uploaded course media.</li>
+          <li><strong>Google Cloud (Gemini):</strong> AI processing for course photo quality scoring and itinerary generation.</li>
+          <li><strong>OpenGolfAPI:</strong> Public course catalog metadata (licensed under ODbL 1.0).</li>
+          <li><strong>Mapbox / Wikimedia Commons:</strong> Course map visuals and public domain/Creative Commons imagery.</li>
+          <li><strong>Sentry:</strong> Privacy-filtered error monitoring and crash diagnostics.</li>
+        </ul>
+
+        <h2>5. Data Retention and Account Deletion</h2>
+        <p>
+          We retain your personal data only as long as your account remains active.
+        </p>
+        <p>
+          <strong>Your Right to Complete Deletion:</strong> In accordance with Apple App Store requirements and global privacy standards, you have the absolute right to delete your account at any time:
+        </p>
+        <ul>
+          <li>Navigate to <strong>Settings → Delete Account</strong> within the Fairway mobile app.</li>
+          <li>Confirming deletion permanently deletes your profile record, personal details, hashed contact entries, saved lists, and private rounds from our primary databases.</li>
+          <li>Any course photos uploaded by your account are removed from public views and marked for storage deletion.</li>
+        </ul>
+
+        <h2>6. Security Measures</h2>
+        <p>
+          We implement industry-standard security safeguards, including HTTPS/TLS encryption in transit, cryptographic hashing for contact matching, strict API rate-limiting, and least-privilege database access policies. However, no electronic transmission over the internet is completely infallible, and we encourage you to use unique passwords and protect your device.
+        </p>
+
+        <h2>7. Children's Privacy</h2>
+        <p>
+          The Services are not directed to children under the age of 13. We do not knowingly collect personal information from children under 13. If you become aware that a child has provided us with personal information, please contact us immediately so we can remove the account and data.
+        </p>
+
+        <h2>8. Changes to this Privacy Policy</h2>
+        <p>
+          We may update this Privacy Policy from time to time. When changes are made, we will update the "Last Updated" date at the top of this page. Significant changes will be communicated via in-app notification or email where appropriate.
+        </p>
+
+        <h2>9. Contact Us</h2>
+        <p>
+          For questions about this Privacy Policy, your personal information, or to exercise your privacy rights, please contact:
+        </p>
+        <p>
+          <strong>Fairway Privacy Team</strong><br>
+          Email: <a href="mailto:privacy@fairway.app">privacy@fairway.app</a>
+        </p>
+      </div>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div class="footer-top">
+        <a href="index.html" class="brand-link">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+            <line x1="4" y1="22" x2="4" y2="15"></line>
+          </svg>
+          <span>Fairway</span>
+        </a>
+        <ul class="footer-links">
+          <li><a href="index.html">Home</a></li>
+          <li><a href="terms.html">Terms of Service</a></li>
+          <li><a href="privacy.html">Privacy Policy</a></li>
+        </ul>
+      </div>
+      <div class="footer-bottom">
+        <p>© 2026 Fairway. All rights reserved.</p>
+        <p class="footer-attribution">Course catalog data © OpenGolfAPI, ODbL 1.0</p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
