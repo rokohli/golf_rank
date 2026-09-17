@@ -525,6 +525,28 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('Suggest a green fee')).toBeNull()
   })
 
+  it('reconciles pending fee suggestion confirmation when refreshed course has an applied fee', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
+    mockSuggestGreenFee.mockResolvedValue({ course_id: 7, suggested_fee: 60, applied: false, course_green_fee: null })
+
+    render(<CourseDetail />)
+    await screen.findByText('Test Links')
+
+    fireEvent.press(screen.getByText('Suggest a green fee'))
+    fireEvent.changeText(screen.getByLabelText('Suggested green fee'), '60')
+    fireEvent.press(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(mockSuggestGreenFee).toHaveBeenCalledWith(7, 60, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+    expect(await screen.findByText(/Thanks — we.ll apply this once another golfer confirms/)).toBeOnTheScreen()
+
+    mockGetCourse.mockResolvedValue({ ...course, green_fee: 65 })
+    await act(async () => {
+      mockFocusEffect?.()
+    })
+
+    expect(await screen.findByText('Thanks — green fee set to $65.')).toBeOnTheScreen()
+  })
+
   it('rejects an out-of-range suggested fee before calling the API', async () => {
     mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
 

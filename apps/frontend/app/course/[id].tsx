@@ -88,6 +88,9 @@ export default function CourseDetail() {
       if (!mounted.current) return
       setPublicCourse(nextCourse)
       setCourse(toCoursePresentation(nextCourse))
+      if (nextCourse.green_fee != null) {
+        setAppliedFee((current) => current ?? nextCourse.green_fee)
+      }
     } catch (reason) {
       if (mounted.current) setCourseError(errorMessage(reason, 'Unable to load this course.'))
     } finally {
@@ -149,6 +152,9 @@ export default function CourseDetail() {
       if (!mounted.current) return
       setPublicCourse(nextCourse)
       setCourse(toCoursePresentation(nextCourse))
+      if (nextCourse.green_fee != null) {
+        setAppliedFee((current) => current ?? nextCourse.green_fee)
+      }
     } catch {
       // Best-effort refresh -- the existing gallery data just stays stale
       // until the next successful load; loadCourse's own retry affordance
@@ -346,7 +352,7 @@ export default function CourseDetail() {
       </View>
       <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}
         {numericCourseId && (publicCourse?.green_fee == null || feeSubmitted) ? <FeeSuggestion
-          appliedFee={appliedFee}
+          appliedFee={appliedFee ?? publicCourse?.green_fee}
           error={feeError} input={feeInput} onCancel={() => { setSuggestingFee(false); setFeeError(null) }}
           onChangeInput={setFeeInput} onStart={() => setSuggestingFee(true)} onSubmit={() => void submitFeeSuggestion()}
           open={suggestingFee} submitted={feeSubmitted} submitting={feeSubmitting}
