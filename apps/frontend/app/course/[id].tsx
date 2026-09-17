@@ -49,6 +49,16 @@ export default function CourseDetail() {
   const [feeSubmitting, setFeeSubmitting] = useState(false)
   const [feeError, setFeeError] = useState<string | null>(null)
   const [feeSubmitted, setFeeSubmitted] = useState(false)
+  const [appliedFee, setAppliedFee] = useState<number | null>(null)
+
+  useEffect(() => {
+    setSuggestingFee(false)
+    setFeeInput('')
+    setFeeSubmitting(false)
+    setFeeError(null)
+    setFeeSubmitted(false)
+    setAppliedFee(null)
+  }, [numericCourseId])
 
   useEffect(() => {
     mounted.current = true
@@ -271,7 +281,9 @@ export default function CourseDetail() {
       setFeeSubmitted(true)
       setSuggestingFee(false)
       if (result.course_green_fee != null) {
+        setAppliedFee(result.course_green_fee)
         setPublicCourse((current) => current ? { ...current, green_fee: result.course_green_fee } : current)
+        setCourse((current) => current ? { ...current, price: priceTier(result.course_green_fee) } : current)
       }
     } catch (reason) {
       setFeeError(errorMessage(reason, 'Unable to submit this fee. Please try again.'))
@@ -333,7 +345,8 @@ export default function CourseDetail() {
         <HeroAttribution heroImage={course.heroImage} />
       </View>
       <View style={styles.coursePanel}><Text style={styles.title}>{course.name}</Text><Text style={styles.location}>{course.location}</Text><Text style={styles.access}>{facts.accessLabel}</Text>{facts.items.length ? <View style={styles.facts}>{facts.items.map((fact, index) => <View key={fact.label} style={[styles.fact, index > 0 && styles.factBorder]}><Text style={styles.factValue}>{fact.value}</Text><Text style={styles.factLabel}>{fact.label}</Text>{fact.secondary ? <Text style={styles.factSecondary}>{fact.secondary}</Text> : null}</View>)}</View> : null}
-        {numericCourseId && publicCourse?.green_fee == null ? <FeeSuggestion
+        {numericCourseId && (publicCourse?.green_fee == null || feeSubmitted) ? <FeeSuggestion
+          appliedFee={appliedFee}
           error={feeError} input={feeInput} onCancel={() => { setSuggestingFee(false); setFeeError(null) }}
           onChangeInput={setFeeInput} onStart={() => setSuggestingFee(true)} onSubmit={() => void submitFeeSuggestion()}
           open={suggestingFee} submitted={feeSubmitted} submitting={feeSubmitting}
@@ -568,11 +581,22 @@ function PersonalDetails({ courseId, courseName, getAuthHeaders, onPhotosChanged
   </View>
 }
 function DetailDisclosureRow({ disabled = false, expanded, label, onPress, value }: { disabled?: boolean; expanded: boolean; label: string; onPress: () => void; value: string }) { return <Pressable accessibilityLabel={`${label}, ${value}`} accessibilityRole="button" accessibilityState={{ disabled, expanded }} disabled={disabled} onPress={onPress} style={[styles.detailDisclosureRow, disabled && styles.actionDisabled]}><Text style={styles.detailRowLabel}>{label}</Text><Text style={styles.detailRowValue}>{value}</Text><Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={17} color={colors.pineDark} /></Pressable> }
-function FeeSuggestion({ error, input, onCancel, onChangeInput, onStart, onSubmit, open, submitted, submitting }: {
-  error: string | null; input: string; onCancel: () => void; onChangeInput: (value: string) => void
+function FeeSuggestion({ appliedFee, error, input, onCancel, onChangeInput, onStart, onSubmit, open, submitted, submitting }: {
+  appliedFee?: number | null; error: string | null; input: string; onCancel: () => void; onChangeInput: (value: string) => void
   onStart: () => void; onSubmit: () => void; open: boolean; submitted: boolean; submitting: boolean
 }) {
-  if (submitted) return <View style={styles.feeSuggestionNote}><Feather name="check-circle" size={14} color={colors.gold} /><Text style={styles.feeSuggestionNoteText}>Thanks — we’ll apply this once another golfer confirms a similar fee.</Text></View>
+  if (submitted) {
+    return (
+      <View style={styles.feeSuggestionNote}>
+        <Feather name="check-circle" size={14} color={colors.gold} />
+        <Text style={styles.feeSuggestionNoteText}>
+          {appliedFee != null
+            ? `Thanks — green fee set to $${appliedFee}.`
+            : 'Thanks — we’ll apply this once another golfer confirms a similar fee.'}
+        </Text>
+      </View>
+    )
+  }
   if (!open) return <Pressable accessibilityRole="button" onPress={onStart} style={styles.feeSuggestionChip}><Feather name="plus" size={12} color={colors.gold} /><Text style={styles.feeSuggestionChipText}>Suggest a green fee</Text></Pressable>
   return <View style={styles.feeSuggestionCard}>
     <Text style={styles.feeSuggestionHelp}>What did you pay for a round here?</Text>

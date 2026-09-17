@@ -509,6 +509,22 @@ describe('course detail ratings', () => {
     expect(await screen.findByText(/Thanks — we.ll apply this once another golfer confirms/)).toBeOnTheScreen()
   })
 
+  it('shows visible confirmation with the applied fee when an agreeing suggestion sets the green fee', async () => {
+    mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
+    mockSuggestGreenFee.mockResolvedValue({ course_id: 7, suggested_fee: 60, applied: true, course_green_fee: 60 })
+
+    render(<CourseDetail />)
+    await screen.findByText('Test Links')
+
+    fireEvent.press(screen.getByText('Suggest a green fee'))
+    fireEvent.changeText(screen.getByLabelText('Suggested green fee'), '60')
+    fireEvent.press(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(mockSuggestGreenFee).toHaveBeenCalledWith(7, 60, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+    expect(await screen.findByText('Thanks — green fee set to $60.')).toBeOnTheScreen()
+    expect(screen.queryByText('Suggest a green fee')).toBeNull()
+  })
+
   it('rejects an out-of-range suggested fee before calling the API', async () => {
     mockGetCourse.mockResolvedValue({ ...course, green_fee: null })
 
