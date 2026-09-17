@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     contact_phone_country_calling_code: str = "1"
     trusted_client_ip_header: str = ""
     allowed_hosts: str = "testserver,localhost,127.0.0.1"
+    cors_origins: str = ""
     max_request_body_bytes: int = 1_048_576
     readiness_cache_seconds: float = 5.0
     operations_alert_webhook_url: str | None = None
@@ -276,6 +277,10 @@ class Settings(BaseSettings):
     @property
     def allowed_host_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
     def course_photo_scoring_reference_course_id_list(self) -> list[int]:

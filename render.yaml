@@ -47,6 +47,8 @@ services:
         value: cf-connecting-ip
       - key: ALLOWED_HOSTS
         value: fairway-api-h93s.onrender.com
+      - key: CORS_ORIGINS
+        sync: false
       - key: MAX_REQUEST_BODY_BYTES
         value: "1048576"
       - key: OPERATIONS_ALERT_WEBHOOK_URL

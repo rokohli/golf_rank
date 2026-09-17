@@ -62,3 +62,66 @@ def test_request_body_limit_rejects_oversized_payloads() -> None:
 
     assert response.status_code == 413
     assert response.json() == {"detail": "Request body too large"}
+
+
+def test_cors_preflight_and_simple_request_for_allowed_origins() -> None:
+    settings = Settings(
+        allowed_hosts="testserver",
+        cors_origins="https://getfairway.app,http://localhost:3000",
+    )
+    client = TestClient(create_app(settings))
+
+    preflight = client.options(
+        "/api/v1/courses",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert preflight.headers["access-control-allow-credentials"] == "true"
+    assert "GET" in preflight.headers["access-control-allow-methods"]
+
+    response = client.get(
+        "/api/v1/courses",
+        headers={"Origin": "https://getfairway.app"},
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://getfairway.app"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "x-request-id" in response.headers["access-control-expose-headers"].lower()
+
+    untrusted = client.get(
+        "/api/v1/courses",
+        headers={"Origin": "https://attacker.example"},
+    )
+    assert untrusted.status_code == 200
+    assert "access-control-allow-origin" not in untrusted.headers
+
+
+def test_cors_disabled_by_default() -> None:
+    settings = Settings(allowed_hosts="testserver", cors_origins="")
+    client = TestClient(create_app(settings))
+
+    response = client.get(
+        "/api/v1/courses",
+        headers={"Origin": "http://localhost:3000"},
+    )
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_wildcard_origin_disables_credentials() -> None:
+    settings = Settings(allowed_hosts="testserver", cors_origins="*")
+    client = TestClient(create_app(settings))
+
+    response = client.get(
+        "/api/v1/courses",
+        headers={"Origin": "https://any-site.example"},
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.headers.get("access-control-allow-credentials") != "true"
+

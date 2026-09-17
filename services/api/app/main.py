@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .core.admin import is_admin
@@ -184,6 +185,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         SecurityHeadersMiddleware,
         production=not development,
     )
+    if settings.cors_origin_list:
+        allow_all = "*" in settings.cors_origin_list
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"] if allow_all else settings.cors_origin_list,
+            allow_credentials=not allow_all,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID"],
+            max_age=600,
+        )
     readiness_lock = Lock()
     readiness_cache: dict[str, float | bool] = {
         "expires_at": 0.0,
