@@ -17,6 +17,7 @@ import {
   Follow,
   GolfRound,
   GolfPlan,
+  GreenFeeSuggestion,
   OnboardingPreferences,
   PlanInput,
   PlanSummary,
@@ -204,6 +205,20 @@ export async function submitCourseCandidate(
 export async function getCourse(courseId: number): Promise<Course> {
   const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}`)
   if (!response.ok) throw await responseError(response, 'Unable to load this course. Please try again.')
+  return response.json()
+}
+
+export async function suggestGreenFee(
+  courseId: number,
+  suggestedFee: number,
+  headers: ApiHeaders,
+): Promise<GreenFeeSuggestion> {
+  const response = await fetch(`${baseUrl}/api/v1/courses/${courseId}/fee-suggestions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ suggested_fee: suggestedFee }),
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to submit this fee. Please try again.')
   return response.json()
 }
 

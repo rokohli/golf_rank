@@ -17,6 +17,26 @@ def test_course_search_filters_by_region_fee_and_access() -> None:
     assert [course["name"] for course in response.json()] == ["Pebble Beach Golf Links"]
 
 
+def test_max_green_fee_keeps_unknown_fee_courses_discoverable() -> None:
+    app = create_app()
+    with app.state.session_factory() as session:
+        course = Course(
+            name="Mystery Fee Municipal", region="Monterey, CA", latitude=36.6, longitude=-121.9,
+            is_public=True, green_fee=None, source="seed", source_course_id="mystery-fee",
+            country_code="US", admin1_code="CA", admin1_name="California",
+        )
+        session.add(course)
+        session.commit()
+    client = TestClient(app)
+
+    response = client.get("/api/v1/courses", params={"region": "Monterey, CA", "max_green_fee": 50})
+
+    assert response.status_code == 200
+    names = {course["name"] for course in response.json()}
+    assert "Mystery Fee Municipal" in names
+    assert "Pebble Beach Golf Links" not in names
+
+
 def test_confirmed_course_alias_is_hidden_and_detail_resolves_to_canonical() -> None:
     app = create_app()
     with app.state.session_factory() as session:

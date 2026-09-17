@@ -40,6 +40,7 @@ from .domain import (
     require_course,
     require_user,
 )
+from .green_fee_suggestions import router as green_fee_suggestions_router
 from .models import (
     Base,
     Course,
@@ -164,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(push_notifications_router, dependencies=authenticated_dependencies)
     app.include_router(catalog_router)
     app.include_router(course_photo_uploads_router)
+    app.include_router(green_fee_suggestions_router)
     # admin_rate_limit depends on require_admin, so a non-admin gets its 404
     # before the limiter ever reaches Redis.
     app.include_router(course_photo_moderation_router, dependencies=[Depends(admin_rate_limit)])
@@ -524,7 +526,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if cursor is not None and lat is None:
             statement = statement.where(Course.id > cursor)
         if max_green_fee is not None:
-            statement = statement.where(Course.green_fee <= max_green_fee)
+            # Mirrors the difficulty filter below: provider catalogs and
+            # crowdsourced suggestions don't cover every course yet, so keep
+            # unknown-fee courses discoverable rather than silently excluding
+            # them (NULL <= x is false in SQL, not "unknown, might fit").
+            statement = statement.where(or_(Course.green_fee <= max_green_fee, Course.green_fee.is_(None)))
         if difficulty != "any":
             # Provider catalogs do not yet have complete difficulty metadata.
             # Keep unknown courses discoverable while still excluding a known mismatch.

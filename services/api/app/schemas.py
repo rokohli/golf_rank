@@ -103,6 +103,18 @@ class CourseImageOut(BaseModel):
     round_id: int | None = None
 
 
+class GreenFeeSuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggested_fee: int = Field(ge=1, le=1000)
+
+
+class GreenFeeSuggestionOut(BaseModel):
+    course_id: int
+    suggested_fee: int
+    applied: bool
+    course_green_fee: int | None
+
+
 class CoursePhotoUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content_type: Literal["image/jpeg", "image/png", "image/webp"]

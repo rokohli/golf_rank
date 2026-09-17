@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     photo_upload_rate_limit_capacity: int = 5
     photo_upload_rate_limit_refill_per_second: float = 1 / 300
     photo_upload_daily_quota: int = 10
+    green_fee_suggestion_rate_limit_capacity: int = 5
+    green_fee_suggestion_rate_limit_refill_per_second: float = 1 / 300
+    green_fee_suggestion_daily_quota: int = 10
     # On by default: a course-detail request performs a live Commons search
     # when no OFFICIAL/USER/WIKIMEDIA image is on file yet. The resolver
     # fails open (falls through to NONE) on any Wikimedia error or timeout,

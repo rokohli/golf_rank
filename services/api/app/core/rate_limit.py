@@ -292,6 +292,36 @@ async def candidate_rate_limit(
     apply_rate_limit(response, quota)
 
 
+async def green_fee_suggestion_rate_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    settings = request.app.state.settings
+    policy = RateLimitPolicy(
+        "green-fee-suggestion",
+        settings.green_fee_suggestion_rate_limit_capacity,
+        settings.green_fee_suggestion_rate_limit_refill_per_second,
+    )
+    for identity_type, identity in (
+        ("user", user.provider_subject),
+        ("ip", client_ip(request, settings)),
+    ):
+        decision = await request.app.state.rate_limiter.token_bucket(
+            policy=policy,
+            identity_type=identity_type,
+            identity=identity,
+        )
+        apply_rate_limit(response, decision)
+    quota = await request.app.state.rate_limiter.daily_quota(
+        name="green-fee-suggestion",
+        limit=settings.green_fee_suggestion_daily_quota,
+        identity_type="user",
+        identity=user.provider_subject,
+    )
+    apply_rate_limit(response, quota)
+
+
 async def _photo_rate_limit(name: str, request: Request, response: Response, user: CurrentUser) -> None:
     settings = request.app.state.settings
     policy = RateLimitPolicy(
