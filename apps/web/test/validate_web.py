@@ -6,6 +6,8 @@ asset existence, and required legal/ODbL notices.
 """
 
 import os
+import shutil
+import subprocess
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -24,6 +26,7 @@ class HTMLValidator(HTMLParser):
         self.in_title = False
         self.local_links: list[str] = []
         self.local_assets: list[str] = []
+        self.meta_names: set[str] = set()
 
     def handle_decl(self, decl: str) -> None:
         if decl.lower().strip() == "doctype html":
@@ -41,8 +44,11 @@ class HTMLValidator(HTMLParser):
         elif tag == "meta":
             if "charset" in attr_dict:
                 self.has_meta_charset = True
-            if attr_dict.get("name", "").lower() == "viewport":
+            name = attr_dict.get("name", "").lower()
+            if name == "viewport":
                 self.has_meta_viewport = True
+            if name:
+                self.meta_names.add(name)
 
         elif tag == "title":
             self.has_title = True
@@ -115,11 +121,19 @@ def validate_web_dir(web_dir: Path) -> None:
             if "OpenGolfAPI, ODbL 1.0" not in content:
                 raise ValueError(f"{html_file.name}: Missing required ODbL attribution")
 
+        if html_file.name == "course.html":
+            if "fairway-api-url" not in validator.meta_names:
+                raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-api-url\" ...> override element")
+
         if html_file.name in ("terms.html", "privacy.html"):
             if "TEMPLATE NOTICE" not in content:
                 raise ValueError(f"{html_file.name}: Missing internal legal template notice")
 
         print(f"  ✓ {html_file.name} is valid (title: '{validator.title_text}')")
+
+    # Verify course.js exists and validate its contract
+    course_js = web_dir / "course.js"
+    validate_course_js(course_js)
 
     # Verify robots.txt exists
     robots = web_dir / "robots.txt"
@@ -128,6 +142,116 @@ def validate_web_dir(web_dir: Path) -> None:
     print("  ✓ robots.txt exists")
 
     print(f"\nAll {len(html_files)} HTML files and assets validated successfully!")
+
+
+def validate_course_js(course_js: Path) -> None:
+    if not course_js.exists():
+        raise FileNotFoundError(f"Missing {course_js}")
+
+    content = course_js.read_text(encoding="utf-8")
+
+    # Static checks addressing Codex findings
+    if "course.hole_count != null ? escapeHtml(String(course.hole_count)) : '18'" in content:
+        raise ValueError("course.js must not invent hole_count=18 when unknown; must use '—'")
+
+    if "course.hole_count != null ? escapeHtml(String(course.hole_count)) : '—'" not in content:
+        raise ValueError("course.js must format unknown hole_count as '—'")
+
+    if "/courses?\\/(" in content:
+        raise ValueError("course.js contains unsupported path-based routing regex that breaks relative assets")
+
+    if "renderHeroAttribution" not in content or "license_url" not in content or "source_url" not in content:
+        raise ValueError("course.js must implement renderHeroAttribution preserving source_url and license_url")
+
+    # If Node.js is installed in the environment, run syntax and behavior tests
+    node_bin = shutil.which("node")
+    if node_bin:
+        # Syntax check
+        res = subprocess.run([node_bin, "--check", str(course_js)], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"node --check failed for {course_js.name}: {res.stderr}")
+
+        # Behavioral test using node
+        test_script = f"""
+(async () => {{
+  const fs = require('fs');
+  const vm = require('vm');
+  const js = fs.readFileSync({repr(str(course_js))}, 'utf8');
+
+  // Test 1: Malformed and missing IDs are rejected
+  for (const search of ['', '?id=', '?id=abc', '?id=-5', '?id=0']) {{
+    let rendered = '';
+    const window = {{ location: {{ hostname: 'localhost', search, pathname: '/' }} }};
+    const document = {{
+      querySelector: () => null,
+      getElementById: () => ({{ set innerHTML(v) {{ rendered = v; }}, get innerHTML() {{ return rendered; }}, addEventListener: () => {{}} }}),
+      readyState: 'complete',
+      title: ''
+    }};
+    const sandbox = {{
+      window, document, console, URLSearchParams, Date, setTimeout, parseInt, String,
+      fetch: async () => {{ throw new Error('Fetch must not be called on invalid ID'); }}
+    }};
+    vm.createContext(sandbox);
+    vm.runInContext(js, sandbox);
+    await new Promise(r => setTimeout(r, 50));
+    if (!rendered.includes('No valid course ID was provided')) {{
+      throw new Error('Expected invalid ID error state for ' + search);
+    }}
+  }}
+
+  // Test 2: Hero attribution renders source and license links, and hole_count=null displays em dash
+  let rendered = '';
+  const window = {{ location: {{ hostname: 'localhost', search: '?id=42', pathname: '/' }} }};
+  const document = {{
+    querySelector: () => null,
+    getElementById: () => ({{ set innerHTML(v) {{ rendered = v; }}, get innerHTML() {{ return rendered; }}, addEventListener: () => {{}} }}),
+    readyState: 'complete',
+    title: ''
+  }};
+  const sandbox = {{
+    window, document, console, URLSearchParams, Date, setTimeout, parseInt, String,
+    fetch: async () => ({{
+      ok: true,
+      json: async () => ({{
+        id: 42,
+        name: 'Spyglass Hill',
+        hole_count: null,
+        hero_image: {{
+          type: 'WIKIMEDIA',
+          url: 'https://example.com/spyglass.jpg',
+          attribution: 'Jane Golfer',
+          source_url: 'https://commons.wikimedia.org/wiki/File:Spyglass.jpg',
+          license: 'CC BY-SA 4.0',
+          license_url: 'https://creativecommons.org/licenses/by-sa/4.0/'
+        }}
+      }})
+    }})
+  }};
+  vm.createContext(sandbox);
+  vm.runInContext(js, sandbox);
+  await new Promise(r => setTimeout(r, 50));
+
+  if (!rendered.includes('https://commons.wikimedia.org/wiki/File:Spyglass.jpg')) {{
+    throw new Error('Attribution missing source link');
+  }}
+  if (!rendered.includes('https://creativecommons.org/licenses/by-sa/4.0/')) {{
+    throw new Error('Attribution missing license link');
+  }}
+  if (!rendered.includes('CC BY-SA 4.0')) {{
+    throw new Error('Attribution missing license name');
+  }}
+  if (!rendered.includes('Holes</span>\\n                <span class="stat-value">—</span>')) {{
+    throw new Error('Unknown hole count not displayed as em dash');
+  }}
+}})();
+"""
+        test_res = subprocess.run([node_bin, "-e", test_script], capture_output=True, text=True)
+        if test_res.returncode != 0:
+            raise RuntimeError(f"Node execution test failed: {test_res.stderr}")
+        print("  ✓ course.js validated (syntax, ID rejection, attribution links, hole count fallback)")
+    else:
+        print("  ✓ course.js validated (static checks; node not found in PATH)")
 
 
 if __name__ == "__main__":

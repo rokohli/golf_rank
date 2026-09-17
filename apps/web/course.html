@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Course Details — Fairway</title>
   <meta name="description" content="View course details, community rating, par, slope, and green fees on Fairway.">
+  <!-- Deployment-specific API base URL. Can be set at build/deploy time or overridden by window.FAIRWAY_API_URL.
+       If empty or absent, course.js falls back to localhost in dev, onrender.com in staging, or same-origin in production. -->
+  <meta name="fairway-api-url" content="">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>

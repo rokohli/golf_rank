@@ -4,28 +4,30 @@
   function getApiBaseUrl() {
     if (window.FAIRWAY_API_URL) return window.FAIRWAY_API_URL.replace(/\/+$/, '');
     const meta = document.querySelector('meta[name="fairway-api-url"]');
-    if (meta && meta.content) return meta.content.replace(/\/+$/, '');
+    if (meta && meta.content && meta.content.trim()) return meta.content.trim().replace(/\/+$/, '');
     
     // Default to local development API if running on localhost
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:8000';
     }
-    // Staging / production default
-    return 'https://fairway-api-h93s.onrender.com';
+    // Staging environment default when hosted on Render
+    if (window.location.hostname.endsWith('onrender.com')) {
+      return 'https://fairway-api-h93s.onrender.com';
+    }
+    // Production web deployment default to same origin (e.g. reverse proxy or unified domain)
+    if (window.location.origin && window.location.origin !== 'null') {
+      return window.location.origin.replace(/\/+$/, '');
+    }
+    return '';
   }
 
   function getCourseId() {
     const params = new URLSearchParams(window.location.search);
     const idParam = params.get('id');
-    if (idParam && /^\d+$/.test(idParam)) {
-      return parseInt(idParam, 10);
+    if (idParam && /^[1-9]\d*$/.test(idParam.trim())) {
+      return parseInt(idParam.trim(), 10);
     }
-    // Path-based fallback e.g. /course/123 or /courses/123
-    const match = window.location.pathname.match(/\/courses?\/(\d+)/);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-    return 1; // Default to course 1 for preview if no ID provided
+    return null;
   }
 
   function formatPrice(fee) {
@@ -41,12 +43,55 @@
     return course.region || 'United States';
   }
 
+  function sanitizeUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    if (/^(https?:|\/)/i.test(trimmed)) {
+      return trimmed;
+    }
+    return '';
+  }
+
+  function renderHeroAttribution(heroImage) {
+    if (!heroImage) return '';
+    const creditText = heroImage.attribution || (heroImage.type === 'WIKIMEDIA' ? 'Wikimedia Commons' : '');
+    const cleanSourceUrl = sanitizeUrl(heroImage.source_url);
+    const cleanLicenseUrl = sanitizeUrl(heroImage.license_url);
+
+    let creditHtml = '';
+    if (creditText) {
+      if (cleanSourceUrl) {
+        creditHtml = `Photo: <a href="${escapeHtml(cleanSourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(creditText)}</a>`;
+      } else {
+        creditHtml = `Photo: ${escapeHtml(creditText)}`;
+      }
+    }
+
+    let licenseHtml = '';
+    if (heroImage.license) {
+      if (cleanLicenseUrl) {
+        licenseHtml = `<a href="${escapeHtml(cleanLicenseUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(heroImage.license)}</a>`;
+      } else {
+        licenseHtml = escapeHtml(heroImage.license);
+      }
+    }
+
+    if (creditHtml && licenseHtml) {
+      return `<span class="course-img-attribution">${creditHtml} · ${licenseHtml}</span>`;
+    } else if (creditHtml) {
+      return `<span class="course-img-attribution">${creditHtml}</span>`;
+    } else if (licenseHtml) {
+      return `<span class="course-img-attribution">License: ${licenseHtml}</span>`;
+    }
+    return '';
+  }
+
   function renderCourse(course) {
     const container = document.getElementById('course-container');
     if (!container) return;
 
     const heroImg = course.hero_image && course.hero_image.url ? course.hero_image.url : null;
-    const attribution = course.hero_image && course.hero_image.attribution ? course.hero_image.attribution : null;
+    const attributionHtml = renderHeroAttribution(course.hero_image);
     const ratingDisplay = course.community_rating != null ? course.community_rating.toFixed(1) : '—';
     const ratingCountText = course.rating_count ? `${course.rating_count} review${course.rating_count === 1 ? '' : 's'}` : 'No ratings yet';
 
@@ -58,7 +103,7 @@
           <div class="course-hero-img-wrap">
             ${heroImg ? `
               <img src="${escapeHtml(heroImg)}" alt="${escapeHtml(course.name)}" class="course-hero-img">
-              ${attribution ? `<span class="course-img-attribution">Photo: ${escapeHtml(attribution)}</span>` : ''}
+              ${attributionHtml}
             ` : `
               <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #174C38, #10382A); color: #FFFFFF; font-size: 2.5rem; opacity: 0.85;">
                 ⛳️
@@ -93,7 +138,7 @@
               </div>
               <div class="stat-item">
                 <span class="stat-label">Holes</span>
-                <span class="stat-value">${course.hole_count != null ? escapeHtml(String(course.hole_count)) : '18'}</span>
+                <span class="stat-value">${course.hole_count != null ? escapeHtml(String(course.hole_count)) : '—'}</span>
               </div>
               <div class="stat-item">
                 <span class="stat-label">Slope</span>
@@ -159,6 +204,10 @@
 
   async function loadCourse() {
     const courseId = getCourseId();
+    if (!courseId) {
+      renderError('No valid course ID was provided. Please check the link and try again.');
+      return;
+    }
     const apiUrl = `${getApiBaseUrl()}/api/v1/courses/${courseId}`;
 
     try {

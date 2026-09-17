@@ -295,6 +295,22 @@ main {
   font-size: 0.75rem;
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
+  max-width: calc(100% - 20px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.course-img-attribution a {
+  color: #FFFFFF;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: var(--transition);
+}
+
+.course-img-attribution a:hover,
+.course-img-attribution a:focus-visible {
+  color: var(--sand);
 }
 
 .course-content {
