@@ -21,6 +21,13 @@
     return '';
   }
 
+  function getAppStoreUrl() {
+    if (window.FAIRWAY_APP_STORE_URL) return window.FAIRWAY_APP_STORE_URL;
+    const meta = document.querySelector('meta[name="fairway-app-store-url"]');
+    if (meta && meta.content && meta.content.trim()) return meta.content.trim();
+    return 'https://apps.apple.com/app/fairway-golf/id6742358055';
+  }
+
   function getCourseId() {
     const params = new URLSearchParams(window.location.search);
     const idParam = params.get('id');
@@ -154,8 +161,8 @@
               <a href="${escapeHtml(deepLinkUrl)}" id="open-app-btn" class="btn-primary">
                 Open in Fairway
               </a>
-              <a href="index.html" class="btn-secondary" style="justify-content: center;">
-                Back to Fairway
+              <a href="${escapeHtml(getAppStoreUrl())}" class="btn-secondary" style="justify-content: center;" target="_blank" rel="noopener noreferrer">
+                Get the App
               </a>
             </div>
           </div>
@@ -165,15 +172,15 @@
 
     document.title = `${course.name} — Fairway`;
 
-    // Progressive enhancement: try deep link, with smooth fallback to app prompt
+    // Progressive enhancement: try deep link, with smooth fallback to app store / download destination
     const openBtn = document.getElementById('open-app-btn');
     if (openBtn) {
       openBtn.addEventListener('click', function (e) {
         const start = Date.now();
         setTimeout(function () {
           if (Date.now() - start < 1500) {
-            // App didn't open
-            alert('To view full rankings and log rounds, open this course inside the Fairway mobile app.');
+            // App didn't open (recipient doesn't have app installed) -> route to store destination
+            window.location.href = getAppStoreUrl();
           }
         }, 1000);
       });

@@ -124,10 +124,22 @@ def validate_web_dir(web_dir: Path) -> None:
         if html_file.name == "course.html":
             if "fairway-api-url" not in validator.meta_names:
                 raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-api-url\" ...> override element")
+            if "fairway-app-store-url" not in validator.meta_names:
+                raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-app-store-url\" ...> override element")
 
         if html_file.name in ("terms.html", "privacy.html"):
             if "TEMPLATE NOTICE" not in content:
                 raise ValueError(f"{html_file.name}: Missing internal legal template notice")
+
+        if html_file.name == "privacy.html":
+            if "Expo (650 Industries)" not in content:
+                raise ValueError(f"{html_file.name}: Missing disclosure for Expo push notification infrastructure")
+            if "Sentry" in content:
+                raise ValueError(f"{html_file.name}: Unintegrated Sentry disclosure must be removed")
+
+        if html_file.name == "index.html":
+            if "onclick=" in content and "alert(" in content:
+                raise ValueError(f"{html_file.name}: Placeholder alert onclick on download button must be replaced with real store link")
 
         print(f"  ✓ {html_file.name} is valid (title: '{validator.title_text}')")
 
@@ -168,6 +180,12 @@ def validate_course_js(course_js: Path) -> None:
 
     if "course.status !== 'active'" not in content:
         raise ValueError("course.js must reject courses with status !== 'active'")
+
+    if "getAppStoreUrl" not in content:
+        raise ValueError("course.js must implement getAppStoreUrl")
+
+    if "alert(" in content:
+        raise ValueError("course.js must route unsuccessful opens to getAppStoreUrl without alert dialogs")
 
     # If Node.js is installed in the environment, run syntax and behavior tests
     node_bin = shutil.which("node")
@@ -252,6 +270,9 @@ def validate_course_js(course_js: Path) -> None:
   }}
   if (!rendered.includes('Est. Green Fee')) {{
     throw new Error('Est. Green Fee label missing from rendered course');
+  }}
+  if (!rendered.includes('Get the App')) {{
+    throw new Error('Missing Get the App button in rendered course');
   }}
 
   // Test 3: Retired courses are rejected
