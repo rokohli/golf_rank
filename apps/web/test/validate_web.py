@@ -163,6 +163,12 @@ def validate_course_js(course_js: Path) -> None:
     if "renderHeroAttribution" not in content or "license_url" not in content or "source_url" not in content:
         raise ValueError("course.js must implement renderHeroAttribution preserving source_url and license_url")
 
+    if "Est. Green Fee" not in content:
+        raise ValueError("course.js must label green fee as 'Est. Green Fee'")
+
+    if "course.status !== 'active'" not in content:
+        raise ValueError("course.js must reject courses with status !== 'active'")
+
     # If Node.js is installed in the environment, run syntax and behavior tests
     node_bin = shutil.which("node")
     if node_bin:
@@ -243,6 +249,32 @@ def validate_course_js(course_js: Path) -> None:
   }}
   if (!rendered.includes('Holes</span>\\n                <span class="stat-value">—</span>')) {{
     throw new Error('Unknown hole count not displayed as em dash');
+  }}
+  if (!rendered.includes('Est. Green Fee')) {{
+    throw new Error('Est. Green Fee label missing from rendered course');
+  }}
+
+  // Test 3: Retired courses are rejected
+  rendered = '';
+  const sandboxRetired = {{
+    window: {{ location: {{ hostname: 'localhost', search: '?id=99', pathname: '/' }} }},
+    document: {{
+      querySelector: () => null,
+      getElementById: () => ({{ set innerHTML(v) {{ rendered = v; }}, get innerHTML() {{ return rendered; }}, addEventListener: () => {{}} }}),
+      readyState: 'complete',
+      title: ''
+    }},
+    console, URLSearchParams, Date, setTimeout, parseInt, String,
+    fetch: async () => ({{
+      ok: true,
+      json: async () => ({{ id: 99, name: 'Retired Links', status: 'retired' }})
+    }})
+  }};
+  vm.createContext(sandboxRetired);
+  vm.runInContext(js, sandboxRetired);
+  await new Promise(r => setTimeout(r, 50));
+  if (!rendered.includes('is no longer active in the catalog')) {{
+    throw new Error('Retired course was not rejected');
   }}
 }})();
 """

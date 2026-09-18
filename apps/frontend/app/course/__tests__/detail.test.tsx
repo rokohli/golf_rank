@@ -156,7 +156,12 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('SLOPE')).toBeNull()
 
     fireEvent.press(screen.getByRole('button', { name: 'Share course' }))
-    await waitFor(() => expect(mockShare).toHaveBeenCalledWith({ message: 'Test Links\nMonterey, CA' }))
+    await waitFor(() =>
+      expect(mockShare).toHaveBeenCalledWith({
+        message: 'Test Links\nMonterey, CA\nhttps://getfairway.app/course.html?id=7',
+        url: 'https://getfairway.app/course.html?id=7',
+      }),
+    )
 
     fireEvent.press(screen.getByRole('button', { name: 'View tee times' }))
     expect(mockOpenUrl).toHaveBeenCalledWith('https://example.com/tee-times')

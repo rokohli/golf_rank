@@ -254,12 +254,17 @@ export default function CourseDetail() {
   const shareCourse = useCallback(async () => {
     if (!course) return
     setUtilityError(null)
+    const webBaseUrl = (process.env.EXPO_PUBLIC_WEB_URL ?? 'https://getfairway.app').replace(/\/+$/, '')
+    const shareUrl = numericCourseId ? `${webBaseUrl}/course.html?id=${numericCourseId}` : undefined
     try {
-      await Share.share({ message: `${course.name}\n${course.location}` })
+      await Share.share({
+        message: shareUrl ? `${course.name}\n${course.location}\n${shareUrl}` : `${course.name}\n${course.location}`,
+        ...(shareUrl ? { url: shareUrl } : {}),
+      })
     } catch (reason) {
       setUtilityError(errorMessage(reason, 'Unable to share this course.'))
     }
-  }, [course])
+  }, [course, numericCourseId])
 
   const viewTeeTimes = useCallback(async () => {
     if (!course) return

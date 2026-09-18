@@ -145,7 +145,7 @@
                 <span class="stat-value">${course.slope_rating != null ? escapeHtml(String(course.slope_rating)) : '—'}</span>
               </div>
               <div class="stat-item">
-                <span class="stat-label">Green Fee</span>
+                <span class="stat-label">Est. Green Fee</span>
                 <span class="stat-value">${escapeHtml(formatPrice(course.green_fee))}</span>
               </div>
             </div>
@@ -225,6 +225,10 @@
       }
 
       const course = await response.json();
+      if (course && course.status && course.status !== 'active') {
+        renderError(`Course #${courseId} is no longer active in the catalog.`);
+        return;
+      }
       renderCourse(course);
     } catch (err) {
       renderError('Unable to connect to the Fairway catalog. Please check your connection.');

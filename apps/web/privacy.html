@@ -72,8 +72,8 @@
           To help you connect with golfers you know, Fairway offers an optional contact discovery feature during onboarding or in your friends settings:
         </p>
         <ul>
-          <li><strong>Zero Plaintext Storage:</strong> We do not store your address book, contact names, unencrypted phone numbers, or unencrypted email addresses on our servers.</li>
-          <li><strong>Cryptographic Hashing:</strong> Contact phone numbers and email addresses extracted from your address book are normalized and converted into cryptographically hashed identifiers (using HMAC-SHA256 with a server-side salt key) before transmission and comparison.</li>
+          <li><strong>Zero Plaintext Storage:</strong> We never store your address book, contact names, plaintext phone numbers, or plaintext email addresses on persistent database storage.</li>
+          <li><strong>Secure In-Transit Delivery &amp; Cryptographic Hashing:</strong> Normalized phone numbers and email addresses you choose to sync are transmitted securely to our API servers over TLS/HTTPS encryption. Upon receipt in server memory, they are immediately converted into cryptographic one-way hashes (HMAC-SHA256 keyed with a secret server pepper) before comparison or storage. Raw contact identifiers are discarded from memory and never written to disk or database tables.</li>
           <li>Only if another user has independently registered with a matching hashed phone or email identifier will you be shown a mutual connection suggestion. Unmatched contact hashes cannot be reversed to discover phone numbers or email addresses.</li>
           <li>Contact permission is entirely optional; you can decline contact access and search for friends directly by username.</li>
         </ul>
