@@ -126,6 +126,8 @@ def validate_web_dir(web_dir: Path) -> None:
                 raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-api-url\" ...> override element")
             if "fairway-app-store-url" not in validator.meta_names:
                 raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-app-store-url\" ...> override element")
+            if 'content="https://fairway-api-h93s.onrender.com"' not in content:
+                raise ValueError(f"{html_file.name}: fairway-api-url meta tag must configure the provisioned API endpoint")
 
         if html_file.name in ("terms.html", "privacy.html"):
             if "TEMPLATE NOTICE" not in content:
@@ -136,6 +138,8 @@ def validate_web_dir(web_dir: Path) -> None:
                 raise ValueError(f"{html_file.name}: Missing disclosure for Expo push notification infrastructure")
             if "Sentry" in content:
                 raise ValueError(f"{html_file.name}: Unintegrated Sentry disclosure must be removed")
+            if "best-effort" not in content or "DeviceNotRegistered" not in content:
+                raise ValueError(f"{html_file.name}: Push token retention must describe best-effort unregistration and pruning")
 
         if html_file.name == "index.html":
             if "onclick=" in content and "alert(" in content:
@@ -183,6 +187,9 @@ def validate_course_js(course_js: Path) -> None:
 
     if "getAppStoreUrl" not in content:
         raise ValueError("course.js must implement getAppStoreUrl")
+
+    if "https://fairway-api-h93s.onrender.com" not in content:
+        raise ValueError("course.js must configure provisioned fairway-api-h93s.onrender.com endpoint")
 
     if "alert(" in content:
         raise ValueError("course.js must route unsuccessful opens to getAppStoreUrl without alert dialogs")

@@ -10,15 +10,8 @@
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:8000';
     }
-    // Staging environment default when hosted on Render
-    if (window.location.hostname.endsWith('onrender.com')) {
-      return 'https://fairway-api-h93s.onrender.com';
-    }
-    // Production web deployment default to same origin (e.g. reverse proxy or unified domain)
-    if (window.location.origin && window.location.origin !== 'null') {
-      return window.location.origin.replace(/\/+$/, '');
-    }
-    return '';
+    // Provisioned Fairway cross-origin API service (CORS configured for getfairway.app)
+    return 'https://fairway-api-h93s.onrender.com';
   }
 
   function getAppStoreUrl() {
