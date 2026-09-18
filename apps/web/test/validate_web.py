@@ -154,6 +154,10 @@ def validate_web_dir(web_dir: Path) -> None:
 
         print(f"  ✓ {html_file.name} is valid (title: '{validator.title_text}')")
 
+    # Verify style.css exists and validate its contract
+    style_css = web_dir / "style.css"
+    validate_style_css(style_css)
+
     # Verify course.js exists and validate its contract
     course_js = web_dir / "course.js"
     validate_course_js(course_js)
@@ -322,6 +326,21 @@ def validate_course_js(course_js: Path) -> None:
         print("  ✓ course.js validated (syntax, ID rejection, attribution links, hole count fallback)")
     else:
         print("  ✓ course.js validated (static checks; node not found in PATH)")
+
+
+def validate_style_css(style_css: Path) -> None:
+    if not style_css.exists():
+        raise FileNotFoundError(f"Missing {style_css}")
+    content = style_css.read_text(encoding="utf-8")
+    if ".course-img-attribution" not in content:
+        raise ValueError("style.css missing .course-img-attribution class definition")
+    # Check that attribution allows wrapping and does not clip license link
+    attr_block = content.split(".course-img-attribution")[1].split("}")[0]
+    if "white-space: nowrap" in attr_block or "overflow: hidden" in attr_block or "text-overflow: ellipsis" in attr_block:
+        raise ValueError("style.css: .course-img-attribution must not force nowrap or clip overflow, hiding license links")
+    if "white-space: normal" not in attr_block:
+        raise ValueError("style.css: .course-img-attribution must allow wrapping with white-space: normal")
+    print("  ✓ style.css validated (attribution wrapping and license visibility)")
 
 
 if __name__ == "__main__":

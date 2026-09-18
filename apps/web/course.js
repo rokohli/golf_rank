@@ -77,11 +77,11 @@
     }
 
     if (creditHtml && licenseHtml) {
-      return `<span class="course-img-attribution">${creditHtml} · ${licenseHtml}</span>`;
+      return `<span class="course-img-attribution"><span class="attribution-credit">${creditHtml}</span> <span class="attribution-sep">·</span> <span class="attribution-license">${licenseHtml}</span></span>`;
     } else if (creditHtml) {
-      return `<span class="course-img-attribution">${creditHtml}</span>`;
+      return `<span class="course-img-attribution"><span class="attribution-credit">${creditHtml}</span></span>`;
     } else if (licenseHtml) {
-      return `<span class="course-img-attribution">License: ${licenseHtml}</span>`;
+      return `<span class="course-img-attribution"><span class="attribution-license">License: ${licenseHtml}</span></span>`;
     }
     return '';
   }
