@@ -72,9 +72,9 @@
           To help you connect with golfers you know, Fairway offers an optional contact discovery feature during onboarding or in your friends settings:
         </p>
         <ul>
-          <li><strong>Zero Plaintext Storage:</strong> We do not store your address book, full names of your contacts, or unencrypted phone numbers on our servers.</li>
-          <li><strong>Cryptographic Hashing:</strong> Contact phone numbers are normalized and converted into cryptographically hashed identifiers (using HMAC-SHA256 with a server-side salt key) before comparison.</li>
-          <li>Only if another user has independently registered with a matching hashed identifier will you be shown a mutual connection suggestion. Unmatched contact hashes cannot be reversed to discover phone numbers.</li>
+          <li><strong>Zero Plaintext Storage:</strong> We do not store your address book, contact names, unencrypted phone numbers, or unencrypted email addresses on our servers.</li>
+          <li><strong>Cryptographic Hashing:</strong> Contact phone numbers and email addresses extracted from your address book are normalized and converted into cryptographically hashed identifiers (using HMAC-SHA256 with a server-side salt key) before transmission and comparison.</li>
+          <li>Only if another user has independently registered with a matching hashed phone or email identifier will you be shown a mutual connection suggestion. Unmatched contact hashes cannot be reversed to discover phone numbers or email addresses.</li>
           <li>Contact permission is entirely optional; you can decline contact access and search for friends directly by username.</li>
         </ul>
 
@@ -85,7 +85,7 @@
         <ul>
           <li>Photos are stored in secure cloud object storage (such as Cloudflare R2).</li>
           <li><strong>AI Quality Scoring:</strong> Course photos submitted for public hero consideration may be processed by artificial intelligence models (such as Google Gemini) to evaluate image sharpness, orientation, lighting, and composition. This automated scoring evaluates visual quality only; it does not perform biometric identification or facial recognition.</li>
-          <li>You can delete photos you have submitted at any time through the app.</li>
+          <li><strong>Photo Deletion &amp; Controls:</strong> Photos attached to recorded rounds are deleted whenever you delete the associated round. When you delete your account, all photos uploaded by your account are permanently removed from public display and queued for object storage purge. You may also contact support (<a href="mailto:support@fairway.app">support@fairway.app</a>) to request removal of any course photo you previously contributed.</li>
         </ul>
 
         <h3>E. Round Activity and Course Ratings</h3>
