@@ -140,6 +140,8 @@ def validate_web_dir(web_dir: Path) -> None:
                 raise ValueError(f"{html_file.name}: Unintegrated Sentry disclosure must be removed")
             if "best-effort" not in content or "DeviceNotRegistered" not in content:
                 raise ValueError(f"{html_file.name}: Push token retention must describe best-effort unregistration and pruning")
+            if "deletion_pending" not in content or "remediation" not in content:
+                raise ValueError(f"{html_file.name}: Missing disclosure for deletion_pending status and administrative remediation")
 
         if "id6742358055" in content:
             raise ValueError(f"{html_file.name}: Unprovisioned App Store identifier id6742358055 must not be hard-coded")

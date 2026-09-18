@@ -125,7 +125,7 @@
 
         <h2>5. Data Retention and Account Deletion</h2>
         <p>
-          We retain your personal profile, round logs, and associated user data only as long as your account remains active.
+          We retain your personal profile, round logs, and associated user data only as long as your account remains active, subject to post-deletion suppression registers and pending third-party authentication provider cleanup described below.
         </p>
         <p>
           <strong>Your Right to Complete Deletion:</strong> In accordance with Apple App Store requirements and global privacy standards, you have the absolute right to delete your account at any time:
@@ -134,7 +134,8 @@
           <li>Navigate to <strong>Settings → Delete Account</strong> within the Fairway mobile app.</li>
           <li>Confirming deletion permanently deletes your profile record, personal details, hashed contact entries, device push notification tokens, saved lists, and private rounds from our primary databases.</li>
           <li>Any course photos uploaded by your account are removed from public views and queued for permanent storage purge.</li>
-          <li><strong>Security & Deletion Suppression Retention:</strong> To enforce account termination, prevent unauthorized account recreation using revoked credentials, and honor your deletion request across all active sessions, an opaque cryptographic authentication identifier (your authentication provider subject ID) is retained indefinitely on a secured deletion-suppression register. This identifier is retained strictly to recognize and permanently reject subsequent requests from the deleted identity (returning HTTP 410 Gone) and contains no associated profile, contact, or location records.</li>
+          <li><strong>Third-Party Identity Provider Deletion &amp; Pending Cleanup:</strong> Account deletion immediately issues an API request to our authentication provider (Clerk) to permanently remove your user identity, email, and phone credentials. If communication with Clerk encounters a service outage, network error, or rate limit, our API responds with a <code>deletion_pending</code> status: your local Fairway data is immediately purged, the account is signed out and blocked, but external identity records may continue to be retained by Clerk until completed via administrative remediation scripts or manual intervention. Users may contact <a href="mailto:privacy@fairway.app">privacy@fairway.app</a> to confirm or expedite provider-side identity cleanup.</li>
+          <li><strong>Security &amp; Deletion Suppression Retention:</strong> To enforce account termination, prevent unauthorized account recreation using revoked credentials, and honor your deletion request across all active sessions, an opaque cryptographic authentication identifier (your authentication provider subject ID) is retained indefinitely on a secured deletion-suppression register. This identifier is retained strictly to recognize and permanently reject subsequent requests from the deleted identity (returning HTTP 410 Gone) and contains no associated profile, contact, or location records.</li>
         </ul>
 
         <h2>6. Security Measures</h2>
