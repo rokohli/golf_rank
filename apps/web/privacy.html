@@ -101,12 +101,21 @@
           <strong>Token Lifecycle &amp; Retention:</strong> When you disable notifications in the app settings or sign out while connected, the app makes a best-effort API request to unregister and delete the device token from our servers. If sign-out occurs while your device is offline or the network request times out, the token remains associated until another account signs in on that device (which immediately reassigns or overwrites the device token) or until Expo returns an invalidation signal (<code>DeviceNotRegistered</code>), at which point our servers automatically prune the stale record. Revoking notification permissions directly in your device's operating system settings prevents alerts from displaying on your device, but does not notify our API to remove the token until changed in-app or unlinked. Device tokens are permanently deleted from database tables upon account deletion.
         </p>
 
+        <h3>G. Golfer Preferences and Onboarding Profile</h3>
+        <p>
+          When you complete golfer onboarding or adjust preferences in your profile, we collect and store information about your golf interests and habits. This includes your home-course selection and searches, played courses, favorite and dream courses, head-to-head course comparison preferences, friend search queries, and playing preferences (such as preferred course difficulty, public or private access, group size, budget tier, travel distance, preferred tee time, and transportation).
+        </p>
+        <p>
+          <strong>Purpose &amp; Retention:</strong> We use this information to personalize your course discovery feed, calibrate head-to-head comparison pairings, and generate custom AI trip planner itineraries. You can update your home course and preference filters in the app. This onboarding preference data is retained while your account remains active and is permanently purged from database storage upon account deletion.
+        </p>
+
         <h2>3. How We Use Your Information</h2>
         <p>We use the information we collect to:</p>
         <ul>
           <li>Provide, maintain, and personalize the Fairway mobile experience.</li>
           <li>Calculate aggregated community course ratings and head-to-head course rankings.</li>
           <li>Help you discover courses and tee-time availability near your location or travel destination.</li>
+          <li>Personalize course recommendations and discovery based on your stated golf preferences, difficulty comfort, and travel distance.</li>
           <li>Generate AI-assisted golf trip itineraries when you use the AI Planner feature.</li>
           <li>Prevent spam, fraud, abusive ratings, and rate-limit violations.</li>
           <li>Send transactional notifications (e.g., friend requests, round tags, and system updates) if push notifications are enabled.</li>
@@ -120,7 +129,7 @@
           <li><strong>Google Cloud (Gemini):</strong> AI processing for course photo quality scoring and itinerary generation.</li>
           <li><strong>Expo (650 Industries):</strong> Push notification delivery infrastructure and device dispatch gateway.</li>
           <li><strong>OpenGolfAPI:</strong> Public course catalog metadata (licensed under ODbL 1.0).</li>
-          <li><strong>Mapbox / Wikimedia Commons:</strong> Course map visuals and public domain/Creative Commons imagery.</li>
+          <li><strong>Wikimedia Commons:</strong> Public domain and Creative Commons course imagery.</li>
         </ul>
 
         <h2>5. Data Retention and Account Deletion</h2>
@@ -132,7 +141,7 @@
         </p>
         <ul>
           <li>Navigate to <strong>Settings → Delete Account</strong> within the Fairway mobile app.</li>
-          <li>Confirming deletion permanently deletes your profile record, personal details, hashed contact entries, device push notification tokens, saved lists, and private rounds from our primary databases.</li>
+          <li>Confirming deletion permanently deletes your profile record, personal details, hashed contact entries, stored golfer onboarding preferences, device push notification tokens, saved lists, and private rounds from our primary databases.</li>
           <li>Any course photos uploaded by your account are removed from public views and queued for permanent storage purge.</li>
           <li><strong>Third-Party Identity Provider Deletion &amp; Pending Cleanup:</strong> Account deletion immediately issues an API request to our authentication provider (Clerk) to permanently remove your user identity, email, and phone credentials. If communication with Clerk encounters a service outage, network error, or rate limit, our API responds with a <code>deletion_pending</code> status: your local Fairway data is immediately purged, the account is signed out and blocked, but external identity records may continue to be retained by Clerk until completed via administrative remediation scripts or manual intervention. Users may contact <a href="mailto:privacy@fairway.app">privacy@fairway.app</a> to confirm or expedite provider-side identity cleanup.</li>
           <li><strong>Security &amp; Deletion Suppression Retention:</strong> To enforce account termination, prevent unauthorized account recreation using revoked credentials, and honor your deletion request across all active sessions, an opaque cryptographic authentication identifier (your authentication provider subject ID) is retained indefinitely on a secured deletion-suppression register. This identifier is retained strictly to recognize and permanently reject subsequent requests from the deleted identity (returning HTTP 410 Gone) and contains no associated profile, contact, or location records.</li>

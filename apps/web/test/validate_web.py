@@ -132,16 +132,26 @@ def validate_web_dir(web_dir: Path) -> None:
         if html_file.name in ("terms.html", "privacy.html"):
             if "TEMPLATE NOTICE" not in content:
                 raise ValueError(f"{html_file.name}: Missing internal legal template notice")
+            if "Mapbox" in content:
+                raise ValueError(f"{html_file.name}: Unintegrated Mapbox disclosure must be removed")
 
         if html_file.name == "privacy.html":
             if "Expo (650 Industries)" not in content:
                 raise ValueError(f"{html_file.name}: Missing disclosure for Expo push notification infrastructure")
             if "Sentry" in content:
                 raise ValueError(f"{html_file.name}: Unintegrated Sentry disclosure must be removed")
+            if "Golfer Preferences and Onboarding Profile" not in content or "travel distance" not in content:
+                raise ValueError(f"{html_file.name}: Missing disclosure for stored onboarding preferences and travel profile")
             if "best-effort" not in content or "DeviceNotRegistered" not in content:
                 raise ValueError(f"{html_file.name}: Push token retention must describe best-effort unregistration and pruning")
             if "deletion_pending" not in content or "remediation" not in content:
                 raise ValueError(f"{html_file.name}: Missing disclosure for deletion_pending status and administrative remediation")
+
+        if html_file.name == "terms.html":
+            if "device push notification tokens" not in content:
+                raise ValueError(f"{html_file.name}: Missing disclosure for device push notification tokens in account deletion")
+            if "stored golfer onboarding preferences" not in content:
+                raise ValueError(f"{html_file.name}: Missing disclosure for stored golfer onboarding preferences in account deletion")
 
         if "id6742358055" in content:
             raise ValueError(f"{html_file.name}: Unprovisioned App Store identifier id6742358055 must not be hard-coded")
@@ -153,6 +163,14 @@ def validate_web_dir(web_dir: Path) -> None:
                 raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-app-store-url\" ...> element")
 
         print(f"  ✓ {html_file.name} is valid (title: '{validator.title_text}')")
+
+    # Verify render.yaml static service definition
+    render_yaml = web_dir.parent.parent / "render.yaml"
+    if render_yaml.exists():
+        render_content = render_yaml.read_text(encoding="utf-8")
+        if "fairway-web" not in render_content or "staticPublishPath: ./apps/web" not in render_content:
+            raise ValueError("render.yaml must configure fairway-web static site service for apps/web")
+        print("  ✓ render.yaml static deployment configured (fairway-web)")
 
     # Verify style.css exists and validate its contract
     style_css = web_dir / "style.css"
@@ -204,6 +222,9 @@ def validate_course_js(course_js: Path) -> None:
 
     if "alert(" in content:
         raise ValueError("course.js must route unsuccessful opens to getAppStoreUrl without alert dialogs")
+
+    if "!document.hidden" not in content:
+        raise ValueError("course.js must check !document.hidden before fallback redirect")
 
     if "id6742358055" in content:
         raise ValueError("course.js must not hard-code unprovisioned store identifier id6742358055")

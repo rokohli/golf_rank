@@ -173,7 +173,7 @@
       openBtn.addEventListener('click', function (e) {
         const start = Date.now();
         setTimeout(function () {
-          if (Date.now() - start < 1500) {
+          if (!document.hidden && Date.now() - start < 1500) {
             // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
             window.location.href = getAppStoreUrl() || 'index.html#download';
           }

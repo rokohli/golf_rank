@@ -67,8 +67,6 @@ services:
         value: "900"
       - key: RATE_LIMIT_ALERT_MAX_TRACKED_KEYS
         value: "10000"
-      - key: MAPBOX_ACCESS_TOKEN
-        sync: false
       - key: WIKIMEDIA_LIVE_LOOKUP_ENABLED
         value: "true"
       - key: AI_PLANNER_ENABLED
@@ -113,3 +111,10 @@ services:
     ipAllowList: []
     maxmemoryPolicy: allkeys-lru
     persistenceMode: off
+
+  - type: static
+    name: fairway-web
+    repo: https://github.com/rokohli/golf_rank
+    buildCommand: ""
+    staticPublishPath: ./apps/web
+    autoDeployTrigger: checksPass
