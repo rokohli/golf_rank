@@ -8,8 +8,9 @@
   <!-- Deployment-specific API base URL. Can be set at build/deploy time or overridden by window.FAIRWAY_API_URL.
        If empty or absent, course.js falls back to localhost in dev or fairway-api-h93s.onrender.com in production/staging. -->
   <meta name="fairway-api-url" content="https://fairway-api-h93s.onrender.com">
-  <!-- App Store / TestFlight download destination for users without the app. Can be overridden by window.FAIRWAY_APP_STORE_URL. -->
-  <meta name="fairway-app-store-url" content="https://apps.apple.com/app/fairway-golf/id6742358055">
+  <!-- Deployment-configured App Store / TestFlight download destination. Can be set at deploy time via meta tag or window.FAIRWAY_APP_STORE_URL.
+       When unconfigured, course page actions route to the landing page install/beta section. -->
+  <meta name="fairway-app-store-url" content="">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>

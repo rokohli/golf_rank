@@ -141,9 +141,14 @@ def validate_web_dir(web_dir: Path) -> None:
             if "best-effort" not in content or "DeviceNotRegistered" not in content:
                 raise ValueError(f"{html_file.name}: Push token retention must describe best-effort unregistration and pruning")
 
+        if "id6742358055" in content:
+            raise ValueError(f"{html_file.name}: Unprovisioned App Store identifier id6742358055 must not be hard-coded")
+
         if html_file.name == "index.html":
             if "onclick=" in content and "alert(" in content:
                 raise ValueError(f"{html_file.name}: Placeholder alert onclick on download button must be replaced with real store link")
+            if "fairway-app-store-url" not in validator.meta_names:
+                raise ValueError(f"{html_file.name}: Missing <meta name=\"fairway-app-store-url\" ...> element")
 
         print(f"  ✓ {html_file.name} is valid (title: '{validator.title_text}')")
 
@@ -193,6 +198,9 @@ def validate_course_js(course_js: Path) -> None:
 
     if "alert(" in content:
         raise ValueError("course.js must route unsuccessful opens to getAppStoreUrl without alert dialogs")
+
+    if "id6742358055" in content:
+        raise ValueError("course.js must not hard-code unprovisioned store identifier id6742358055")
 
     # If Node.js is installed in the environment, run syntax and behavior tests
     node_bin = shutil.which("node")

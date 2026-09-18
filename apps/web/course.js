@@ -15,10 +15,10 @@
   }
 
   function getAppStoreUrl() {
-    if (window.FAIRWAY_APP_STORE_URL) return window.FAIRWAY_APP_STORE_URL;
+    if (window.FAIRWAY_APP_STORE_URL) return window.FAIRWAY_APP_STORE_URL.replace(/\/+$/, '');
     const meta = document.querySelector('meta[name="fairway-app-store-url"]');
-    if (meta && meta.content && meta.content.trim()) return meta.content.trim();
-    return 'https://apps.apple.com/app/fairway-golf/id6742358055';
+    if (meta && meta.content && meta.content.trim()) return meta.content.trim().replace(/\/+$/, '');
+    return '';
   }
 
   function getCourseId() {
@@ -96,6 +96,10 @@
     const ratingCountText = course.rating_count ? `${course.rating_count} review${course.rating_count === 1 ? '' : 's'}` : 'No ratings yet';
 
     const deepLinkUrl = `golfrank://course/${course.id}`;
+    const storeUrl = getAppStoreUrl();
+    const appActionHtml = storeUrl
+      ? `<a href="${escapeHtml(storeUrl)}" class="btn-secondary" style="justify-content: center;" target="_blank" rel="noopener noreferrer">Get the App</a>`
+      : `<a href="index.html#download" class="btn-secondary" style="justify-content: center;">Get the App</a>`;
 
     container.innerHTML = `
       <div class="course-card-wrapper">
@@ -154,9 +158,7 @@
               <a href="${escapeHtml(deepLinkUrl)}" id="open-app-btn" class="btn-primary">
                 Open in Fairway
               </a>
-              <a href="${escapeHtml(getAppStoreUrl())}" class="btn-secondary" style="justify-content: center;" target="_blank" rel="noopener noreferrer">
-                Get the App
-              </a>
+              ${appActionHtml}
             </div>
           </div>
         </article>
@@ -165,15 +167,15 @@
 
     document.title = `${course.name} — Fairway`;
 
-    // Progressive enhancement: try deep link, with smooth fallback to app store / download destination
+    // Progressive enhancement: try deep link, with smooth fallback to app store or download section
     const openBtn = document.getElementById('open-app-btn');
     if (openBtn) {
       openBtn.addEventListener('click', function (e) {
         const start = Date.now();
         setTimeout(function () {
           if (Date.now() - start < 1500) {
-            // App didn't open (recipient doesn't have app installed) -> route to store destination
-            window.location.href = getAppStoreUrl();
+            // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
+            window.location.href = getAppStoreUrl() || 'index.html#download';
           }
         }, 1000);
       });
