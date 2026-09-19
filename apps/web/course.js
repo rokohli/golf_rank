@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  const REQUEST_TIMEOUT_MS = 15000;
+
   function getApiBaseUrl() {
     if (window.FAIRWAY_API_URL) return window.FAIRWAY_API_URL.replace(/\/+$/, '');
     const meta = document.querySelector('meta[name="fairway-api-url"]');
@@ -10,7 +12,8 @@
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:8000';
     }
-    // Provisioned Fairway cross-origin API service (CORS configured for getfairway.app)
+    // Provisioned Fairway cross-origin API service. render.yaml sets the API's
+    // CORS_ORIGINS to this site's origin, https://fairway-web.onrender.com.
     return 'https://fairway-api-h93s.onrender.com';
   }
 
@@ -90,7 +93,7 @@
     const container = document.getElementById('course-container');
     if (!container) return;
 
-    const heroImg = course.hero_image && course.hero_image.url ? course.hero_image.url : null;
+    const heroImg = course.hero_image ? sanitizeUrl(course.hero_image.url) : '';
     const attributionHtml = renderHeroAttribution(course.hero_image);
     const ratingDisplay = course.community_rating != null ? course.community_rating.toFixed(1) : '—';
     const ratingCountText = course.rating_count ? `${course.rating_count} review${course.rating_count === 1 ? '' : 's'}` : 'No ratings yet';
@@ -170,28 +173,61 @@
     // Progressive enhancement: try deep link, with smooth fallback to app store or download section
     const openBtn = document.getElementById('open-app-btn');
     if (openBtn) {
-      openBtn.addEventListener('click', function (e) {
-        const start = Date.now();
-        setTimeout(function () {
-          if (!document.hidden && Date.now() - start < 1500) {
-            // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
-            window.location.href = getAppStoreUrl() || 'index.html#download';
+      openBtn.addEventListener('click', function () {
+        // iOS shows an "Open in Fairway?" sheet while this page stays visible,
+        // so a fixed timeout cannot tell a missing app from a slow tap. Wait
+        // longer, and cancel outright the moment the page is backgrounded --
+        // which is what actually happens when the app launches.
+        let timer = null;
+        const cancelFallback = function () {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
           }
-        }, 1000);
+          window.removeEventListener('pagehide', cancelFallback);
+          document.removeEventListener('visibilitychange', onVisibilityChange);
+        };
+        const onVisibilityChange = function () {
+          if (document.hidden) cancelFallback();
+        };
+        window.addEventListener('pagehide', cancelFallback);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        timer = setTimeout(function () {
+          cancelFallback();
+          if (document.hidden) return;
+          // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
+          window.location.href = getAppStoreUrl() || 'index.html#download';
+        }, 2500);
       });
     }
   }
 
-  function renderError(message) {
+  function renderLoading() {
+    const container = document.getElementById('course-container');
+    if (!container) return;
+    container.innerHTML = `
+      <div class="state-box">
+        <div class="spinner" aria-hidden="true"></div>
+        <p style="color: var(--muted); font-weight: 500;">Loading course details…</p>
+      </div>
+    `;
+  }
+
+  function renderError(message, retryable) {
     const container = document.getElementById('course-container');
     if (!container) return;
     container.innerHTML = `
       <div class="state-box">
         <h2 style="font-size: 1.4rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--ink);">Course Unavailable</h2>
         <p style="color: var(--muted); margin-bottom: 1.5rem;">${escapeHtml(message)}</p>
-        <a href="index.html" class="btn-primary">Return to Fairway</a>
+        ${retryable ? '<button type="button" id="course-retry-btn" class="btn-primary">Try Again</button> ' : ''}
+        <a href="index.html" class="btn-secondary">Return to Fairway</a>
       </div>
     `;
+    if (retryable) {
+      const retryBtn = document.getElementById('course-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', function () { loadCourse(); });
+    }
   }
 
   function escapeHtml(str) {
@@ -211,10 +247,18 @@
       return;
     }
     const apiUrl = `${getApiBaseUrl()}/api/v1/courses/${courseId}`;
+    renderLoading();
+
+    // The catalog API runs on a plan that sleeps when idle, so a first request
+    // can hang for tens of seconds. Bound the wait and offer a retry instead of
+    // leaving the recipient of a shared link on a spinner forever.
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(function () { controller.abort(); }, REQUEST_TIMEOUT_MS) : null;
 
     try {
       const response = await fetch(apiUrl, {
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        ...(controller ? { signal: controller.signal } : {})
       });
 
       if (!response.ok) {
@@ -233,7 +277,13 @@
       }
       renderCourse(course);
     } catch (err) {
-      renderError('Unable to connect to the Fairway catalog. Please check your connection.');
+      if (err && err.name === 'AbortError') {
+        renderError('The Fairway catalog is taking longer than usual to respond.', true);
+      } else {
+        renderError('Unable to connect to the Fairway catalog. Please check your connection.', true);
+      }
+    } finally {
+      if (timeout !== null) clearTimeout(timeout);
     }
   }
 

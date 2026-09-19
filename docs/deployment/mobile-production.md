@@ -21,11 +21,19 @@ Choose the final iOS bundle identifier and Android package name in the Expo conf
 
 Create these EAS environment variables for each named environment:
 
-| EAS environment | `EXPO_PUBLIC_AUTH_MODE` | `EXPO_PUBLIC_API_URL` | `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` |
-| --- | --- | --- | --- |
-| development | `development` or `clerk` | local or development API URL | development Clerk key only when using Clerk |
-| preview | `clerk` | staging API HTTPS URL | staging Clerk publishable key |
-| production | `clerk` | production API HTTPS URL | production Clerk publishable key |
+| EAS environment | `EXPO_PUBLIC_AUTH_MODE` | `EXPO_PUBLIC_API_URL` | `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | `EXPO_PUBLIC_WEB_URL` |
+| --- | --- | --- | --- | --- |
+| development | `development` or `clerk` | local or development API URL | development Clerk key only when using Clerk | unset, or a local static server |
+| preview | `clerk` | staging API HTTPS URL | staging Clerk publishable key | staging web shell origin |
+| production | `clerk` | production API HTTPS URL | production Clerk publishable key | production web shell origin |
+
+`EXPO_PUBLIC_WEB_URL` is the base URL of the `apps/web` static site; the course
+share sheet builds links as `<base>/course.html?id=<course id>`. When it is
+unset the app falls back to the origin the `fairway-web` service in
+`render.yaml` provisions, `https://fairway-web.onrender.com`. Point it at a
+custom domain only after that domain is registered and added to the
+`fairway-web` service, and add the same origin to the API's `CORS_ORIGINS` —
+otherwise the browser blocks the catalog request the shared page makes.
 
 Values prefixed `EXPO_PUBLIC_` are embedded in the app. They may contain the API URL and Clerk *publishable* key, but never a Clerk secret key, database URL/password, Supabase service-role key, Redis URL, or provider API key.
 

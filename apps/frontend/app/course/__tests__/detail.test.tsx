@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
-import { Linking, Share } from 'react-native'
+import { Linking, Platform, Share } from 'react-native'
 
 import CourseDetail from '../[id]'
 import { CourseImage, CourseRatingState } from '../../../src/types'
@@ -158,13 +158,32 @@ describe('course detail ratings', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Share course' }))
     await waitFor(() =>
       expect(mockShare).toHaveBeenCalledWith({
-        message: 'Test Links\nMonterey, CA\nhttps://getfairway.app/course.html?id=7',
-        url: 'https://getfairway.app/course.html?id=7',
+        message: 'Test Links\nMonterey, CA',
+        url: 'https://fairway-web.onrender.com/course.html?id=7',
       }),
     )
 
     fireEvent.press(screen.getByRole('button', { name: 'View tee times' }))
     expect(mockOpenUrl).toHaveBeenCalledWith('https://example.com/tee-times')
+  })
+
+  it('keeps the shared link in the message on Android, where url is ignored', async () => {
+    const originalOs = Platform.OS
+    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true })
+    try {
+      render(<CourseDetail />)
+      expect(await screen.findByText('Test Links')).toBeOnTheScreen()
+
+      fireEvent.press(screen.getByRole('button', { name: 'Share course' }))
+      await waitFor(() =>
+        expect(mockShare).toHaveBeenCalledWith({
+          message: 'Test Links\nMonterey, CA\nhttps://fairway-web.onrender.com/course.html?id=7',
+          url: 'https://fairway-web.onrender.com/course.html?id=7',
+        }),
+      )
+    } finally {
+      Object.defineProperty(Platform, 'OS', { value: originalOs, configurable: true })
+    }
   })
 
   it('shows honest social empty states and real personal round details', async () => {

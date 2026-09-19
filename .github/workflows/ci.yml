@@ -126,7 +126,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Validate web shell static files
-        run: python apps/web/test/validate_web.py
+        run: python tests/web/validate_web.py
 
   secret-scan:
     runs-on: ubuntu-latest

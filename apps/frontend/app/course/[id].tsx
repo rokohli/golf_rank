@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, getSavedLists, removeCourseFromList, saveCourseToList, suggestGreenFee, updateRound } from '../../src/api/client'
@@ -254,11 +254,16 @@ export default function CourseDetail() {
   const shareCourse = useCallback(async () => {
     if (!course) return
     setUtilityError(null)
-    const webBaseUrl = (process.env.EXPO_PUBLIC_WEB_URL ?? 'https://getfairway.app').replace(/\/+$/, '')
+    const configuredWebUrl = process.env.EXPO_PUBLIC_WEB_URL?.trim()
+    const webBaseUrl = (configuredWebUrl || 'https://fairway-web.onrender.com').replace(/\/+$/, '')
     const shareUrl = numericCourseId ? `${webBaseUrl}/course.html?id=${numericCourseId}` : undefined
+    // iOS treats `url` as a separate activity item, so repeating the link in
+    // `message` makes targets like Messages and Mail show it twice. Android
+    // ignores `url` entirely and needs the link inside the message text.
+    const appendUrlToMessage = shareUrl && Platform.OS !== 'ios'
     try {
       await Share.share({
-        message: shareUrl ? `${course.name}\n${course.location}\n${shareUrl}` : `${course.name}\n${course.location}`,
+        message: appendUrlToMessage ? `${course.name}\n${course.location}\n${shareUrl}` : `${course.name}\n${course.location}`,
         ...(shareUrl ? { url: shareUrl } : {}),
       })
     } catch (reason) {

@@ -365,9 +365,12 @@ def validate_style_css(style_css: Path) -> None:
 
 
 if __name__ == "__main__":
-    current_dir = Path(__file__).resolve().parent.parent
+    # This validator lives outside apps/web on purpose: everything under the
+    # static publish root is served publicly, and its assertion strings carry
+    # internal notes that should not be crawlable.
+    repo_root = Path(__file__).resolve().parent.parent.parent
     try:
-        validate_web_dir(current_dir)
+        validate_web_dir(repo_root / "apps" / "web")
     except Exception as exc:
         print(f"Validation failed: {exc}", file=sys.stderr)
         sys.exit(1)
