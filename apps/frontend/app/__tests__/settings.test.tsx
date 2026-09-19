@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native'
+import { Linking } from 'react-native'
 
 import Settings from '../settings'
 
@@ -6,12 +7,18 @@ const mockGetProfile = jest.fn()
 const mockDeleteAccount = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockRouter = { back: jest.fn(), push: jest.fn(), replace: jest.fn() }
+const mockOpenBrowserAsync = jest.fn().mockResolvedValue({ type: 'opened' })
+const mockOpenUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never)
 let mockAdminAccess = { isAdmin: false, loading: false }
 
 jest.mock('@expo/vector-icons', () => {
   const { Text } = require('react-native')
   return { Feather: ({ name }: { name: string }) => <Text>{name}</Text> }
 })
+
+jest.mock('expo-web-browser', () => ({
+  openBrowserAsync: (...args: unknown[]) => mockOpenBrowserAsync(...args),
+}))
 
 jest.mock('expo-router', () => {
   const React = require('react')
@@ -62,5 +69,67 @@ describe('Settings moderation entry point', () => {
     fireEvent.press(await screen.findByText('Photo moderation'))
 
     expect(mockRouter.push).toHaveBeenCalledWith('/admin/photos')
+  })
+})
+
+describe('Settings legal section', () => {
+  const originalWebUrl = process.env.EXPO_PUBLIC_WEB_URL
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockAdminAccess = { isAdmin: false, loading: false }
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Monterey, CA', max_green_fee: 300, difficulty: 'any', access: 'any',
+    })
+    delete process.env.EXPO_PUBLIC_WEB_URL
+  })
+
+  afterAll(() => {
+    if (originalWebUrl === undefined) {
+      delete process.env.EXPO_PUBLIC_WEB_URL
+    } else {
+      process.env.EXPO_PUBLIC_WEB_URL = originalWebUrl
+    }
+  })
+
+  it('renders Terms of service and Privacy policy rows', async () => {
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    expect(screen.getByText('LEGAL')).toBeOnTheScreen()
+    expect(screen.getByText('Terms of service')).toBeOnTheScreen()
+    expect(screen.getByText('Privacy policy')).toBeOnTheScreen()
+  })
+
+  it('opens Terms of service in in-app browser using default base URL', async () => {
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByText('Terms of service'))
+
+    expect(mockOpenBrowserAsync).toHaveBeenCalledWith('https://fairway-web.onrender.com/terms.html')
+  })
+
+  it('opens Privacy policy in in-app browser using configured EXPO_PUBLIC_WEB_URL', async () => {
+    process.env.EXPO_PUBLIC_WEB_URL = 'https://custom-web.example.com/'
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByText('Privacy policy'))
+
+    expect(mockOpenBrowserAsync).toHaveBeenCalledWith('https://custom-web.example.com/privacy.html')
+  })
+
+  it('falls back to Linking.openURL if WebBrowser.openBrowserAsync throws', async () => {
+    mockOpenBrowserAsync.mockRejectedValueOnce(new Error('Browser unavailable'))
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByText('Terms of service'))
+
+    expect(mockOpenBrowserAsync).toHaveBeenCalledWith('https://fairway-web.onrender.com/terms.html')
+    // Wait for promise tick since catch block is async
+    await Promise.resolve()
+    expect(mockOpenUrl).toHaveBeenCalledWith('https://fairway-web.onrender.com/terms.html')
   })
 })

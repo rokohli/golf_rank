@@ -2,6 +2,7 @@ import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import * as WebBrowser from 'expo-web-browser'
 
 import { deleteAccount, getProfile } from '../src/api/client'
 import { useAdminAccess } from '../src/auth/useAdminAccess'
@@ -80,6 +81,19 @@ export default function Settings() {
     )
   }
 
+  const openLegalUrl = useCallback(async (path: string) => {
+    const rawWebUrl = process.env.EXPO_PUBLIC_WEB_URL?.trim()
+    const configuredWebUrl = rawWebUrl && rawWebUrl !== 'undefined' ? rawWebUrl : ''
+    const webBaseUrl = (configuredWebUrl || 'https://fairway-web.onrender.com').replace(/\/+$/, '')
+    const cleanPath = path.startsWith('/') ? path : `/${path}`
+    const url = `${webBaseUrl}${cleanPath}`
+    try {
+      await WebBrowser.openBrowserAsync(url)
+    } catch {
+      void Linking.openURL(url)
+    }
+  }, [])
+
   return <>
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen>
@@ -103,6 +117,11 @@ export default function Settings() {
         <SettingsRow icon="shield" label="Email & security" meta="Managed by Clerk" />
         <SettingsRow icon="download" label="Download my data" meta="JSON export" onPress={() => router.push('/data-export' as never)} />
         <SettingsRow icon="help-circle" label="Help & support" onPress={() => void Linking.openURL('mailto:support@golfrank.app?subject=GolfRank%20support')} />
+      </SettingsSection>
+
+      <SettingsSection title="LEGAL">
+        <SettingsRow icon="file-text" label="Terms of service" onPress={() => void openLegalUrl('/terms.html')} />
+        <SettingsRow icon="shield" label="Privacy policy" onPress={() => void openLegalUrl('/privacy.html')} />
       </SettingsSection>
 
       {/* Discovery only -- the admin routes 404 server-side for everyone else,
