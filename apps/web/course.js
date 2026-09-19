@@ -194,9 +194,10 @@
         document.addEventListener('visibilitychange', onVisibilityChange);
         timer = setTimeout(function () {
           cancelFallback();
-          if (document.hidden) return;
-          // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
-          window.location.href = getAppStoreUrl() || 'index.html#download';
+          if (!document.hidden) {
+            // App didn't open (recipient doesn't have app installed) -> route to store destination or download section
+            window.location.href = getAppStoreUrl() || 'index.html#download';
+          }
         }, 2500);
       });
     }
