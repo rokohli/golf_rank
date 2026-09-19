@@ -47,8 +47,10 @@ services:
         value: cf-connecting-ip
       - key: ALLOWED_HOSTS
         value: fairway-api-h93s.onrender.com
+      # Browser origin of the fairway-web static site below. The mobile app is
+      # not a browser client and needs no CORS entry; course.html does.
       - key: CORS_ORIGINS
-        sync: false
+        value: https://fairway-web.onrender.com
       - key: MAX_REQUEST_BODY_BYTES
         value: "1048576"
       - key: OPERATIONS_ALERT_WEBHOOK_URL
@@ -67,8 +69,6 @@ services:
         value: "900"
       - key: RATE_LIMIT_ALERT_MAX_TRACKED_KEYS
         value: "10000"
-      - key: MAPBOX_ACCESS_TOKEN
-        sync: false
       - key: WIKIMEDIA_LIVE_LOOKUP_ENABLED
         value: "true"
       - key: AI_PLANNER_ENABLED
@@ -113,3 +113,10 @@ services:
     ipAllowList: []
     maxmemoryPolicy: allkeys-lru
     persistenceMode: off
+
+  - type: static
+    name: fairway-web
+    repo: https://github.com/rokohli/golf_rank
+    buildCommand: ""
+    staticPublishPath: ./apps/web
+    autoDeployTrigger: checksPass
