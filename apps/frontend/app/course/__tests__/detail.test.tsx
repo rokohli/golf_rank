@@ -144,6 +144,7 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('Review')).toBeNull()
     expect(screen.queryByText('Played')).toBeNull()
     expect(screen.queryByText(/★/)).toBeNull()
+    expect(screen.getByText('Course catalog data © OpenGolfAPI, ODbL 1.0')).toBeOnTheScreen()
   })
 
   it('renders at most two course facts and keeps share and tee times functional', async () => {
