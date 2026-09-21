@@ -33,10 +33,10 @@ const FAQS: FaqItem[] = [
       'When an official green fee is missing from our catalog, golfers can submit standard 18-hole walking or riding rates. Once multiple agreeing suggestions are submitted, the estimate is verified and displayed for everyone.',
   },
   {
-    id: 'photos',
-    question: 'How are course photos moderated?',
+    id: 'hero-photos',
+    question: 'How does a photo become the course cover photo?',
     answer:
-      'Every course photo uploaded by golfers is automatically analyzed by Google Gemini AI to ensure it depicts legitimate golf course scenes. Photos that meet our quality and content standards are added to the community gallery.',
+      'When you attach photos to a public round, your best shots are considered for the course’s featured cover photo! Fairway selects cover photos based on image resolution, landscape composition (16:9 ratio), and clarity. If your photo is selected, it will be showcased at the top of the course page and across search results for all golfers.',
   },
   {
     id: 'data-privacy',
