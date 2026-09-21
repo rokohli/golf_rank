@@ -133,3 +133,30 @@ describe('Settings legal section', () => {
     expect(mockOpenUrl).toHaveBeenCalledWith('https://fairway-web.onrender.com/terms.html')
   })
 })
+
+describe('Settings account section', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockAdminAccess = { isAdmin: false, loading: false }
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Monterey, CA', max_green_fee: 300, difficulty: 'any', access: 'any',
+    })
+  })
+
+  it('does not render Email & security or Managed by Clerk', async () => {
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    expect(screen.queryByText('Email & security')).not.toBeOnTheScreen()
+    expect(screen.queryByText('Managed by Clerk')).not.toBeOnTheScreen()
+  })
+
+  it('routes to /support when Help & support is pressed', async () => {
+    render(<Settings />)
+    await screen.findByText('Settings')
+
+    fireEvent.press(screen.getByText('Help & support'))
+
+    expect(mockRouter.push).toHaveBeenCalledWith('/support')
+  })
+})
