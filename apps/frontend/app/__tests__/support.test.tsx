@@ -38,7 +38,7 @@ describe('Support screen', () => {
     expect(screen.getByText('How do course rankings work?')).toBeOnTheScreen()
     expect(screen.getByText('How do I log a round?')).toBeOnTheScreen()
     expect(screen.getByText('How do green fee estimates work?')).toBeOnTheScreen()
-    expect(screen.getByText('How are course photos moderated?')).toBeOnTheScreen()
+    expect(screen.getByText('How does a photo become the course cover photo?')).toBeOnTheScreen()
     expect(screen.getByText('How do I export or delete my data?')).toBeOnTheScreen()
 
     expect(screen.getByText('Terms of service')).toBeOnTheScreen()
