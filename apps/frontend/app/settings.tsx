@@ -1,14 +1,14 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
-import * as WebBrowser from 'expo-web-browser'
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { deleteAccount, getProfile } from '../src/api/client'
 import { useAdminAccess } from '../src/auth/useAdminAccess'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { ProductScreen, ScreenHeader } from '../src/components/ProductUI'
+import { openWebUrl } from '../src/webUrl'
 import { OnboardingPreferences } from '../src/types'
 import { colors, radii } from '../src/ui/theme'
 
@@ -81,19 +81,6 @@ export default function Settings() {
     )
   }
 
-  const openLegalUrl = useCallback(async (path: string) => {
-    const rawWebUrl = process.env.EXPO_PUBLIC_WEB_URL?.trim()
-    const configuredWebUrl = rawWebUrl && rawWebUrl !== 'undefined' ? rawWebUrl : ''
-    const webBaseUrl = (configuredWebUrl || 'https://fairway-web.onrender.com').replace(/\/+$/, '')
-    const cleanPath = path.startsWith('/') ? path : `/${path}`
-    const url = `${webBaseUrl}${cleanPath}`
-    try {
-      await WebBrowser.openBrowserAsync(url)
-    } catch {
-      void Linking.openURL(url)
-    }
-  }, [])
-
   return <>
     <Stack.Screen options={{ headerShown: false }} />
     <ProductScreen>
@@ -114,14 +101,13 @@ export default function Settings() {
       </SettingsSection>
 
       <SettingsSection title="ACCOUNT">
-        <SettingsRow icon="shield" label="Email & security" meta="Managed by Clerk" />
         <SettingsRow icon="download" label="Download my data" meta="JSON export" onPress={() => router.push('/data-export' as never)} />
-        <SettingsRow icon="help-circle" label="Help & support" onPress={() => void Linking.openURL('mailto:support@golfrank.app?subject=GolfRank%20support')} />
+        <SettingsRow icon="help-circle" label="Help & support" onPress={() => router.push('/support' as never)} />
       </SettingsSection>
 
       <SettingsSection title="LEGAL">
-        <SettingsRow icon="file-text" label="Terms of service" onPress={() => void openLegalUrl('/terms.html')} />
-        <SettingsRow icon="shield" label="Privacy policy" onPress={() => void openLegalUrl('/privacy.html')} />
+        <SettingsRow icon="file-text" label="Terms of service" onPress={() => void openWebUrl('/terms.html')} />
+        <SettingsRow icon="shield" label="Privacy policy" onPress={() => void openWebUrl('/privacy.html')} />
       </SettingsSection>
 
       {/* Discovery only -- the admin routes 404 server-side for everyone else,
