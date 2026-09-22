@@ -182,7 +182,7 @@ def _summary_out(
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
         home_course_id=canonical_home_course_id,
-        home_course_name=onboarding.get("home_course_search") or None,
+        home_course_name=resolved_course.name if resolved_course else (onboarding.get("home_course_search") or None),
         follower_count=follower_count,
         following_count=following_count,
     )

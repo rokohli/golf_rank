@@ -1604,11 +1604,14 @@ def test_suggested_users_reconciled_course_and_popularity_tie_breaker() -> None:
     u4 = create_user("dev:pv-user-4", "pv_player_4", "pv-partner-1", "Pine Valley Alternate")
     my_profile = client.get("/api/v1/me/profile", headers=u4).json()
     assert my_profile["onboarding_data"]["home_course_id"] == str(canonical_id)
+    assert my_profile["onboarding_data"]["home_course_search"] == "Pine Valley Golf Club"
 
     u4_info = client.get("/api/v1/users", headers=u1, params={"q": "pv_player_4"}).json()
     assert u4_info[0]["home_course_id"] == str(canonical_id)
+    assert u4_info[0]["home_course_name"] == "Pine Valley Golf Club"
     public_u4 = client.get(f"/api/v1/users/{u4_info[0]['id']}", headers=u1).json()
     assert public_u4["home_course_id"] == str(canonical_id)
+    assert public_u4["home_course_name"] == "Pine Valley Golf Club"
 
 
 def test_unresolved_home_course_id_is_cleared() -> None:
