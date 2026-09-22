@@ -8,7 +8,17 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, stored_user
+from .domain import (
+    course_data,
+    delete_permanent_objects,
+    notifications_enabled,
+    require_course,
+    require_user,
+    resolve_course_ids,
+    resolve_course_optional,
+    resolve_courses_optional,
+    stored_user,
+)
 from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
@@ -267,6 +277,27 @@ def _notify_tagged_companions(
     return created
 
 
+def _is_onboarding_played_course(session: Session, user_id: int, course_id: int) -> bool:
+    pref = session.get(OnboardingPreference, user_id)
+    if not pref or not pref.onboarding_data or not isinstance(pref.onboarding_data, dict):
+        return False
+    played_ids = pref.onboarding_data.get("played_course_ids") or []
+    if not isinstance(played_ids, list) or not played_ids:
+        return False
+    try:
+        target_canonical_id = require_course(session, course_id).id
+    except HTTPException:
+        target_canonical_id = course_id
+
+    # Fast path: if the target canonical ID is directly in played_ids (either as int or str)
+    if target_canonical_id in played_ids or str(target_canonical_id) in played_ids:
+        return True
+
+    # Bulk-resolve all played_ids to canonical Course IDs without looping N+1 queries
+    canonical_played_ids = resolve_course_ids(session, played_ids)
+    return target_canonical_id in canonical_played_ids
+
+
 def _refresh_course_state(session: Session, user_id: int, course_id: int) -> None:
     count, last_played = session.execute(
         select(func.count(Round.id), func.max(Round.played_on)).where(
@@ -282,7 +313,7 @@ def _refresh_course_state(session: Session, user_id: int, course_id: int) -> Non
     if state is None:
         state = UserCourseState(user_id=user_id, course_id=course_id)
     state.round_count = count
-    state.has_played = count > 0
+    state.has_played = (count > 0) or _is_onboarding_played_course(session, user_id, course_id)
     state.last_played_on = last_played
     session.add(state)
 
@@ -618,3 +649,31 @@ def list_course_states(
                 )
             )
     return output
+
+
+def seed_onboarding_played_courses(session: Session, user_id: int, played_course_ids: list[str]) -> None:
+    """Seed played courses selected during onboarding into UserCourseState so they appear on profile."""
+    if not played_course_ids or not isinstance(played_course_ids, list):
+        return
+    resolved_courses = resolve_courses_optional(session, played_course_ids)
+    if not resolved_courses:
+        return
+    unique_courses = {course.id: course for course in resolved_courses.values()}.values()
+    target_course_ids = [course.id for course in unique_courses]
+    existing_states = {
+        state.course_id: state
+        for state in session.scalars(
+            select(UserCourseState).where(
+                UserCourseState.user_id == user_id,
+                UserCourseState.course_id.in_(target_course_ids),
+            )
+        ).all()
+    }
+    for course in unique_courses:
+        state = existing_states.get(course.id)
+        if state is None:
+            state = UserCourseState(user_id=user_id, course_id=course.id, has_played=True, round_count=0)
+            session.add(state)
+        else:
+            state.has_played = True
+

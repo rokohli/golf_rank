@@ -196,3 +196,395 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert all(n["recipient_user_id"] == alice_id and n["actor_user_id"] == bob_id for n in exported["notifications"])
     assert [t["token"] for t in exported["push_tokens"]] == ["ExponentPushToken[export-alice]"]
     assert "provider_subject" not in str(exported)
+
+
+def test_onboarding_seeds_dream_courses_and_played_courses() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-seeder"}
+    response = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 175,
+            "difficulty": "intermediate",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Tiger",
+                "last_name": "Golfer",
+                "username": "tigergolf",
+                "home_course_id": "1",
+                "home_course_search": "Pebble Beach",
+                "played_course_ids": ["1", "2"],
+                "favorite_wins": ["1"],
+                "dream_course_ids": ["3"],
+                "preferences": ["Scenic views"],
+                "group_size": "Foursome",
+                "budget": "$$",
+                "travel_distance": "Up to 45 minutes",
+                "preferred_tee_time": "Weekend mornings",
+                "transportation": "Cart",
+                "notifications": True,
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    # Verify dream course was seeded into default "Want to play" saved list
+    saved_lists = client.get("/api/v1/me/saved-lists", headers=headers)
+    assert saved_lists.status_code == 200
+    lists = saved_lists.json()
+    assert len(lists) == 1
+    assert lists[0]["name"] == "Want to play"
+    assert lists[0]["is_default"] is True
+    assert [item["course"]["id"] for item in lists[0]["courses"]] == [3]
+
+    # Verify played courses were seeded into UserCourseState and are queryable
+    played = client.get("/api/v1/me/course-states", headers=headers)
+    assert played.status_code == 200
+    played_ids = {item["course"]["id"] for item in played.json() if item["has_played"]}
+    assert {1, 2}.issubset(played_ids)
+
+
+def test_resolve_course_optional_disambiguates_and_rejects_ambiguity() -> None:
+    from app.domain import resolve_course_optional
+    from app.models import Course, CourseReconciliation
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        # Create two distinct courses from different sources sharing source_course_id="shared-id"
+        c1 = Course(
+            name="Alpha Links",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="provider_a",
+            source_course_id="shared-id",
+        )
+        c2 = Course(
+            name="Beta Dunes",
+            region="Bandon, OR",
+            latitude=43.1,
+            longitude=-124.4,
+            source="provider_b",
+            source_course_id="shared-id",
+        )
+        # Create a unique course
+        c3 = Course(
+            name="Gamma Pines",
+            region="Pinehurst, NC",
+            latitude=35.2,
+            longitude=-79.5,
+            source="provider_c",
+            source_course_id="unique-id",
+        )
+        session.add_all([c1, c2, c3])
+        session.commit()
+
+        # Integer PK lookup
+        assert resolve_course_optional(session, c1.id).id == c1.id
+        assert resolve_course_optional(session, str(c1.id)).id == c1.id
+
+        # Unique source_course_id resolves directly
+        assert resolve_course_optional(session, "unique-id").id == c3.id
+
+        # Source-qualified ID disambiguates between the two shared-id courses
+        assert resolve_course_optional(session, "provider_a:shared-id").id == c1.id
+        assert resolve_course_optional(session, "provider_b:shared-id").id == c2.id
+
+        # Ambiguous source_course_id without source qualification is rejected (returns None)
+        assert resolve_course_optional(session, "shared-id") is None
+
+        # When ambiguous courses are reconciled to the same canonical course, it resolves
+        recon = CourseReconciliation(
+            source="provider_b",
+            source_course_id="shared-id",
+            canonical_course_id=c1.id,
+            match_status="confirmed",
+        )
+        session.add(recon)
+        session.commit()
+        # Now both provider_a and provider_b point to canonical c1
+        assert resolve_course_optional(session, "shared-id").id == c1.id
+
+        # Add a 3rd provider course sharing source_course_id="shared-id" that is NOT reconciled to c1
+        c4 = Course(
+            name="Delta Highlands",
+            region="Highlands, NC",
+            latitude=35.0,
+            longitude=-83.2,
+            source="provider_d",
+            source_course_id="shared-id",
+        )
+        session.add(c4)
+        session.commit()
+
+        # Unqualified "shared-id" must inspect all 3 matches and reject because c4 does not resolve to c1
+        assert resolve_course_optional(session, "shared-id") is None
+
+        # Once provider_d is also reconciled to c1, all 3 matches agree and resolve to c1
+        recon_d = CourseReconciliation(
+            source="provider_d",
+            source_course_id="shared-id",
+            canonical_course_id=c1.id,
+            match_status="confirmed",
+        )
+        session.add(recon_d)
+        session.commit()
+        assert resolve_course_optional(session, "shared-id").id == c1.id
+
+        # Invalid / unknown inputs return None
+        assert resolve_course_optional(session, None) is None
+        assert resolve_course_optional(session, "") is None
+        assert resolve_course_optional(session, "nonexistent-id-xyz") is None
+
+
+def test_onboarding_played_course_preserved_across_round_deletion() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-round-delete"}
+    # 1. Complete onboarding with course 1 as played
+    response = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 175,
+            "difficulty": "intermediate",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Rory",
+                "last_name": "Golfer",
+                "username": "rorygolf",
+                "home_course_id": "1",
+                "home_course_search": "Pebble Beach",
+                "played_course_ids": ["1"],
+                "favorite_wins": [],
+                "dream_course_ids": [],
+                "travel_distance": "Up to 45 minutes",
+                "preferred_tee_time": "Weekend mornings",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    # Course 1 is recorded as played with round_count=0
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert any(s["course"]["id"] == 1 and s["has_played"] and s["round_count"] == 0 for s in states)
+
+    # 2. Log a round for course 1
+    logged_1 = client.post(
+        "/api/v1/me/rounds",
+        headers=headers,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 72, "visibility": "public"},
+    )
+    assert logged_1.status_code == 201
+    round_1_id = logged_1.json()["id"]
+
+    # Course 1 now has round_count=1
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert any(s["course"]["id"] == 1 and s["has_played"] and s["round_count"] == 1 for s in states)
+
+    # 3. Log and delete a round for course 2 (not in onboarding)
+    logged_2 = client.post(
+        "/api/v1/me/rounds",
+        headers=headers,
+        json={"course_id": 2, "played_on": "2026-07-02", "score": 75, "visibility": "public"},
+    )
+    assert logged_2.status_code == 201
+    round_2_id = logged_2.json()["id"]
+
+    deleted_2 = client.delete(f"/api/v1/me/rounds/{round_2_id}", headers=headers)
+    assert deleted_2.status_code == 204
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert not any(s["course"]["id"] == 2 and s["has_played"] for s in states)
+
+    # 4. Delete the only round for course 1 (which WAS in onboarding)
+    deleted_1 = client.delete(f"/api/v1/me/rounds/{round_1_id}", headers=headers)
+    assert deleted_1.status_code == 204
+
+    # Course 1 MUST still be in played history with has_played=True, round_count=0
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    course_1_state = next(s for s in states if s["course"]["id"] == 1)
+    assert course_1_state["has_played"] is True
+    assert course_1_state["round_count"] == 0
+
+
+def test_resolve_courses_optional_bulk_resolution() -> None:
+    from app.domain import resolve_course_ids, resolve_courses_optional
+    from app.models import Course, CourseReconciliation
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        c1 = Course(
+            name="Bulk Pebble",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_a",
+            source_course_id="shared-bulk",
+        )
+        c2 = Course(
+            name="Bulk Spyglass",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_b",
+            source_course_id="shared-bulk",
+        )
+        c3 = Course(
+            name="Bulk Cypress",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_c",
+            source_course_id="unique-bulk",
+        )
+        session.add_all([c1, c2, c3])
+        session.commit()
+
+        # Reconcile c2 to c1
+        session.add(
+            CourseReconciliation(
+                source="src_b",
+                source_course_id="shared-bulk",
+                canonical_course_id=c1.id,
+                match_status="confirmed",
+            )
+        )
+        session.commit()
+
+        raw_inputs = [
+            c1.id,
+            str(c3.id),
+            "src_a:shared-bulk",
+            "src_b/shared-bulk",
+            "unique-bulk",
+            "shared-bulk",
+            "nonexistent-id-999",
+            None,
+            "",
+        ]
+
+        resolved = resolve_courses_optional(session, raw_inputs)
+        assert resolved[c1.id].id == c1.id
+        assert resolved[str(c3.id)].id == c3.id
+        assert resolved["src_a:shared-bulk"].id == c1.id
+        assert resolved["src_b/shared-bulk"].id == c1.id
+        assert resolved["unique-bulk"].id == c3.id
+        assert resolved["shared-bulk"].id == c1.id
+        assert "nonexistent-id-999" not in resolved
+        assert None not in resolved
+        assert "" not in resolved
+
+        canonical_ids = resolve_course_ids(session, raw_inputs)
+        assert canonical_ids == {c1.id, c3.id}
+
+
+def test_is_onboarding_played_course_batches_queries_with_many_courses() -> None:
+    from sqlalchemy import event
+    from app.models import Course, OnboardingPreference, User
+    from app.rounds import _is_onboarding_played_course
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        user = User(provider_subject="dev:bulk-onboarding-test")
+        session.add(user)
+        session.commit()
+        # Generate 250 played course strings
+        played_ids = [f"course-provider-id-{i}" for i in range(250)]
+
+        pref = session.get(OnboardingPreference, user.id)
+        if pref is None:
+            pref = OnboardingPreference(
+                user_id=user.id,
+                max_green_fee=150,
+                difficulty="intermediate",
+                access="public",
+                onboarding_data={"played_course_ids": played_ids},
+            )
+            session.add(pref)
+        else:
+            pref.onboarding_data = {"played_course_ids": played_ids}
+            session.add(pref)
+        session.commit()
+
+        # Target course that does exist in DB but is NOT in played_ids
+        target_course = Course(
+            name="Target Unplayed",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="manual",
+            source_course_id="target-not-in-played",
+        )
+        session.add(target_course)
+        session.commit()
+
+        query_count = 0
+
+        def count_queries(conn, cursor, statement, parameters, context, executemany):
+            nonlocal query_count
+            query_count += 1
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", count_queries)
+        try:
+            is_played = _is_onboarding_played_course(session, user.id, target_course.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", count_queries)
+
+        assert is_played is False
+        # Instead of 250 queries (1 per id), bulk resolution executes in at most 4 queries!
+        assert query_count <= 4
+
+        # Fast path test: target course ID directly in played_ids
+        pref.onboarding_data = {"played_course_ids": [str(target_course.id)] + played_ids}
+        session.add(pref)
+        session.commit()
+
+        query_count = 0
+        event.listen(engine, "before_cursor_execute", count_queries)
+        try:
+            is_played_fast = _is_onboarding_played_course(session, user.id, target_course.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", count_queries)
+
+        assert is_played_fast is True
+        # Fast path needs at most 2 queries: fetch OnboardingPreference and require_course
+        assert query_count <= 2
+
+
+def test_seed_onboarding_played_courses_bulk() -> None:
+    from sqlalchemy import select
+    from app.models import Course, User, UserCourseState
+    from app.rounds import seed_onboarding_played_courses
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        user = User(provider_subject="dev:seed-played-bulk")
+        c1 = Course(name="Seed C1", region="CA", latitude=36.0, longitude=-121.0, source="s1", source_course_id="c1")
+        c2 = Course(name="Seed C2", region="CA", latitude=36.0, longitude=-121.0, source="s2", source_course_id="c2")
+        session.add_all([user, c1, c2])
+        session.commit()
+
+        # Existing state for c1 with round_count=2, has_played=False
+        session.add(UserCourseState(user_id=user.id, course_id=c1.id, has_played=False, round_count=2))
+        session.commit()
+
+        # Seed both courses
+        seed_onboarding_played_courses(session, user.id, ["s1:c1", str(c2.id), "invalid-course"])
+        session.commit()
+
+        s1 = session.scalar(select(UserCourseState).where(UserCourseState.user_id == user.id, UserCourseState.course_id == c1.id))
+        assert s1 is not None
+        assert s1.has_played is True
+        assert s1.round_count == 2  # Preserved
+
+        s2 = session.scalar(select(UserCourseState).where(UserCourseState.user_id == user.id, UserCourseState.course_id == c2.id))
+        assert s2 is not None
+        assert s2.has_played is True
+        assert s2.round_count == 0  # Default for newly seeded course
+
+
+
+

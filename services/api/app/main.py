@@ -274,8 +274,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "That username is already taken.") from error
         if preferences.onboarding_data:
             from .ranking import seed_onboarding_rankings
+            from .rounds import seed_onboarding_played_courses
+            from .saves import seed_onboarding_dream_courses
 
             seed_onboarding_rankings(session, stored_user.id, preferences.onboarding_data)
+            seed_onboarding_dream_courses(
+                session, stored_user.id, preferences.onboarding_data.get("dream_course_ids", [])
+            )
+            seed_onboarding_played_courses(
+                session, stored_user.id, preferences.onboarding_data.get("played_course_ids", [])
+            )
         created_notifications: list = []
         try:
             # Re-attempt on every authenticated preferences save so a transient

@@ -190,6 +190,48 @@ describe('profile experience', () => {
     })
   })
 
+  it('preserves fees above the slider maximum when editing unrelated preferences', async () => {
+    mockGetProfile.mockResolvedValueOnce({
+      home_region: 'Monterey, CA',
+      max_green_fee: 650,
+      difficulty: 'any',
+      access: 'public',
+      onboarding_data: {
+        first_name: 'Rohan',
+        last_name: 'Kohli',
+        username: 'rohan',
+        home_course_id: '1',
+        home_course_search: 'Pebble Beach',
+        played_course_ids: ['1'],
+        favorite_wins: ['1'],
+        dream_course_ids: ['2'],
+        preferences: ['Scenic views'],
+        group_size: 'Foursome',
+        budget: '$$$$',
+        travel_distance: 'Up to 45 minutes',
+        preferred_tee_time: 'Weekend mornings',
+        transportation: 'Cart',
+        notifications: true,
+      },
+    })
+
+    render(<GolfPreferences />)
+
+    await screen.findByText('$650')
+    fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
+    fireEvent.press(screen.getByText('Solo'))
+    fireEvent.press(screen.getByRole('button', { name: 'Done' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
+        max_green_fee: 650,
+        onboarding_data: expect.objectContaining({ group_size: 'Solo' }),
+      }), expect.anything())
+      expect(mockRouter.back).toHaveBeenCalled()
+    })
+  })
+
   it('persists the master notification preference', async () => {
     render(<NotificationSettings />)
 

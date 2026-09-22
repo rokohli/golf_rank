@@ -15,8 +15,8 @@ type GroupSize = NonNullable<NonNullable<OnboardingPreferences['onboarding_data'
 type Transportation = NonNullable<NonNullable<OnboardingPreferences['onboarding_data']>['transportation']>
 type SheetKey = 'group' | 'transportation' | 'teeTime' | 'travel' | null
 
-const MIN_FEE = 50
-const MAX_FEE = 500
+const MIN_FEE = 25
+const MAX_FEE = 400
 const FEE_STEP = 25
 
 const accessOptions: Array<{ label: string; value: Access }> = [
@@ -54,7 +54,8 @@ export default function GolfPreferences() {
       setProfile(next)
       setAccess(next.access)
       setDifficulty(next.difficulty)
-      setMaxFee(clampFee(next.max_green_fee))
+      const initialFee = typeof next.max_green_fee === 'number' ? next.max_green_fee : 175
+      setMaxFee(initialFee > MAX_FEE ? initialFee : clampFee(initialFee))
       setGroupSize(next.onboarding_data?.group_size ?? 'Foursome')
       setTransportation(next.onboarding_data?.transportation ?? 'Either')
       setTeeTime(next.onboarding_data?.preferred_tee_time || 'Flexible')
@@ -163,7 +164,8 @@ function FeeSlider({ onChange, value }: { onChange: (value: number) => void; val
   const startValue = useRef(value)
   const updateFromDelta = useCallback((delta: number) => {
     if (!width) return
-    onChange(clampFee(startValue.current + (delta / width) * (MAX_FEE - MIN_FEE)))
+    const base = Math.min(MAX_FEE, startValue.current)
+    onChange(clampFee(base + (delta / width) * (MAX_FEE - MIN_FEE)))
   }, [onChange, width])
   const responder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -171,17 +173,28 @@ function FeeSlider({ onChange, value }: { onChange: (value: number) => void; val
     onPanResponderGrant: () => { startValue.current = value },
     onPanResponderMove: (_event, gesture) => updateFromDelta(gesture.dx),
   }), [updateFromDelta, value])
-  const percent = ((value - MIN_FEE) / (MAX_FEE - MIN_FEE)) * 100
+  const percent = Math.min(100, Math.max(0, ((value - MIN_FEE) / (MAX_FEE - MIN_FEE)) * 100))
   const adjust = (event: AccessibilityActionEvent) => {
     const action = event.nativeEvent.actionName
-    onChange(clampFee(value + (action === 'decrement' ? -FEE_STEP : FEE_STEP)))
+    if (action === 'decrement') {
+      if (value > MAX_FEE) {
+        onChange(MAX_FEE)
+      } else {
+        onChange(clampFee(value - FEE_STEP))
+      }
+    } else if (action === 'increment') {
+      if (value < MAX_FEE) {
+        onChange(clampFee(value + FEE_STEP))
+      }
+    }
   }
+  const feeText = value >= MAX_FEE ? (value > MAX_FEE ? `$${value}` : '$400+') : `$${value}`
   return <View style={styles.feeCard}>
-    <View style={styles.feeHeading}><Text style={styles.feeValue}>${value}</Text><Text style={styles.feeUnit}>per round</Text></View>
-    <View accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} accessibilityLabel="Maximum green fee" accessibilityRole="adjustable" accessibilityValue={{ min: MIN_FEE, max: MAX_FEE, now: value, text: `$${value} per round` }} onAccessibilityAction={adjust} onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={styles.sliderTouch} {...responder.panHandlers}>
+    <View style={styles.feeHeading}><Text style={styles.feeValue}>{feeText}</Text><Text style={styles.feeUnit}>per round</Text></View>
+    <View accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} accessibilityLabel="Maximum green fee" accessibilityRole="adjustable" accessibilityValue={{ min: MIN_FEE, max: Math.max(MAX_FEE, value), now: value, text: `${feeText} per round` }} onAccessibilityAction={adjust} onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={styles.sliderTouch} {...responder.panHandlers}>
       <View style={styles.sliderTrack}><View style={[styles.sliderActive, { width: `${percent}%` }]} /><View style={[styles.sliderThumb, { left: `${percent}%` }]} /></View>
     </View>
-    <View style={styles.sliderLabels}><Text style={styles.sliderLabel}>$50</Text><Text style={styles.sliderLabel}>$500+</Text></View>
+    <View style={styles.sliderLabels}><Text style={styles.sliderLabel}>$25</Text><Text style={styles.sliderLabel}>$400+</Text></View>
   </View>
 }
 
