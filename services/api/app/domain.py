@@ -167,22 +167,66 @@ def require_courses(session: Session, course_ids) -> dict[int, Course]:
 
 
 def resolve_course_optional(session: Session, raw: str | int | None) -> Course | None:
-    """Resolve a course by integer id, string id, or source_course_id, canonicalizing if reconciled."""
+    """Resolve a course by integer id, source-qualified id ('source:source_course_id'),
+    or unique source_course_id, canonicalizing if reconciled and rejecting ambiguous matches."""
     if raw is None:
         return None
-    course = None
+    raw_str = str(raw).strip()
+    if not raw_str:
+        return None
+
+    course: Course | None = None
     try:
-        parsed_id = int(str(raw).strip())
+        parsed_id = int(raw_str)
         if parsed_id > 0:
             course = session.get(Course, parsed_id)
     except (TypeError, ValueError):
         pass
-    if course is None:
-        raw_str = str(raw).strip()
-        if raw_str:
+
+    if course is None and ":" in raw_str:
+        source_prefix, sc_id = raw_str.split(":", 1)
+        source_prefix = source_prefix.strip()
+        sc_id = sc_id.strip()
+        if source_prefix and sc_id:
             course = session.scalar(
-                select(Course).where(Course.source_course_id == raw_str).limit(1)
+                select(Course).where(
+                    Course.source == source_prefix,
+                    Course.source_course_id == sc_id,
+                )
             )
+
+    if course is None and "/" in raw_str:
+        source_prefix, sc_id = raw_str.split("/", 1)
+        source_prefix = source_prefix.strip()
+        sc_id = sc_id.strip()
+        if source_prefix and sc_id:
+            course = session.scalar(
+                select(Course).where(
+                    Course.source == source_prefix,
+                    Course.source_course_id == sc_id,
+                )
+            )
+
+    if course is None:
+        matches = session.scalars(
+            select(Course).where(Course.source_course_id == raw_str).limit(2)
+        ).all()
+        if len(matches) == 1:
+            course = matches[0]
+        elif len(matches) > 1:
+            # Ambiguous across sources: only resolve if all candidates reconcile to the same canonical course
+            canonical_ids: set[int] = set()
+            for cand in matches:
+                try:
+                    canon = require_course(session, cand.id)
+                    canonical_ids.add(canon.id)
+                except HTTPException:
+                    pass
+            if len(canonical_ids) == 1:
+                course = session.get(Course, next(iter(canonical_ids)))
+            else:
+                return None
+
     if course is None:
         return None
     try:

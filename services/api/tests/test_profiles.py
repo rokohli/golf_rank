@@ -245,3 +245,71 @@ def test_onboarding_seeds_dream_courses_and_played_courses() -> None:
     played_ids = {item["course"]["id"] for item in played.json() if item["has_played"]}
     assert {1, 2}.issubset(played_ids)
 
+
+def test_resolve_course_optional_disambiguates_and_rejects_ambiguity() -> None:
+    from app.domain import resolve_course_optional
+    from app.models import Course, CourseReconciliation
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        # Create two distinct courses from different sources sharing source_course_id="shared-id"
+        c1 = Course(
+            name="Alpha Links",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="provider_a",
+            source_course_id="shared-id",
+        )
+        c2 = Course(
+            name="Beta Dunes",
+            region="Bandon, OR",
+            latitude=43.1,
+            longitude=-124.4,
+            source="provider_b",
+            source_course_id="shared-id",
+        )
+        # Create a unique course
+        c3 = Course(
+            name="Gamma Pines",
+            region="Pinehurst, NC",
+            latitude=35.2,
+            longitude=-79.5,
+            source="provider_c",
+            source_course_id="unique-id",
+        )
+        session.add_all([c1, c2, c3])
+        session.commit()
+
+        # Integer PK lookup
+        assert resolve_course_optional(session, c1.id).id == c1.id
+        assert resolve_course_optional(session, str(c1.id)).id == c1.id
+
+        # Unique source_course_id resolves directly
+        assert resolve_course_optional(session, "unique-id").id == c3.id
+
+        # Source-qualified ID disambiguates between the two shared-id courses
+        assert resolve_course_optional(session, "provider_a:shared-id").id == c1.id
+        assert resolve_course_optional(session, "provider_b:shared-id").id == c2.id
+
+        # Ambiguous source_course_id without source qualification is rejected (returns None)
+        assert resolve_course_optional(session, "shared-id") is None
+
+        # When ambiguous courses are reconciled to the same canonical course, it resolves
+        recon = CourseReconciliation(
+            source="provider_b",
+            source_course_id="shared-id",
+            canonical_course_id=c1.id,
+            match_status="confirmed",
+        )
+        session.add(recon)
+        session.commit()
+        # Now both provider_a and provider_b point to canonical c1
+        assert resolve_course_optional(session, "shared-id").id == c1.id
+
+        # Invalid / unknown inputs return None
+        assert resolve_course_optional(session, None) is None
+        assert resolve_course_optional(session, "") is None
+        assert resolve_course_optional(session, "nonexistent-id-xyz") is None
+
+

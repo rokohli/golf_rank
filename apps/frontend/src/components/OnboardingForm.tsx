@@ -165,7 +165,7 @@ function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fa
 
 function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   const homeCourse = draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null
-  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 250 : 175
+  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 650 : 175
   const difficulty: Difficulty = draft.preferences.includes('Beginner friendly')
     ? 'beginner'
     : draft.preferences.includes('Tough layouts') || draft.preferences.includes('Championship courses')
