@@ -324,7 +324,14 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
           const migratedStepIndex = migrateDraftStepIndex(parsed.stepIndex, parsed.draftVersion)
           setStepIndex(migratedStepIndex)
         }
-        if (typeof parsed.rankIndex === 'number') setRankIndex(parsed.rankIndex)
+        if (typeof parsed.rankIndex === 'number') {
+          // rankPairs is derived from the (now clamped) playedCourseIds and never holds
+          // more than one pair, so a legacy rankIndex pointing past that must be reset —
+          // otherwise the rank step finds no matching pair, silently skips itself, and
+          // going Back just re-triggers the same skip instead of reaching the prior step.
+          const maxRankIndex = Math.max(buildRankPairs(playedCourseIds).length - 1, 0)
+          setRankIndex(Math.min(parsed.rankIndex, maxRankIndex))
+        }
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true))

@@ -505,6 +505,30 @@ describe('OnboardingForm', () => {
     expect(screen.getByRole('button', { name: 'Continue with 2 selected' })).toBeOnTheScreen()
   })
 
+  it('clamps a legacy rankIndex that no longer matches the clamped played-course pair', async () => {
+    const courseCatalog = {
+      '11': { id: '11', name: pasatiempo.name, location: pasatiempo.region, city: pasatiempo.city, region: pasatiempo.region, imageTone: '', meta: '' },
+      '12': { id: '12', name: pebble.name, location: pebble.region, city: pebble.city, region: pebble.region, imageTone: '', meta: '' },
+      '13': { id: '13', name: spyglass.name, location: spyglass.region, city: spyglass.city, region: spyglass.region, imageTone: '', meta: '' },
+    }
+    ;(SecureStore.getItemAsync as jest.Mock).mockResolvedValueOnce(
+      JSON.stringify({
+        draftVersion: 4,
+        firstName: 'Rohan',
+        lastName: 'Kohli',
+        username: 'rohank',
+        playedCourseIds: ['11', '12', '13'],
+        courseCatalog,
+        stepIndex: 3,
+        rankIndex: 2,
+      }),
+    )
+
+    render(<OnboardingForm searchCourses={jest.fn().mockResolvedValue([])} submit={jest.fn()} onComplete={jest.fn()} />)
+
+    expect(await screen.findByText('Which course did you enjoy more?')).toBeOnTheScreen()
+  })
+
   it('allows selecting green fee budget tiers and advancing', async () => {
     await renderAtFriendsStep()
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
