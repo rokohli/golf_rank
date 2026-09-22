@@ -111,9 +111,13 @@ export default function Friends() {
     try {
       if (action === 'mute') {
         await muteUser(follow.user.id, true, await getAuthHeaders())
+        setSuggested((items) => items.filter((item) => item.id !== follow.user.id))
+        setResults((items) => items.filter((item) => item.id !== follow.user.id))
       } else {
         await blockUser(follow.user.id, true, await getAuthHeaders())
         setFollows((items) => items.filter((item) => item.user.id !== follow.user.id))
+        setSuggested((items) => items.filter((item) => item.id !== follow.user.id))
+        setResults((items) => items.filter((item) => item.id !== follow.user.id))
       }
     } catch (reason) {
       setError(message(reason, action === 'mute' ? 'Unable to mute this golfer.' : 'Unable to block this golfer.'))
