@@ -5,6 +5,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
@@ -54,7 +55,7 @@ from .schemas import (
     UserCourseVisitOut,
 )
 from .domain import blocked_ids as _blocked_ids
-from .domain import course_identity_ids, course_identity_ids_bulk
+from .domain import course_identity_ids, course_identity_ids_bulk, resolve_courses_optional
 from .domain import muted_ids as _muted_ids
 from .domain import notifications_enabled as _notifications_enabled
 
@@ -69,6 +70,8 @@ class UserSummaryOut(BaseModel):
     username: str | None
     display_name: str
     home_region: str | None
+    home_course_id: str | None = None
+    home_course_name: str | None = None
     follower_count: int
     following_count: int
 
@@ -151,7 +154,10 @@ def _summary(session: Session, user: User) -> UserSummaryOut:
     following_count = session.scalar(
         select(func.count(Follow.id)).where(Follow.follower_id == user.id)
     ) or 0
-    return _summary_out(user, preferences, profile, follower_count, following_count)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    raw_home_course_id = onboarding.get("home_course_id")
+    resolved_courses = resolve_courses_optional(session, [raw_home_course_id]) if raw_home_course_id else {}
+    return _summary_out(user, preferences, profile, follower_count, following_count, resolved_courses)
 
 
 def _summary_out(
@@ -160,17 +166,23 @@ def _summary_out(
     profile: Profile | None,
     follower_count: int,
     following_count: int,
+    resolved_courses: dict[Any, Course] | None = None,
 ) -> UserSummaryOut:
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
     display_name = " ".join(item for item in (first_name, last_name) if item).strip()
     username = profile.username if profile and profile.username else onboarding.get("username")
+    raw_home_course_id = onboarding.get("home_course_id")
+    resolved_course = resolved_courses.get(raw_home_course_id) if (resolved_courses and raw_home_course_id) else None
+    canonical_home_course_id = str(resolved_course.id) if resolved_course else None
     return UserSummaryOut(
         id=user.id,
         username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
+        home_course_id=canonical_home_course_id,
+        home_course_name=resolved_course.name if resolved_course else (onboarding.get("home_course_search") or None),
         follower_count=follower_count,
         following_count=following_count,
     )
@@ -195,6 +207,13 @@ def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut
         .where(Follow.follower_id.in_(user_ids))
         .group_by(Follow.follower_id)
     ).all())
+    raw_course_ids = set()
+    for _, preferences, _ in rows:
+        ob = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+        cid = ob.get("home_course_id")
+        if cid:
+            raw_course_ids.add(cid)
+    resolved_courses = resolve_courses_optional(session, raw_course_ids) if raw_course_ids else {}
     return {
         user.id: _summary_out(
             user,
@@ -202,6 +221,7 @@ def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut
             profile,
             follower_counts.get(user.id, 0),
             following_counts.get(user.id, 0),
+            resolved_courses,
         )
         for user, preferences, profile in rows
     }
@@ -443,14 +463,163 @@ def search_users(
     followed_ids, _mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
+    user_ids = {u.id for u in users}
+    summaries = _summaries(session, user_ids)
     results: list[UserSearchResultOut] = []
     for user in users:
-        summary = _summary(session, user)
-        haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
+        summary = summaries.get(user.id)
+        if not summary:
+            continue
+        haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''} {summary.home_course_name or ''}".casefold()
         if needle in haystack:
             results.append(UserSearchResultOut(**summary.model_dump(), is_following=user.id in followed_ids))
         if len(results) == 25:
             break
+    return results
+
+
+@router.get("/api/v1/users/suggested", response_model=list[UserSearchResultOut])
+def suggested_users(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[UserSearchResultOut]:
+    current_record = require_user(session, current, create=True)
+    followed_ids, _ = _relationship_sets(session, current_record.id)
+    blocked = _blocked_ids(session, current_record.id)
+    muted = _muted_ids(session, current_record.id)
+    excluded = blocked | muted | followed_ids | {current_record.id}
+
+    my_profile = session.get(Profile, current_record.id)
+    my_pref = session.get(OnboardingPreference, current_record.id)
+    my_onboarding = my_pref.onboarding_data if my_pref and my_pref.onboarding_data else {}
+    my_home_course_id = my_onboarding.get("home_course_id")
+    my_home_region = (my_profile.home_region if my_profile else "") or ""
+    my_region_tokens = [tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()]
+    my_state = my_region_tokens[-1] if len(my_region_tokens) > 1 else None
+
+    follower_subq = (
+        select(Follow.followed_id, func.count(Follow.id).label("follower_count"))
+        .group_by(Follow.followed_id)
+        .subquery()
+    )
+
+    # Evaluate and score all eligible users before applying candidate limits
+    rows = session.execute(
+        select(
+            User.id,
+            Profile.home_region,
+            OnboardingPreference.onboarding_data,
+            func.coalesce(follower_subq.c.follower_count, 0).label("follower_count"),
+        )
+        .select_from(User)
+        .outerjoin(Profile, Profile.user_id == User.id)
+        .outerjoin(OnboardingPreference, OnboardingPreference.user_id == User.id)
+        .outerjoin(follower_subq, follower_subq.c.followed_id == User.id)
+        .where(User.id.not_in(excluded))
+    ).all()
+    if not rows:
+        return []
+
+    raw_course_ids = set()
+    if my_home_course_id:
+        raw_course_ids.add(my_home_course_id)
+    for _, _, cand_onboarding_data, _ in rows:
+        if isinstance(cand_onboarding_data, dict):
+            cid = cand_onboarding_data.get("home_course_id")
+            if cid:
+                raw_course_ids.add(cid)
+
+    resolved_courses = resolve_courses_optional(session, raw_course_ids) if raw_course_ids else {}
+    my_course = (
+        resolved_courses.get(my_home_course_id)
+        or (resolved_courses.get(str(my_home_course_id)) if my_home_course_id is not None else None)
+        or (resolved_courses.get(int(my_home_course_id)) if str(my_home_course_id).isdigit() else None)
+    ) if my_home_course_id else None
+    my_canonical_id = my_course.id if my_course else None
+
+    scored_candidates: list[tuple[int, int, int]] = []
+    fallback_candidates: list[tuple[int, int]] = []
+
+    for uid, cand_home_region, cand_onboarding_data, raw_cnt in rows:
+        follower_count = int(raw_cnt or 0)
+        score = 0
+        cand_onboarding = cand_onboarding_data if isinstance(cand_onboarding_data, dict) else {}
+        cand_home_course_id = cand_onboarding.get("home_course_id")
+
+        if my_home_course_id and cand_home_course_id:
+            cand_course = (
+                resolved_courses.get(cand_home_course_id)
+                or (resolved_courses.get(str(cand_home_course_id)) if cand_home_course_id is not None else None)
+                or (resolved_courses.get(int(cand_home_course_id)) if str(cand_home_course_id).isdigit() else None)
+            )
+            cand_canonical_id = cand_course.id if cand_course else None
+
+            if (
+                my_canonical_id is not None
+                and cand_canonical_id is not None
+                and my_canonical_id == cand_canonical_id
+            ):
+                score += 100
+
+        if my_home_region and cand_home_region:
+            cand_region_norm = cand_home_region.casefold().strip()
+            if cand_region_norm == my_home_region.casefold().strip():
+                score += 50
+            elif my_state:
+                cand_tokens = [tok.strip().casefold() for tok in cand_home_region.split(",") if tok.strip()]
+                cand_state = cand_tokens[-1] if len(cand_tokens) > 1 else None
+                if cand_state and cand_state == my_state:
+                    score += 25
+
+        if score > 0:
+            scored_candidates.append((score, follower_count, uid))
+        else:
+            fallback_candidates.append((follower_count, uid))
+
+    # Rank by affinity score first, then popularity / follower count as the tie-breaker before truncating
+    scored_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    fallback_candidates.sort(key=lambda item: item[0], reverse=True)
+
+    selected_uids: list[int] = [uid for _, _, uid in scored_candidates[:25]]
+    needed = max(0, 10 - len(selected_uids))
+    if needed > 0 and fallback_candidates:
+        selected_set = set(selected_uids)
+        for _, f_uid in fallback_candidates:
+            if f_uid not in selected_set:
+                selected_uids.append(f_uid)
+                selected_set.add(f_uid)
+                if len(selected_uids) >= 10:
+                    break
+
+    if not selected_uids:
+        return []
+
+    summaries = _summaries(session, set(selected_uids))
+    score_map = {uid: score for score, _, uid in scored_candidates}
+
+    scored_results: list[tuple[int, int, UserSearchResultOut]] = []
+    fallback_results: list[tuple[int, UserSearchResultOut]] = []
+
+    for uid in selected_uids:
+        s = summaries.get(uid)
+        if not s:
+            continue
+        base_score = score_map.get(uid, 0)
+        res = UserSearchResultOut(**s.model_dump(), is_following=False)
+        if base_score > 0:
+            final_score = base_score + min(s.follower_count, 10)
+            scored_results.append((final_score, s.follower_count, res))
+        else:
+            fallback_results.append((s.follower_count, res))
+
+    scored_results.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    results = [item[2] for item in scored_results[:20]]
+    if len(results) < 10:
+        fallback_results.sort(key=lambda item: item[0], reverse=True)
+        for _, res in fallback_results:
+            if len(results) >= 10:
+                break
+            results.append(res)
     return results
 
 
@@ -935,8 +1104,18 @@ def list_follows(
     follows = session.scalars(
         select(Follow).where(Follow.follower_id == user.id, Follow.followed_id.not_in(blocked)).order_by(Follow.created_at.desc())
     ).all()
+    followed_uids = {f.followed_id for f in follows}
+    summaries = _summaries(session, followed_uids)
     reverse_ids = set(session.scalars(select(Follow.follower_id).where(Follow.followed_id == user.id)).all())
-    return [FollowOut(user=_summary(session, session.get(User, follow.followed_id)), is_mutual=follow.followed_id in reverse_ids, followed_at=follow.created_at) for follow in follows]
+    return [
+        FollowOut(
+            user=summaries[follow.followed_id],
+            is_mutual=follow.followed_id in reverse_ids,
+            followed_at=follow.created_at,
+        )
+        for follow in follows
+        if follow.followed_id in summaries
+    ]
 
 
 @router.get("/api/v1/feed", response_model=FeedPageOut)
@@ -1026,14 +1205,17 @@ def activity_feed(
 
         courses_by_id = require_courses(session, batch_course_ids)
         preload_round_visibility(session, courses_by_id.values())
+        batch_actor_ids = {actor.id for _, actor, _ in surviving}
+        actor_summaries = _summaries(session, batch_actor_ids)
         for event, actor, data in surviving:
             course_id = data.get("course_id")
             stored_course = courses_by_id.get(course_id) if isinstance(course_id, int) else None
             course = course_data(stored_course) if stored_course is not None else None
             reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
+            actor_summary = actor_summaries.get(actor.id) or _summary(session, actor)
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,
-                subject_id=event.subject_id, actor=_summary(session, actor), course=course,
+                subject_id=event.subject_id, actor=actor_summary, course=course,
                 data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
                 is_own_activity=event.actor_user_id == user.id,
                 created_at=event.created_at,
@@ -1173,12 +1355,13 @@ def list_blocked_users(
         .where(UserBlock.blocker_id == user.id)
         .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
     ).all()
+    blocked_uids = {b.blocked_id for b in blocks}
+    summaries = _summaries(session, blocked_uids)
     output: list[BlockedUserOut] = []
     for block in blocks:
-        target = session.get(User, block.blocked_id)
-        if target is None:
+        summary = summaries.get(block.blocked_id)
+        if summary is None:
             continue
-        summary = _summary(session, target)
         output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
     return output
 
@@ -1203,11 +1386,16 @@ def list_muted_users(
         .where(UserMute.muter_id == user.id)
         .order_by(UserMute.created_at.desc(), UserMute.id.desc())
     ).all()
+    blocked = _blocked_ids(session, user.id)
+    unblocked_muted_uids = {m.muted_id for m in mutes if m.muted_id not in blocked}
+    summaries = _summaries(session, unblocked_muted_uids) if unblocked_muted_uids else {}
     output: list[MutedUserOut] = []
     for mute in mutes:
-        target = session.get(User, mute.muted_id)
-        if target is not None:
-            output.append(_muted_user_summary(session, user.id, target))
+        if mute.muted_id in blocked:
+            output.append(MutedUserOut(id=mute.muted_id, display_name="Muted account", username=None))
+        elif mute.muted_id in summaries:
+            s = summaries[mute.muted_id]
+            output.append(MutedUserOut(id=mute.muted_id, display_name=s.display_name, username=s.username))
     return output
 
 

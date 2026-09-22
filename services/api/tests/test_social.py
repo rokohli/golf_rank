@@ -1396,3 +1396,292 @@ def test_search_results_report_whether_the_caller_already_follows_them() -> None
     unrelated = client.get("/api/v1/users", headers=bob, params={"q": "searchfollowalice"}).json()
     assert unrelated[0]["is_following"] is False
 
+
+def test_home_course_search_and_suggestions() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        c_spy = Course(name="Spyglass Hill", region="Pebble Beach, CA", latitude=36.58, longitude=-121.96, source="manual", source_course_id="spyglass")
+        c_torrey = Course(name="Torrey Pines", region="La Jolla, CA", latitude=32.89, longitude=-117.25, source="manual", source_course_id="torrey")
+        c_bethpage = Course(name="Bethpage Black", region="Farmingdale, NY", latitude=40.74, longitude=-73.45, source="manual", source_course_id="bethpage")
+        session.add_all([c_spy, c_torrey, c_bethpage])
+        session.flush()
+        spy_id = str(c_spy.id)
+        torrey_id = str(c_torrey.id)
+        bethpage_id = str(c_bethpage.id)
+        session.commit()
+
+    def create_golfer(subject: str, username: str, region: str, course_id: str, course_name: str) -> dict[str, str]:
+        headers = {"X-Development-Subject": subject}
+        res = client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": region,
+                "max_green_fee": 500,
+                "difficulty": "any",
+                "access": "any",
+                "onboarding_data": {
+                    "first_name": username.capitalize(),
+                    "last_name": "Golfer",
+                    "username": username,
+                    "home_course_id": course_id,
+                    "home_course_search": course_name,
+                    "travel_distance": "Any",
+                    "preferred_tee_time": "Morning",
+                },
+            },
+        )
+        assert res.status_code == 200
+        return headers
+
+    u1 = create_golfer("dev:user-spy-1", "spy_alex", "Monterey, CA", spy_id, "Spyglass Hill")
+    u2 = create_golfer("dev:user-spy-2", "spy_blake", "Pebble Beach, CA", spy_id, "Spyglass Hill")
+    u3 = create_golfer("dev:user-torrey", "torrey_chris", "Monterey, CA", torrey_id, "Torrey Pines")
+    _u4 = create_golfer("dev:user-bethpage", "bethpage_dan", "Farmingdale, NY", bethpage_id, "Bethpage Black")
+
+    # 1. Search by home course name (excludes self for u1, finds both for third party u4)
+    search_spy = client.get("/api/v1/users", headers=u1, params={"q": "Spyglass"}).json()
+    spy_usernames = {u["username"] for u in search_spy}
+    assert "spy_alex" not in spy_usernames  # Excludes self
+    assert "spy_blake" in spy_usernames
+    assert "torrey_chris" not in spy_usernames
+
+    search_spy_all = client.get("/api/v1/users", headers=_u4, params={"q": "Spyglass"}).json()
+    all_spy_usernames = {u["username"] for u in search_spy_all}
+    assert "spy_alex" in all_spy_usernames
+    assert "spy_blake" in all_spy_usernames
+
+    # 2. Public profile includes home course
+    u2_id = [u["id"] for u in search_spy if u["username"] == "spy_blake"][0]
+    profile_u2 = client.get(f"/api/v1/users/{u2_id}", headers=u1).json()
+    assert profile_u2["home_course_id"] == spy_id
+    assert profile_u2["home_course_name"] == "Spyglass Hill"
+
+    # 3. Suggested users prioritizes same home course, then same home region
+    suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    suggestion_usernames = [u["username"] for u in suggestions]
+    assert "spy_alex" not in suggestion_usernames  # Excludes self
+    assert "spy_blake" in suggestion_usernames  # Same home course
+    assert "torrey_chris" in suggestion_usernames  # Same region
+
+    # spy_blake (same home course) should rank ahead of torrey_chris (different course, same region)
+    idx_blake = suggestion_usernames.index("spy_blake")
+    idx_chris = suggestion_usernames.index("torrey_chris")
+    assert idx_blake < idx_chris
+
+    # Following a user excludes them from suggestions
+    client.put(f"/api/v1/me/follows/{u2_id}", headers=u1)
+    updated_suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    updated_usernames = [u["username"] for u in updated_suggestions]
+    assert "spy_blake" not in updated_usernames
+
+    # 4. Region matching compares state component, avoiding substring/city-only false matches
+    portland_user = create_golfer("dev:user-portland", "portland_pat", "Portland, OR", "401", "Pumpkin Ridge")
+    eugene_user = create_golfer("dev:user-eugene", "eugene_eric", "Eugene, OR", "402", "Eugene CC")
+    create_golfer("dev:user-portland-me", "portland_mary", "Portland, ME", "404", "Riverside")
+    create_golfer("dev:user-ny", "ny_ned", "New York, NY", "403", "Bethpage")
+
+    p_suggestions = client.get("/api/v1/users/suggested", headers=portland_user).json()
+    p_suggestion_names = [u["username"] for u in p_suggestions]
+    assert "eugene_eric" in p_suggestion_names
+    if "portland_mary" in p_suggestion_names:
+        assert p_suggestion_names.index("eugene_eric") < p_suggestion_names.index("portland_mary")
+    if "ny_ned" in p_suggestion_names:
+        assert p_suggestion_names.index("eugene_eric") < p_suggestion_names.index("ny_ned")
+
+    # 5. Empty home course is permitted when updating preferences
+    clear_res = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=portland_user,
+        json={
+            "home_region": "Portland, OR",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Portland",
+                "last_name": "Golfer",
+                "username": "portland_pat",
+                "home_course_id": None,
+                "home_course_search": "",
+                "travel_distance": "Any",
+                "preferred_tee_time": "Morning",
+            },
+        },
+    )
+    assert clear_res.status_code == 200
+    cleared_summary = client.get("/api/v1/users/suggested", headers=eugene_user).json()
+    pat_item = [u for u in cleared_summary if u["username"] == "portland_pat"]
+    if pat_item:
+        assert pat_item[0]["home_course_id"] is None
+        assert pat_item[0]["home_course_name"] is None
+
+
+def test_suggested_users_reconciled_course_and_popularity_tie_breaker() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        canonical = Course(
+            name="Pine Valley Golf Club",
+            region="Clementon, NJ",
+            latitude=39.79,
+            longitude=-74.97,
+            source="manual",
+            source_course_id="pine-valley-main",
+        )
+        session.add(canonical)
+        session.flush()
+        canonical_id = canonical.id
+
+        alias = Course(
+            name="Pine Valley Alternate",
+            region="Clementon, NJ",
+            latitude=39.79,
+            longitude=-74.97,
+            source="partner",
+            source_course_id="pv-partner-1",
+        )
+        session.add(alias)
+        session.flush()
+        alias_id = alias.id
+
+        session.add(
+            CourseReconciliation(
+                source="partner",
+                source_course_id="pv-partner-1",
+                canonical_course_id=canonical_id,
+                match_status="confirmed",
+            )
+        )
+        session.commit()
+
+    def create_user(subject: str, username: str, course_id: str | None, course_name: str | None) -> dict[str, str]:
+        headers = {"X-Development-Subject": subject}
+        res = client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": "New York, NY",
+                "max_green_fee": 500,
+                "difficulty": "any",
+                "access": "any",
+                "onboarding_data": {
+                    "first_name": username.capitalize(),
+                    "last_name": "Golfer",
+                    "username": username,
+                    "home_course_id": course_id,
+                    "home_course_search": course_name or "",
+                    "travel_distance": "Any",
+                    "preferred_tee_time": "Morning",
+                },
+            },
+        )
+        assert res.status_code == 200
+        return headers
+
+    u1 = create_user("dev:pv-user-1", "pv_player_1", str(canonical_id), "Pine Valley Golf Club")
+    u2 = create_user("dev:pv-user-2", "pv_player_2", str(alias_id), "Pine Valley Alternate")
+    u3 = create_user("dev:pv-user-3", "pv_player_3", str(alias_id), "Pine Valley Alternate")
+
+    u3_info = client.get("/api/v1/users", headers=u1, params={"q": "pv_player_3"}).json()
+    u3_id = u3_info[0]["id"]
+
+    follower_a = create_user("dev:pv-fan-a", "pv_fan_a", None, None)
+    follower_b = create_user("dev:pv-fan-b", "pv_fan_b", None, None)
+    client.put(f"/api/v1/me/follows/{u3_id}", headers=follower_a)
+    client.put(f"/api/v1/me/follows/{u3_id}", headers=follower_b)
+
+    suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    suggested_names = [u["username"] for u in suggestions]
+    assert "pv_player_2" in suggested_names
+    assert "pv_player_3" in suggested_names
+    assert suggested_names.index("pv_player_3") < suggested_names.index("pv_player_2")
+
+    # Nonnumeric source course identifier is canonicalized to numeric canonical ID
+    u4 = create_user("dev:pv-user-4", "pv_player_4", "pv-partner-1", "Pine Valley Alternate")
+    my_profile = client.get("/api/v1/me/profile", headers=u4).json()
+    assert my_profile["onboarding_data"]["home_course_id"] == str(canonical_id)
+    assert my_profile["onboarding_data"]["home_course_search"] == "Pine Valley Golf Club"
+
+    u4_info = client.get("/api/v1/users", headers=u1, params={"q": "pv_player_4"}).json()
+    assert u4_info[0]["home_course_id"] == str(canonical_id)
+    assert u4_info[0]["home_course_name"] == "Pine Valley Golf Club"
+    public_u4 = client.get(f"/api/v1/users/{u4_info[0]['id']}", headers=u1).json()
+    assert public_u4["home_course_id"] == str(canonical_id)
+    assert public_u4["home_course_name"] == "Pine Valley Golf Club"
+
+
+def test_unresolved_home_course_id_is_cleared() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:ghost-user"}
+    res = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Ghost",
+                "last_name": "Golfer",
+                "username": "ghost_golfer",
+                "home_course_id": "9999999",  # Nonexistent course ID
+                "home_course_search": "Ghost Course",
+                "travel_distance": "Any",
+                "preferred_tee_time": "Morning",
+            },
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["onboarding_data"]["home_course_id"] is None
+    assert data["onboarding_data"]["home_course_search"] == "Ghost Course"
+
+    profile = client.get("/api/v1/me/profile", headers=headers).json()
+    assert profile["onboarding_data"]["home_course_id"] is None
+
+    headers_other = {"X-Development-Subject": "dev:other-viewer"}
+    search_res = client.get("/api/v1/users", headers=headers_other, params={"q": "ghost_golfer"}).json()
+    assert len(search_res) == 1
+    assert search_res[0]["home_course_id"] is None
+    assert search_res[0]["home_course_name"] == "Ghost Course"
+
+
+def test_unresolved_home_course_does_not_award_affinity() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        u_main = User(provider_subject="dev:legacy-scorer-main")
+        u_fake_match = User(provider_subject="dev:legacy-scorer-cand")
+        u_region_match = User(provider_subject="dev:legacy-scorer-region")
+        session.add_all([u_main, u_fake_match, u_region_match])
+        session.flush()
+
+        session.add_all([
+            Profile(user_id=u_main.id, username="main_user", home_region="Austin, TX"),
+            Profile(user_id=u_fake_match.id, username="fake_course_user", home_region="Seattle, WA"),
+            Profile(user_id=u_region_match.id, username="region_match_user", home_region="Austin, TX"),
+            OnboardingPreference(user_id=u_main.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={"home_course_id": "unresolvable-course-999"}),
+            OnboardingPreference(user_id=u_fake_match.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={"home_course_id": "unresolvable-course-999"}),
+            OnboardingPreference(user_id=u_region_match.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={}),
+        ])
+        session.commit()
+
+    headers_main = {"X-Development-Subject": "dev:legacy-scorer-main"}
+    suggestions = client.get("/api/v1/users/suggested", headers=headers_main).json()
+    suggested_usernames = [u["username"] for u in suggestions]
+    assert "region_match_user" in suggested_usernames
+    if "fake_course_user" in suggested_usernames:
+        assert suggested_usernames.index("region_match_user") < suggested_usernames.index("fake_course_user")
+
+
+
+
+
+

@@ -15,6 +15,7 @@ const mockSyncLinkedContacts = jest.fn()
 const mockGetLinkedContactStatus = jest.fn()
 const mockDeleteLinkedContacts = jest.fn()
 const mockDeleteAccount = jest.fn()
+const mockSearchCourses = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -54,6 +55,7 @@ jest.mock('../../src/api/client', () => ({
   syncLinkedContacts: (...args: unknown[]) => mockSyncLinkedContacts(...args),
   getLinkedContactStatus: (...args: unknown[]) => mockGetLinkedContactStatus(...args),
   deleteLinkedContacts: (...args: unknown[]) => mockDeleteLinkedContacts(...args),
+  searchCourses: (...args: unknown[]) => mockSearchCourses(...args),
 }))
 
 jest.mock('../../src/auth/AuthProvider', () => ({
@@ -80,7 +82,7 @@ const profile = {
   max_green_fee: 350,
   onboarding_data: {
     first_name: 'Rohan', last_name: 'Kohli', username: 'rohank', profile_photo_added: false,
-    home_course_id: 'pebble', home_course_search: 'Pebble Beach Golf Links', played_course_ids: [], favorite_wins: [], dream_course_ids: [], friend_search: '', preferences: ['Scenic views'], group_size: 'Foursome', budget: '$$$', travel_distance: '45 minutes', preferred_tee_time: 'Weekend mornings', transportation: 'Cart', notifications: true,
+    home_course_id: '7', home_course_search: 'Pebble Beach Golf Links', played_course_ids: [], favorite_wins: [], dream_course_ids: [], friend_search: '', preferences: ['Scenic views'], group_size: 'Foursome', budget: '$$$', travel_distance: '45 minutes', preferred_tee_time: 'Weekend mornings', transportation: 'Cart', notifications: true,
   },
 }
 
@@ -119,9 +121,12 @@ describe('profile experience', () => {
     expect(await screen.findByText('Rohan Kohli')).toBeOnTheScreen()
     expect(screen.getByText('@rohank')).toBeOnTheScreen()
     expect(screen.getByText('84.1')).toBeOnTheScreen()
-    expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Home course: Pebble Beach Golf Links' })).toBeOnTheScreen()
+    expect(screen.getAllByText('Pebble Beach Golf Links')).toHaveLength(2)
     expect(screen.getByText('+12')).toBeOnTheScreen()
 
+    fireEvent.press(screen.getByRole('button', { name: 'Home course: Pebble Beach Golf Links' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/course/7')
     fireEvent.press(screen.getByRole('button', { name: 'Profile settings' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/settings')
     fireEvent.press(screen.getByRole('button', { name: 'Edit profile' }))
@@ -133,21 +138,41 @@ describe('profile experience', () => {
   })
 
   it('updates Clerk identity and the saved profile from Edit profile', async () => {
+    mockSearchCourses.mockResolvedValueOnce([
+      { id: 2, name: 'Spyglass Hill Golf Course', region: 'Pebble Beach, CA' },
+    ])
     render(<EditProfile />)
 
     await screen.findByDisplayValue('Rohan')
     fireEvent.changeText(screen.getByLabelText('First name'), 'Rowan')
     fireEvent.changeText(screen.getByLabelText('Home region'), 'Carmel, CA')
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Spyglass Hill')
     fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => {
       expect(mockUpdateUserProfile).toHaveBeenCalledWith({ firstName: 'Rowan', lastName: 'Kohli', username: 'rohank' })
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         home_region: 'Carmel, CA',
-        onboarding_data: expect.objectContaining({ first_name: 'Rowan' }),
+        onboarding_data: expect.objectContaining({
+          first_name: 'Rowan',
+          home_course_id: '2',
+          home_course_search: 'Spyglass Hill Golf Course',
+        }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })
+  })
+
+  it('requires course selection when typed home course cannot be resolved', async () => {
+    mockSearchCourses.mockResolvedValueOnce([])
+    render(<EditProfile />)
+
+    await screen.findByDisplayValue('Rohan')
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Nonexistent Course XYZ')
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByText('Please select your home course from the suggestions.')
+    expect(mockSavePreferences).not.toHaveBeenCalled()
   })
 
   it('routes settings actions and confirms sign out', async () => {

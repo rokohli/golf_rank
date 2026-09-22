@@ -54,18 +54,14 @@ export default function UserProfileScreen() {
       setSummary(null)
       setCourses(null)
       setCoursesHasMore(false)
-      try {
-        setSummary(await getUserRoundSummary(userId, headers))
-      } catch {
-        // Round stats are a secondary enhancement to the profile card; a
-        // failure here should not blank out an otherwise-loaded profile.
-      }
-      try {
-        const nextCourses = await getUserCourses(userId, headers, { limit: coursesPageSize })
+      const [nextSummary, nextCourses] = await Promise.all([
+        getUserRoundSummary(userId, headers).catch(() => null),
+        getUserCourses(userId, headers, { limit: coursesPageSize }).catch(() => null),
+      ])
+      if (nextSummary) setSummary(nextSummary)
+      if (nextCourses) {
         setCourses(nextCourses)
         setCoursesHasMore(nextCourses.length === coursesPageSize)
-      } catch {
-        // Same as above: courses-played is a secondary enhancement.
       }
     } catch (reason) {
       setProfile(null)
@@ -177,6 +173,24 @@ export default function UserProfileScreen() {
           <Text style={styles.name}>{profile.display_name}</Text>
           {profile.username ? <Text style={styles.handle}>@{profile.username}</Text> : null}
           {profile.home_region ? <View style={styles.regionRow}><Feather name="map-pin" size={12} color={colors.muted} /><Text style={styles.region}>{profile.home_region}</Text></View> : null}
+          {profile.home_course_name ? (
+            profile.home_course_id && /^\d+$/.test(String(profile.home_course_id).trim()) ? (
+              <Pressable
+                accessibilityLabel={`Home course: ${profile.home_course_name}`}
+                accessibilityRole="button"
+                onPress={() => router.push(`/course/${profile.home_course_id}` as never)}
+                style={({ pressed }) => [styles.homeCourseRow, pressed && styles.pressed]}
+              >
+                <Feather name="flag" size={12} color={colors.pine} />
+                <Text style={styles.homeCourseText}>{profile.home_course_name}</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.homeCourseRow}>
+                <Feather name="flag" size={12} color={colors.muted} />
+                <Text style={styles.homeCourseText}>{profile.home_course_name}</Text>
+              </View>
+            )
+          ) : null}
           {profile.is_mutual ? <Text style={styles.mutual}>Friends</Text> : profile.is_followed_by ? <Text style={styles.followsYou}>Follows you</Text> : null}
         </View>
 
@@ -325,6 +339,8 @@ const styles = StyleSheet.create({
   handle: { color: colors.muted, fontSize: 11 },
   regionRow: { alignItems: 'center', flexDirection: 'row', gap: 4, marginTop: 2 },
   region: { color: colors.muted, fontSize: 10 },
+  homeCourseRow: { alignItems: 'center', flexDirection: 'row', gap: 4, marginTop: 2 },
+  homeCourseText: { color: colors.pine, fontSize: 11, fontWeight: '600' },
   mutual: { backgroundColor: colors.pineSoft, borderRadius: radii.pill, color: colors.pineDark, fontSize: 10, fontWeight: '800', marginTop: 4, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 4 },
   followsYou: { color: colors.muted, fontSize: 10, marginTop: 4 },
   stats: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', marginTop: 8, paddingVertical: 12 },

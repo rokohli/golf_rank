@@ -1,14 +1,14 @@
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { getProfile, savePreferences } from '../../src/api/client'
+import { getProfile, savePreferences, searchCourses } from '../../src/api/client'
 import { useAuthGate } from '../../src/auth/AuthProvider'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { Avatar, ProductScreen, ScreenHeader } from '../../src/components/ProductUI'
-import { OnboardingPreferences } from '../../src/types'
+import { Course, OnboardingPreferences } from '../../src/types'
 import { colors, radii } from '../../src/ui/theme'
 
 export default function EditProfile() {
@@ -20,6 +20,10 @@ export default function EditProfile() {
   const [lastName, setLastName] = useState('')
   const [username, setUsername] = useState('')
   const [homeRegion, setHomeRegion] = useState('')
+  const [homeCourseSearch, setHomeCourseSearch] = useState('')
+  const [homeCourseId, setHomeCourseId] = useState<string | null>(null)
+  const [courseSuggestions, setCourseSuggestions] = useState<Course[]>([])
+  const [searchingCourses, setSearchingCourses] = useState(false)
   const [pendingImageUri, setPendingImageUri] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -35,6 +39,8 @@ export default function EditProfile() {
       setLastName(next.onboarding_data?.last_name ?? '')
       setUsername(next.onboarding_data?.username ?? '')
       setHomeRegion(next.home_region)
+      setHomeCourseSearch(next.onboarding_data?.home_course_search ?? '')
+      setHomeCourseId(next.onboarding_data?.home_course_id ?? null)
     } catch (reason) {
       setError(message(reason, 'Unable to load your profile.'))
     } finally {
@@ -43,6 +49,47 @@ export default function EditProfile() {
   }, [getAuthHeaders])
 
   useFocusEffect(useCallback(() => { void load() }, [load]))
+
+  const handleHomeCourseChange = (text: string) => {
+    setHomeCourseSearch(text)
+    setHomeCourseId(null)
+  }
+
+  const selectCourse = (course: Course) => {
+    setHomeCourseId(String(course.id))
+    setHomeCourseSearch(course.name)
+    setCourseSuggestions([])
+    if (!homeRegion.trim() && course.region) {
+      setHomeRegion(course.region)
+    }
+  }
+
+  useEffect(() => {
+    const trimmed = homeCourseSearch.trim()
+    if (trimmed.length < 2 || homeCourseId) {
+      setCourseSuggestions([])
+      setSearchingCourses(false)
+      return
+    }
+    let active = true
+    setSearchingCourses(true)
+    const timeout = setTimeout(() => {
+      searchCourses({ q: trimmed, limit: 5 })
+        .then((courses) => {
+          if (active) setCourseSuggestions(courses)
+        })
+        .catch(() => {
+          if (active) setCourseSuggestions([])
+        })
+        .finally(() => {
+          if (active) setSearchingCourses(false)
+        })
+    }, 250)
+    return () => {
+      active = false
+      clearTimeout(timeout)
+    }
+  }, [homeCourseSearch, homeCourseId])
 
   const choosePhoto = async () => {
     setError(null)
@@ -71,6 +118,36 @@ export default function EditProfile() {
 
     setSaving(true)
     setError(null)
+
+    let resolvedCourseId = homeCourseId
+    let resolvedCourseName = homeCourseSearch.trim()
+
+    if (resolvedCourseName) {
+      if (!resolvedCourseId) {
+        try {
+          const matches = await searchCourses({ q: resolvedCourseName, limit: 5 })
+          const normalized = resolvedCourseName.toLowerCase()
+          const exactMatches = matches.filter((c) => c.name.toLowerCase() === normalized)
+          const target = exactMatches.length === 1 ? exactMatches[0] : (matches.length === 1 ? matches[0] : null)
+          if (target) {
+            resolvedCourseId = String(target.id)
+            resolvedCourseName = target.name
+          } else {
+            setError('Please select your home course from the suggestions.')
+            setSaving(false)
+            return
+          }
+        } catch {
+          setError('Unable to verify home course. Please select a suggestion.')
+          setSaving(false)
+          return
+        }
+      }
+    } else {
+      resolvedCourseId = null
+      resolvedCourseName = ''
+    }
+
     try {
       const nextProfile: OnboardingPreferences = {
         ...profile,
@@ -81,6 +158,8 @@ export default function EditProfile() {
           last_name: normalizedLast,
           profile_photo_added: profile.onboarding_data.profile_photo_added || Boolean(pendingImageUri),
           username: normalizedUsername,
+          home_course_id: resolvedCourseId,
+          home_course_search: resolvedCourseName,
         },
       }
       await savePreferences(nextProfile, await getAuthHeaders())
@@ -129,6 +208,27 @@ export default function EditProfile() {
           <ProfileField autoCapitalize="none" label="Username" onChangeText={setUsername} prefix="@" value={username} />
           <Text style={styles.helper}>This is how friends find you.</Text>
           <ProfileField autoCapitalize="words" icon="map-pin" label="Home region" onChangeText={setHomeRegion} value={homeRegion} />
+          <ProfileField autoCapitalize="words" icon="flag" label="Home course" onChangeText={handleHomeCourseChange} placeholder="Search your home course" value={homeCourseSearch} />
+          {searchingCourses ? <ActivityIndicator color={colors.pine} size="small" style={{ marginTop: 2 }} /> : null}
+          {courseSuggestions.length > 0 ? (
+            <View style={styles.suggestionsContainer}>
+              {courseSuggestions.map((course) => (
+                <Pressable
+                  key={course.id}
+                  accessibilityLabel={`Select ${course.name}`}
+                  accessibilityRole="button"
+                  onPress={() => selectCourse(course)}
+                  style={({ pressed }) => [styles.suggestionItem, pressed && styles.pressed]}
+                >
+                  <Feather name="flag" size={14} color={colors.pine} />
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={styles.suggestionName}>{course.name}</Text>
+                    <Text numberOfLines={1} style={styles.suggestionMeta}>{course.region}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
 
         {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
@@ -141,8 +241,8 @@ export default function EditProfile() {
   </>
 }
 
-function ProfileField({ autoCapitalize, icon, label, onChangeText, prefix, value }: { autoCapitalize: 'none' | 'words'; icon?: keyof typeof Feather.glyphMap; label: string; onChangeText: (value: string) => void; prefix?: string; value: string }) {
-  return <View style={styles.field}><Text style={styles.label}>{label}</Text><View style={styles.inputShell}>{prefix ? <Text style={styles.prefix}>{prefix}</Text> : null}<TextInput accessibilityLabel={label} autoCapitalize={autoCapitalize} autoCorrect={false} onChangeText={onChangeText} style={styles.input} value={value} />{icon ? <Feather name={icon} size={18} color={colors.pine} /> : null}</View></View>
+function ProfileField({ autoCapitalize, icon, label, onChangeText, placeholder, prefix, value }: { autoCapitalize: 'none' | 'words'; icon?: keyof typeof Feather.glyphMap; label: string; onChangeText: (value: string) => void; placeholder?: string; prefix?: string; value: string }) {
+  return <View style={styles.field}><Text style={styles.label}>{label}</Text><View style={styles.inputShell}>{prefix ? <Text style={styles.prefix}>{prefix}</Text> : null}<TextInput accessibilityLabel={label} autoCapitalize={autoCapitalize} autoCorrect={false} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.muted} style={styles.input} value={value} />{icon ? <Feather name={icon} size={18} color={colors.pine} /> : null}</View></View>
 }
 
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'GR' }
@@ -160,6 +260,25 @@ const styles = StyleSheet.create({
   prefix: { color: colors.muted, fontSize: 15, paddingRight: 9 },
   input: { color: colors.ink, flex: 1, fontSize: 14, paddingVertical: 0 },
   helper: { color: colors.muted, fontSize: 10, marginTop: -7 },
+  suggestionsContainer: {
+    backgroundColor: colors.card,
+    borderColor: colors.line,
+    borderRadius: radii.small,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginTop: -6,
+  },
+  suggestionItem: {
+    alignItems: 'center',
+    borderBottomColor: colors.line,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  suggestionName: { color: colors.ink, fontSize: 13, fontWeight: '700' },
+  suggestionMeta: { color: colors.muted, fontSize: 11 },
   error: { color: colors.error, fontSize: 11, lineHeight: 16, textAlign: 'center' },
   saveButton: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: radii.pill, justifyContent: 'center', minHeight: 50, marginTop: 4 },
   saveText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },

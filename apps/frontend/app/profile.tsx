@@ -48,6 +48,8 @@ export default function Profile() {
   const last = profile?.onboarding_data?.last_name?.trim() ?? ''
   const name = `${first} ${last}`.trim() || 'Golfer'
   const username = profile?.onboarding_data?.username?.trim() ?? ''
+  const homeCourseName = profile?.onboarding_data?.home_course_search?.trim() ?? ''
+  const homeCourseId = profile?.onboarding_data?.home_course_id
   const latestRound = summary?.latest_round
   const latestRoundToPar = scoreToPar(latestRound?.score, latestRound?.course.par)
 
@@ -66,6 +68,24 @@ export default function Profile() {
         <Text style={styles.name}>{name}</Text>
         {username ? <Text style={styles.handle}>@{username}</Text> : null}
         {profile?.home_region ? <View style={styles.regionRow}><Feather name="map-pin" size={12} color={colors.muted} /><Text style={styles.region}>{profile.home_region}</Text></View> : null}
+        {homeCourseName ? (
+          homeCourseId && /^\d+$/.test(String(homeCourseId).trim()) ? (
+            <Pressable
+              accessibilityLabel={`Home course: ${homeCourseName}`}
+              accessibilityRole="button"
+              onPress={() => router.push(`/course/${homeCourseId}` as never)}
+              style={({ pressed }) => [styles.homeCourseRow, pressed && styles.pressed]}
+            >
+              <Feather name="flag" size={12} color={colors.pine} />
+              <Text style={styles.homeCourseText}>{homeCourseName}</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.homeCourseRow}>
+              <Feather name="flag" size={12} color={colors.muted} />
+              <Text style={styles.homeCourseText}>{homeCourseName}</Text>
+            </View>
+          )
+        ) : null}
         <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/profile/edit' as never)}><Text style={styles.editLink}>Edit profile</Text></Pressable>
       </View>
 
@@ -143,6 +163,8 @@ const styles = StyleSheet.create({
   handle: { color: colors.muted, fontSize: 11 },
   regionRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   region: { color: colors.muted, fontSize: 10 },
+  homeCourseRow: { alignItems: 'center', flexDirection: 'row', gap: 4, marginTop: 1 },
+  homeCourseText: { color: colors.pine, fontSize: 11, fontWeight: '600' },
   editLink: { color: colors.pine, fontSize: 11, fontWeight: '800', marginTop: 5 },
   stats: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingVertical: 12 },
   stat: { alignItems: 'center', borderRightColor: colors.line, borderRightWidth: StyleSheet.hairlineWidth, flex: 1 },
