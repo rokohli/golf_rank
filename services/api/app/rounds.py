@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, stored_user
+from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, resolve_course_optional, stored_user
 from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
@@ -618,3 +618,25 @@ def list_course_states(
                 )
             )
     return output
+
+
+def seed_onboarding_played_courses(session: Session, user_id: int, played_course_ids: list[str]) -> None:
+    """Seed played courses selected during onboarding into UserCourseState so they appear on profile."""
+    if not played_course_ids or not isinstance(played_course_ids, list):
+        return
+    for raw_id in played_course_ids:
+        course = resolve_course_optional(session, raw_id)
+        if course is None:
+            continue
+        state = session.scalar(
+            select(UserCourseState).where(
+                UserCourseState.user_id == user_id,
+                UserCourseState.course_id == course.id,
+            )
+        )
+        if state is None:
+            state = UserCourseState(user_id=user_id, course_id=course.id, has_played=True, round_count=0)
+            session.add(state)
+        else:
+            state.has_played = True
+

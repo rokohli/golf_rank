@@ -166,6 +166,31 @@ def require_courses(session: Session, course_ids) -> dict[int, Course]:
     return result
 
 
+def resolve_course_optional(session: Session, raw: str | int | None) -> Course | None:
+    """Resolve a course by integer id, string id, or source_course_id, canonicalizing if reconciled."""
+    if raw is None:
+        return None
+    course = None
+    try:
+        parsed_id = int(str(raw).strip())
+        if parsed_id > 0:
+            course = session.get(Course, parsed_id)
+    except (TypeError, ValueError):
+        pass
+    if course is None:
+        raw_str = str(raw).strip()
+        if raw_str:
+            course = session.scalar(
+                select(Course).where(Course.source_course_id == raw_str).limit(1)
+            )
+    if course is None:
+        return None
+    try:
+        return require_course(session, course.id)
+    except HTTPException:
+        return None
+
+
 def canonical_courses_only():
     """SQL predicate that hides source rows mapped to another canonical course."""
 

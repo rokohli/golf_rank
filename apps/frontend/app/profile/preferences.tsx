@@ -15,8 +15,8 @@ type GroupSize = NonNullable<NonNullable<OnboardingPreferences['onboarding_data'
 type Transportation = NonNullable<NonNullable<OnboardingPreferences['onboarding_data']>['transportation']>
 type SheetKey = 'group' | 'transportation' | 'teeTime' | 'travel' | null
 
-const MIN_FEE = 50
-const MAX_FEE = 500
+const MIN_FEE = 25
+const MAX_FEE = 400
 const FEE_STEP = 25
 
 const accessOptions: Array<{ label: string; value: Access }> = [
@@ -181,7 +181,7 @@ function FeeSlider({ onChange, value }: { onChange: (value: number) => void; val
     <View accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} accessibilityLabel="Maximum green fee" accessibilityRole="adjustable" accessibilityValue={{ min: MIN_FEE, max: MAX_FEE, now: value, text: `$${value} per round` }} onAccessibilityAction={adjust} onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={styles.sliderTouch} {...responder.panHandlers}>
       <View style={styles.sliderTrack}><View style={[styles.sliderActive, { width: `${percent}%` }]} /><View style={[styles.sliderThumb, { left: `${percent}%` }]} /></View>
     </View>
-    <View style={styles.sliderLabels}><Text style={styles.sliderLabel}>$50</Text><Text style={styles.sliderLabel}>$500+</Text></View>
+    <View style={styles.sliderLabels}><Text style={styles.sliderLabel}>$25</Text><Text style={styles.sliderLabel}>$400+</Text></View>
   </View>
 }
 

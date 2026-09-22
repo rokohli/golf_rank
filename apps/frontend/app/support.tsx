@@ -33,6 +33,12 @@ const FAQS: FaqItem[] = [
       'When an official green fee is missing from our catalog, golfers can submit standard 18-hole walking or riding rates. Once multiple agreeing suggestions are submitted, the estimate is verified and displayed for everyone.',
   },
   {
+    id: 'budget-tiers',
+    question: 'What do the budget tiers ($, $$, $$$, $$$$) mean?',
+    answer:
+      'Budget tiers help match course discovery and trip recommendations to what you like to spend per round:\n\n• $ (Budget / Muni): Up to $50\n• $$ (Standard Public): Up to $100\n• $$$ (Premium Public): Up to $175\n• $$$$ (Splurge / Destination): $250+\n\nYou can fine-tune your exact maximum green fee anytime under Profile > Golf preferences.',
+  },
+  {
     id: 'hero-photos',
     question: 'How does a photo become the course cover photo?',
     answer:

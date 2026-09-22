@@ -196,3 +196,52 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert all(n["recipient_user_id"] == alice_id and n["actor_user_id"] == bob_id for n in exported["notifications"])
     assert [t["token"] for t in exported["push_tokens"]] == ["ExponentPushToken[export-alice]"]
     assert "provider_subject" not in str(exported)
+
+
+def test_onboarding_seeds_dream_courses_and_played_courses() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-seeder"}
+    response = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 175,
+            "difficulty": "intermediate",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Tiger",
+                "last_name": "Golfer",
+                "username": "tigergolf",
+                "home_course_id": "1",
+                "home_course_search": "Pebble Beach",
+                "played_course_ids": ["1", "2"],
+                "favorite_wins": ["1"],
+                "dream_course_ids": ["3"],
+                "preferences": ["Scenic views"],
+                "group_size": "Foursome",
+                "budget": "$$",
+                "travel_distance": "Up to 45 minutes",
+                "preferred_tee_time": "Weekend mornings",
+                "transportation": "Cart",
+                "notifications": True,
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    # Verify dream course was seeded into default "Want to play" saved list
+    saved_lists = client.get("/api/v1/me/saved-lists", headers=headers)
+    assert saved_lists.status_code == 200
+    lists = saved_lists.json()
+    assert len(lists) == 1
+    assert lists[0]["name"] == "Want to play"
+    assert lists[0]["is_default"] is True
+    assert [item["course"]["id"] for item in lists[0]["courses"]] == [3]
+
+    # Verify played courses were seeded into UserCourseState and are queryable
+    played = client.get("/api/v1/me/course-states", headers=headers)
+    assert played.status_code == 200
+    played_ids = {item["course"]["id"] for item in played.json() if item["has_played"]}
+    assert {1, 2}.issubset(played_ids)
+
