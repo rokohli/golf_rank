@@ -293,6 +293,9 @@ describe('trip planner', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Beginner' }))
     fireEvent.press(screen.getByRole('button', { name: 'Cart' }))
 
+    expect(screen.getByRole('button', { name: 'Private' }).props.accessibilityState).toEqual({ selected: true })
+    expect(screen.getByRole('button', { name: 'Public' }).props.accessibilityState).toEqual({ selected: false })
+
     fireEvent.changeText(screen.getByLabelText('Trip name'), 'Desert Outing')
     fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Palm Springs, CA')
     fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
@@ -306,6 +309,29 @@ describe('trip planner', () => {
       }),
       expect.anything(),
     ))
+  })
+
+  it('hides the form and displays loading indicator while loading profile defaults', async () => {
+    let resolveProfile!: (value: unknown) => void
+    const profilePromise = new Promise((resolve) => { resolveProfile = resolve })
+    mockGetProfile.mockReturnValue(profilePromise)
+
+    render(<Planner />)
+
+    expect(screen.getByLabelText('Loading trips')).toBeOnTheScreen()
+    expect(screen.queryByLabelText('Party size')).toBeNull()
+
+    resolveProfile({
+      home_region: 'Monterey, CA',
+      max_green_fee: 175,
+      difficulty: 'challenging',
+      access: 'public',
+      onboarding_data: { group_size: 'Solo', transportation: 'Walking', preferences: ['Ocean views'] },
+    })
+
+    expect(await screen.findByLabelText('Party size')).toHaveProp('value', '1')
+    expect(screen.getByLabelText('Maximum green fee')).toHaveProp('value', '175')
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Ocean views')
   })
 
   it('populates destination with home region when tapping "Use home region"', async () => {

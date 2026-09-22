@@ -92,15 +92,15 @@ export default function Planner() {
           const difficulty = profile.difficulty ?? 'any'
           setInput((prev) => ({
             ...prev,
-            party_size: partySize,
-            max_green_fee: maxFee,
-            access,
-            difficulty,
-            transportation: transport,
-            must_haves: prefs,
+            party_size: prev.party_size === initialInput.party_size ? partySize : prev.party_size,
+            max_green_fee: prev.max_green_fee === initialInput.max_green_fee ? maxFee : prev.max_green_fee,
+            access: prev.access === initialInput.access ? access : prev.access,
+            difficulty: prev.difficulty === initialInput.difficulty ? difficulty : prev.difficulty,
+            transportation: prev.transportation === initialInput.transportation ? transport : prev.transportation,
+            must_haves: prev.must_haves.length === 0 ? prefs : prev.must_haves,
           }))
           if (prefs.length > 0) {
-            setMustHaveText(prefs.join(', '))
+            setMustHaveText((prev) => (prev === '' ? prefs.join(', ') : prev))
           }
         }
       }
@@ -249,7 +249,7 @@ export default function Planner() {
       {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading trips" color={colors.pine} /></View> : null}
       {error ? <View style={styles.errorBox}><Text accessibilityRole="alert" style={styles.error}>{error}</Text>{loading ? null : <Pressable accessibilityRole="button" onPress={() => void load()}><Text style={styles.link}>Retry</Text></Pressable>}</View> : null}
 
-      {!plan || refining ? <>
+      {!loading && (!plan || refining) ? <>
         <SectionTitle title={plan ? 'REFINE TRIP' : 'PLAN A TRIP'} />
         <Field label="Trip name" value={input.title} onChangeText={(title) => setInput({ ...input, title })} placeholder="Monterey weekend" />
         <Field label="Destination or regions" value={regionText} onChangeText={setRegionText} placeholder={homeRegion ? `e.g. ${homeRegion}` : "Monterey, CA; Santa Cruz, CA"} help="The destination determines the geographic origin. Separate multiple regions with a semicolon." />
@@ -366,7 +366,7 @@ function aiResultCopy(aiGeneration: AIGolfPlan): { label: string; note: string |
 }
 
 function FilterChip({ label, active = false, onPress }: { label: string; active?: boolean; onPress?: () => void }) {
-  return <Pressable accessibilityRole={onPress ? 'button' : undefined} onPress={onPress} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text></Pressable>
+  return <Pressable accessibilityRole={onPress ? 'button' : undefined} accessibilityState={{ selected: active }} onPress={onPress} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text></Pressable>
 }
 function capitalize(value: string) { return value.charAt(0).toUpperCase() + value.slice(1) }
 function Field({ label, help, ...props }: { label: string; help?: string } & React.ComponentProps<typeof TextInput>) { return <View style={styles.fieldWrap}><Text style={styles.label}>{label}</Text><TextInput accessibilityLabel={label} placeholderTextColor={colors.muted} style={styles.field} {...props} />{help ? <Text style={styles.help}>{help}</Text> : null}</View> }
