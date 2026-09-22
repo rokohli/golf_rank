@@ -69,7 +69,7 @@ export default function Profile() {
         {username ? <Text style={styles.handle}>@{username}</Text> : null}
         {profile?.home_region ? <View style={styles.regionRow}><Feather name="map-pin" size={12} color={colors.muted} /><Text style={styles.region}>{profile.home_region}</Text></View> : null}
         {homeCourseName ? (
-          homeCourseId ? (
+          homeCourseId && /^\d+$/.test(String(homeCourseId).trim()) ? (
             <Pressable
               accessibilityLabel={`Home course: ${homeCourseName}`}
               accessibilityRole="button"

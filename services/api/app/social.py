@@ -5,6 +5,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
@@ -153,7 +154,10 @@ def _summary(session: Session, user: User) -> UserSummaryOut:
     following_count = session.scalar(
         select(func.count(Follow.id)).where(Follow.follower_id == user.id)
     ) or 0
-    return _summary_out(user, preferences, profile, follower_count, following_count)
+    onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+    raw_home_course_id = onboarding.get("home_course_id")
+    resolved_courses = resolve_courses_optional(session, [raw_home_course_id]) if raw_home_course_id else {}
+    return _summary_out(user, preferences, profile, follower_count, following_count, resolved_courses)
 
 
 def _summary_out(
@@ -162,18 +166,22 @@ def _summary_out(
     profile: Profile | None,
     follower_count: int,
     following_count: int,
+    resolved_courses: dict[Any, Course] | None = None,
 ) -> UserSummaryOut:
     onboarding = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     first_name = onboarding.get("first_name")
     last_name = onboarding.get("last_name")
     display_name = " ".join(item for item in (first_name, last_name) if item).strip()
     username = profile.username if profile and profile.username else onboarding.get("username")
+    raw_home_course_id = onboarding.get("home_course_id")
+    resolved_course = resolved_courses.get(raw_home_course_id) if (resolved_courses and raw_home_course_id) else None
+    canonical_home_course_id = str(resolved_course.id) if resolved_course else (str(raw_home_course_id) if raw_home_course_id else None)
     return UserSummaryOut(
         id=user.id,
         username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
-        home_course_id=onboarding.get("home_course_id") or None,
+        home_course_id=canonical_home_course_id,
         home_course_name=onboarding.get("home_course_search") or None,
         follower_count=follower_count,
         following_count=following_count,
@@ -199,6 +207,13 @@ def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut
         .where(Follow.follower_id.in_(user_ids))
         .group_by(Follow.follower_id)
     ).all())
+    raw_course_ids = set()
+    for _, preferences, _ in rows:
+        ob = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
+        cid = ob.get("home_course_id")
+        if cid:
+            raw_course_ids.add(cid)
+    resolved_courses = resolve_courses_optional(session, raw_course_ids) if raw_course_ids else {}
     return {
         user.id: _summary_out(
             user,
@@ -206,6 +221,7 @@ def _summaries(session: Session, user_ids: set[int]) -> dict[int, UserSummaryOut
             profile,
             follower_counts.get(user.id, 0),
             following_counts.get(user.id, 0),
+            resolved_courses,
         )
         for user, preferences, profile in rows
     }

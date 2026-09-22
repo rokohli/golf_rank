@@ -82,7 +82,7 @@ const profile = {
   max_green_fee: 350,
   onboarding_data: {
     first_name: 'Rohan', last_name: 'Kohli', username: 'rohank', profile_photo_added: false,
-    home_course_id: 'pebble', home_course_search: 'Pebble Beach Golf Links', played_course_ids: [], favorite_wins: [], dream_course_ids: [], friend_search: '', preferences: ['Scenic views'], group_size: 'Foursome', budget: '$$$', travel_distance: '45 minutes', preferred_tee_time: 'Weekend mornings', transportation: 'Cart', notifications: true,
+    home_course_id: '7', home_course_search: 'Pebble Beach Golf Links', played_course_ids: [], favorite_wins: [], dream_course_ids: [], friend_search: '', preferences: ['Scenic views'], group_size: 'Foursome', budget: '$$$', travel_distance: '45 minutes', preferred_tee_time: 'Weekend mornings', transportation: 'Cart', notifications: true,
   },
 }
 
@@ -126,7 +126,7 @@ describe('profile experience', () => {
     expect(screen.getByText('+12')).toBeOnTheScreen()
 
     fireEvent.press(screen.getByRole('button', { name: 'Home course: Pebble Beach Golf Links' }))
-    expect(mockRouter.push).toHaveBeenCalledWith('/course/pebble')
+    expect(mockRouter.push).toHaveBeenCalledWith('/course/7')
     fireEvent.press(screen.getByRole('button', { name: 'Profile settings' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/settings')
     fireEvent.press(screen.getByRole('button', { name: 'Edit profile' }))

@@ -1589,5 +1589,16 @@ def test_suggested_users_reconciled_course_and_popularity_tie_breaker() -> None:
     assert "pv_player_3" in suggested_names
     assert suggested_names.index("pv_player_3") < suggested_names.index("pv_player_2")
 
+    # Nonnumeric source course identifier is canonicalized to numeric canonical ID
+    u4 = create_user("dev:pv-user-4", "pv_player_4", "pv-partner-1", "Pine Valley Alternate")
+    my_profile = client.get("/api/v1/me/profile", headers=u4).json()
+    assert my_profile["onboarding_data"]["home_course_id"] == str(canonical_id)
+
+    u4_info = client.get("/api/v1/users", headers=u1, params={"q": "pv_player_4"}).json()
+    assert u4_info[0]["home_course_id"] == str(canonical_id)
+    public_u4 = client.get(f"/api/v1/users/{u4_info[0]['id']}", headers=u1).json()
+    assert public_u4["home_course_id"] == str(canonical_id)
+
+
 
 

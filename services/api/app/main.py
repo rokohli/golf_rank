@@ -40,6 +40,7 @@ from .domain import (
     preload_round_visibility,
     require_course,
     require_user,
+    resolve_course_optional,
 )
 from .green_fee_suggestions import router as green_fee_suggestions_router
 from .models import (
@@ -265,6 +266,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             onboarding_data = payload.onboarding_data.model_dump() if payload.onboarding_data else None
             if onboarding_data is not None:
                 _assign_unique_username(session, profile, stored_user.id, onboarding_data["username"])
+                if onboarding_data.get("home_course_id"):
+                    resolved_course = resolve_course_optional(session, onboarding_data["home_course_id"])
+                    if resolved_course:
+                        onboarding_data["home_course_id"] = str(resolved_course.id)
             preferences.onboarding_data = onboarding_data
         session.add_all([profile, preferences])
         try:
@@ -334,12 +339,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preferences = session.get(OnboardingPreference, stored_user.id)
         if stored_profile is None or preferences is None:
             raise HTTPException(404, "Profile not found")
+        onboarding_data = dict(preferences.onboarding_data) if preferences.onboarding_data else None
+        if onboarding_data and onboarding_data.get("home_course_id"):
+            resolved_course = resolve_course_optional(session, onboarding_data["home_course_id"])
+            if resolved_course:
+                onboarding_data["home_course_id"] = str(resolved_course.id)
         return ProfileOut(
             home_region=stored_profile.home_region,
             max_green_fee=preferences.max_green_fee,
             difficulty=preferences.difficulty,
             access=preferences.access,
-            onboarding_data=preferences.onboarding_data,
+            onboarding_data=onboarding_data,
         )
 
     @app.get("/api/v1/me/admin", response_model=AdminAccessOut)

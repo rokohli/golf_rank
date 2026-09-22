@@ -174,7 +174,7 @@ export default function UserProfileScreen() {
           {profile.username ? <Text style={styles.handle}>@{profile.username}</Text> : null}
           {profile.home_region ? <View style={styles.regionRow}><Feather name="map-pin" size={12} color={colors.muted} /><Text style={styles.region}>{profile.home_region}</Text></View> : null}
           {profile.home_course_name ? (
-            profile.home_course_id ? (
+            profile.home_course_id && /^\d+$/.test(String(profile.home_course_id).trim()) ? (
               <Pressable
                 accessibilityLabel={`Home course: ${profile.home_course_name}`}
                 accessibilityRole="button"
