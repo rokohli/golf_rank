@@ -7,6 +7,7 @@ const mockCreatePlan = jest.fn()
 const mockDeletePlan = jest.fn()
 const mockGetPlan = jest.fn()
 const mockGetPlans = jest.fn()
+const mockGetProfile = jest.fn()
 const mockGenerateAIItinerary = jest.fn()
 const mockSavePlan = jest.fn()
 const mockUpdatePlan = jest.fn()
@@ -45,6 +46,7 @@ jest.mock('../../src/api/client', () => {
     deletePlan: (...args: unknown[]) => mockDeletePlan(...args),
     getPlan: (...args: unknown[]) => mockGetPlan(...args),
     getPlans: (...args: unknown[]) => mockGetPlans(...args),
+    getProfile: (...args: unknown[]) => mockGetProfile(...args),
     generateAIItinerary: (...args: unknown[]) => mockGenerateAIItinerary(...args),
     savePlan: (...args: unknown[]) => mockSavePlan(...args),
     updatePlan: (...args: unknown[]) => mockUpdatePlan(...args),
@@ -75,6 +77,7 @@ describe('trip planner', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockGetPlans.mockResolvedValue([])
+    mockGetProfile.mockResolvedValue(null)
     mockCreatePlan.mockResolvedValue(plan)
     mockSavePlan.mockResolvedValue({ ...plan, status: 'saved' })
     mockGenerateAIItinerary.mockResolvedValue({
@@ -240,5 +243,143 @@ describe('trip planner', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Organize itinerary with AI' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('AI trip planning has hit its usage limit for now. Please try again later.')
+  })
+
+  it('pre-populates party size, max green fee, access, difficulty, transportation, and preference tags from user profile', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Monterey, CA',
+      max_green_fee: 175,
+      difficulty: 'challenging',
+      access: 'public',
+      onboarding_data: {
+        group_size: 'Twosome',
+        transportation: 'Walking',
+        preferences: ['Scenic views', 'Walking friendly'],
+        budget: '$$$',
+      },
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    expect(screen.getByLabelText('Party size')).toHaveProp('value', '2')
+    expect(screen.getByLabelText('Maximum green fee')).toHaveProp('value', '175')
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Scenic views, Walking friendly')
+    expect(screen.getByLabelText('Destination or regions')).toHaveProp('placeholder', 'e.g. Monterey, CA')
+
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Pacific Grove Round')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Monterey, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+
+    await waitFor(() => expect(mockCreatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Pacific Grove Round',
+        party_size: 2,
+        max_green_fee: 175,
+        access: 'public',
+        difficulty: 'challenging',
+        transportation: 'walking',
+        must_haves: ['Scenic views', 'Walking friendly'],
+        regions: ['Monterey, CA'],
+      }),
+      expect.anything(),
+    ))
+  })
+
+  it('allows selecting and updating access, difficulty, and transportation chips', async () => {
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Private' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Beginner' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Cart' }))
+
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Desert Outing')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Palm Springs, CA')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+
+    await waitFor(() => expect(mockCreatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Desert Outing',
+        access: 'private',
+        difficulty: 'beginner',
+        transportation: 'cart',
+      }),
+      expect.anything(),
+    ))
+  })
+
+  it('populates destination with home region when tapping "Use home region"', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'San Diego, CA',
+      max_green_fee: 100,
+      difficulty: 'any',
+      access: 'any',
+      onboarding_data: { group_size: 'Foursome' },
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    const homeRegionButton = await screen.findByRole('button', { name: 'Use home region (San Diego, CA)' })
+    fireEvent.press(homeRegionButton)
+
+    expect(screen.getByLabelText('Destination or regions')).toHaveProp('value', 'San Diego, CA')
+
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Local Weekend')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+
+    await waitFor(() => expect(mockCreatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Local Weekend',
+        regions: ['San Diego, CA'],
+      }),
+      expect.anything(),
+    ))
+  })
+
+  it('allows toggling suggested must-have preference tags from profile', async () => {
+    mockGetProfile.mockResolvedValue({
+      home_region: 'Monterey, CA',
+      max_green_fee: 175,
+      difficulty: 'any',
+      access: 'any',
+      onboarding_data: {
+        preferences: ['Ocean views', 'Fast greens'],
+      },
+    })
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Ocean views, Fast greens')
+
+    fireEvent.press(screen.getByRole('button', { name: '✓ Ocean views' }))
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Fast greens')
+
+    fireEvent.press(screen.getByRole('button', { name: '+ Ocean views' }))
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Fast greens, Ocean views')
+  })
+
+  it('handles profile fetch failure gracefully and uses fallbacks', async () => {
+    mockGetProfile.mockRejectedValue(new Error('Network error'))
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    expect(screen.getByLabelText('Party size')).toHaveProp('value', '4')
+    expect(screen.getByLabelText('Maximum green fee')).toHaveProp('value', '')
+
+    fireEvent.changeText(screen.getByLabelText('Trip name'), 'Fallback Trip')
+    fireEvent.changeText(screen.getByLabelText('Destination or regions'), 'Scottsdale, AZ')
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+
+    await waitFor(() => expect(mockCreatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Fallback Trip',
+        party_size: 4,
+        max_green_fee: null,
+        access: 'any',
+        difficulty: 'any',
+        transportation: 'either',
+      }),
+      expect.anything(),
+    ))
   })
 })
