@@ -1652,6 +1652,36 @@ def test_unresolved_home_course_id_is_cleared() -> None:
     assert search_res[0]["home_course_name"] == "Ghost Course"
 
 
+def test_unresolved_home_course_does_not_award_affinity() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        u_main = User(provider_subject="dev:legacy-scorer-main")
+        u_fake_match = User(provider_subject="dev:legacy-scorer-cand")
+        u_region_match = User(provider_subject="dev:legacy-scorer-region")
+        session.add_all([u_main, u_fake_match, u_region_match])
+        session.flush()
+
+        session.add_all([
+            Profile(user_id=u_main.id, username="main_user", home_region="Austin, TX"),
+            Profile(user_id=u_fake_match.id, username="fake_course_user", home_region="Seattle, WA"),
+            Profile(user_id=u_region_match.id, username="region_match_user", home_region="Austin, TX"),
+            OnboardingPreference(user_id=u_main.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={"home_course_id": "unresolvable-course-999"}),
+            OnboardingPreference(user_id=u_fake_match.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={"home_course_id": "unresolvable-course-999"}),
+            OnboardingPreference(user_id=u_region_match.id, max_green_fee=500, difficulty="any", access="any", onboarding_data={}),
+        ])
+        session.commit()
+
+    headers_main = {"X-Development-Subject": "dev:legacy-scorer-main"}
+    suggestions = client.get("/api/v1/users/suggested", headers=headers_main).json()
+    suggested_usernames = [u["username"] for u in suggestions]
+    assert "region_match_user" in suggested_usernames
+    if "fake_course_user" in suggested_usernames:
+        assert suggested_usernames.index("region_match_user") < suggested_usernames.index("fake_course_user")
+
+
+
 
 
 

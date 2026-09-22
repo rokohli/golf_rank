@@ -558,7 +558,7 @@ def suggested_users(
                 my_canonical_id is not None
                 and cand_canonical_id is not None
                 and my_canonical_id == cand_canonical_id
-            ) or (str(cand_home_course_id).strip() == str(my_home_course_id).strip()):
+            ):
                 score += 100
 
         if my_home_region and cand_home_region:
