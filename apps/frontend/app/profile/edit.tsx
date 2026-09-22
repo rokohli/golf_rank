@@ -118,6 +118,39 @@ export default function EditProfile() {
 
     setSaving(true)
     setError(null)
+
+    let resolvedCourseId = homeCourseId
+    let resolvedCourseName = homeCourseSearch.trim()
+
+    if (resolvedCourseName) {
+      if (!resolvedCourseId) {
+        try {
+          const matches = await searchCourses({ q: resolvedCourseName, limit: 5 })
+          const normalized = resolvedCourseName.toLowerCase()
+          const exactMatch = matches.find((c) => c.name.toLowerCase() === normalized)
+          const fuzzyMatch = matches.find(
+            (c) => c.name.toLowerCase().includes(normalized) || normalized.includes(c.name.toLowerCase())
+          )
+          const target = exactMatch || (matches.length === 1 ? matches[0] : fuzzyMatch)
+          if (target) {
+            resolvedCourseId = String(target.id)
+            resolvedCourseName = target.name
+          } else {
+            setError('Please select your home course from the suggestions.')
+            setSaving(false)
+            return
+          }
+        } catch {
+          setError('Unable to verify home course. Please select a suggestion.')
+          setSaving(false)
+          return
+        }
+      }
+    } else {
+      resolvedCourseId = null
+      resolvedCourseName = ''
+    }
+
     try {
       const nextProfile: OnboardingPreferences = {
         ...profile,
@@ -128,8 +161,8 @@ export default function EditProfile() {
           last_name: normalizedLast,
           profile_photo_added: profile.onboarding_data.profile_photo_added || Boolean(pendingImageUri),
           username: normalizedUsername,
-          home_course_id: homeCourseId,
-          home_course_search: homeCourseSearch.trim(),
+          home_course_id: resolvedCourseId,
+          home_course_search: resolvedCourseName,
         },
       }
       await savePreferences(nextProfile, await getAuthHeaders())

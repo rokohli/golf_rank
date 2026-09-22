@@ -474,42 +474,91 @@ def suggested_users(
     my_onboarding = my_pref.onboarding_data if my_pref and my_pref.onboarding_data else {}
     my_home_course_id = my_onboarding.get("home_course_id")
     my_home_region = (my_profile.home_region if my_profile else "") or ""
-    my_region_tokens = [tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()]
+    my_region_components = {tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()}
 
-    candidates = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
-    if not candidates:
+    # Evaluate and score all eligible users before applying candidate limits
+    rows = session.execute(
+        select(User.id, Profile.home_region, OnboardingPreference.onboarding_data)
+        .select_from(User)
+        .outerjoin(Profile, Profile.user_id == User.id)
+        .outerjoin(OnboardingPreference, OnboardingPreference.user_id == User.id)
+        .where(User.id.not_in(excluded))
+    ).all()
+    if not rows:
         return []
 
-    user_ids = {u.id for u in candidates}
-    summaries = _summaries(session, user_ids)
+    scored_candidates: list[tuple[int, int]] = []
+    fallback_candidates: list[int] = []
 
-    scored: list[tuple[int, UserSearchResultOut]] = []
-    fallback: list[tuple[int, UserSearchResultOut]] = []
-    for u in candidates:
-        s = summaries.get(u.id)
+    for uid, cand_home_region, cand_onboarding_data in rows:
+        score = 0
+        cand_onboarding = cand_onboarding_data if isinstance(cand_onboarding_data, dict) else {}
+        cand_home_course_id = cand_onboarding.get("home_course_id")
+        if my_home_course_id and cand_home_course_id and str(cand_home_course_id) == str(my_home_course_id):
+            score += 100
+
+        if my_home_region and cand_home_region:
+            cand_region_norm = cand_home_region.casefold().strip()
+            if cand_region_norm == my_home_region.casefold().strip():
+                score += 50
+            else:
+                cand_components = {tok.strip().casefold() for tok in cand_home_region.split(",") if tok.strip()}
+                if cand_components & my_region_components:
+                    score += 25
+
+        if score > 0:
+            scored_candidates.append((score, uid))
+        else:
+            fallback_candidates.append(uid)
+
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+
+    selected_uids: list[int] = [uid for _, uid in scored_candidates[:25]]
+    needed = max(0, 10 - len(selected_uids))
+    if needed > 0 and fallback_candidates:
+        top_followed = session.scalars(
+            select(Follow.followed_id)
+            .where(Follow.followed_id.in_(fallback_candidates))
+            .group_by(Follow.followed_id)
+            .order_by(func.count(Follow.id).desc())
+            .limit(needed)
+        ).all()
+        selected_uids.extend(top_followed)
+        if len(selected_uids) < 10:
+            selected_set = set(selected_uids)
+            for f_uid in fallback_candidates:
+                if f_uid not in selected_set:
+                    selected_uids.append(f_uid)
+                    selected_set.add(f_uid)
+                    if len(selected_uids) >= 10:
+                        break
+
+    if not selected_uids:
+        return []
+
+    summaries = _summaries(session, set(selected_uids))
+    score_map = dict(scored_candidates)
+
+    scored_results: list[tuple[int, UserSearchResultOut]] = []
+    fallback_results: list[tuple[int, UserSearchResultOut]] = []
+
+    for uid in selected_uids:
+        s = summaries.get(uid)
         if not s:
             continue
-        score = 0
-        if my_home_course_id and s.home_course_id and str(s.home_course_id) == str(my_home_course_id):
-            score += 100
-        if my_home_region and s.home_region:
-            cand_region = s.home_region.casefold()
-            if cand_region == my_home_region.casefold():
-                score += 50
-            elif any(tok in cand_region for tok in my_region_tokens):
-                score += 25
+        base_score = score_map.get(uid, 0)
         res = UserSearchResultOut(**s.model_dump(), is_following=False)
-        if score > 0:
-            score += min(s.follower_count, 10)
-            scored.append((score, res))
+        if base_score > 0:
+            final_score = base_score + min(s.follower_count, 10)
+            scored_results.append((final_score, res))
         else:
-            fallback.append((s.follower_count, res))
+            fallback_results.append((s.follower_count, res))
 
-    scored.sort(key=lambda item: (item[0], item[1].follower_count), reverse=True)
-    results = [item[1] for item in scored[:20]]
+    scored_results.sort(key=lambda item: (item[0], item[1].follower_count), reverse=True)
+    results = [item[1] for item in scored_results[:20]]
     if len(results) < 10:
-        fallback.sort(key=lambda item: item[0], reverse=True)
-        for _, res in fallback:
+        fallback_results.sort(key=lambda item: item[0], reverse=True)
+        for _, res in fallback_results:
             if len(results) >= 10:
                 break
             results.append(res)

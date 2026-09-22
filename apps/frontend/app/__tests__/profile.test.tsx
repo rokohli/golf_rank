@@ -15,6 +15,7 @@ const mockSyncLinkedContacts = jest.fn()
 const mockGetLinkedContactStatus = jest.fn()
 const mockDeleteLinkedContacts = jest.fn()
 const mockDeleteAccount = jest.fn()
+const mockSearchCourses = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockUpdateUserProfile = jest.fn()
 const mockUpdateProfileImage = jest.fn()
@@ -54,6 +55,7 @@ jest.mock('../../src/api/client', () => ({
   syncLinkedContacts: (...args: unknown[]) => mockSyncLinkedContacts(...args),
   getLinkedContactStatus: (...args: unknown[]) => mockGetLinkedContactStatus(...args),
   deleteLinkedContacts: (...args: unknown[]) => mockDeleteLinkedContacts(...args),
+  searchCourses: (...args: unknown[]) => mockSearchCourses(...args),
 }))
 
 jest.mock('../../src/auth/AuthProvider', () => ({
@@ -136,6 +138,9 @@ describe('profile experience', () => {
   })
 
   it('updates Clerk identity and the saved profile from Edit profile', async () => {
+    mockSearchCourses.mockResolvedValueOnce([
+      { id: 2, name: 'Spyglass Hill Golf Course', region: 'Pebble Beach, CA' },
+    ])
     render(<EditProfile />)
 
     await screen.findByDisplayValue('Rohan')
@@ -148,10 +153,26 @@ describe('profile experience', () => {
       expect(mockUpdateUserProfile).toHaveBeenCalledWith({ firstName: 'Rowan', lastName: 'Kohli', username: 'rohank' })
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         home_region: 'Carmel, CA',
-        onboarding_data: expect.objectContaining({ first_name: 'Rowan', home_course_search: 'Spyglass Hill' }),
+        onboarding_data: expect.objectContaining({
+          first_name: 'Rowan',
+          home_course_id: '2',
+          home_course_search: 'Spyglass Hill Golf Course',
+        }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })
+  })
+
+  it('requires course selection when typed home course cannot be resolved', async () => {
+    mockSearchCourses.mockResolvedValueOnce([])
+    render(<EditProfile />)
+
+    await screen.findByDisplayValue('Rohan')
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Nonexistent Course XYZ')
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByText('Please select your home course from the suggestions.')
+    expect(mockSavePreferences).not.toHaveBeenCalled()
   })
 
   it('routes settings actions and confirms sign out', async () => {
