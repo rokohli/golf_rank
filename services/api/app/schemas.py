@@ -36,8 +36,8 @@ class OnboardingData(BaseModel):
     preferences: list[str] = Field(default_factory=list, max_length=50)
     group_size: Literal["Solo", "Twosome", "Foursome"] | None = None
     budget: Literal["$", "$$", "$$$", "$$$$"] | None = None
-    travel_distance: str = Field(max_length=120)
-    preferred_tee_time: str = Field(max_length=120)
+    travel_distance: str = Field(default="", max_length=120)
+    preferred_tee_time: str = Field(default="", max_length=120)
     transportation: Literal["Walking", "Cart", "Either"] | None = None
     notifications: bool | None = None
     default_round_visibility: Literal["private", "friends", "public"] = "friends"

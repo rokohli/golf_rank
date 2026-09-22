@@ -86,13 +86,13 @@ async function renderAtFriendsStep(props: Partial<Parameters<typeof OnboardingFo
   fireEvent.changeText(screen.getByLabelText('Home course'), 'Somewhere golfy')
   fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
-  expect(await screen.findByText('Which courses have you played?')).toBeOnTheScreen()
+  expect(await screen.findByText("Pick 2 courses you've played")).toBeOnTheScreen()
   fireEvent.press(screen.getByRole('button', { name: 'Skip for now' }))
 
   expect(await screen.findByText('What courses are on your bucket list?')).toBeOnTheScreen()
   fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
 
-  expect(await screen.findByText('Find your friends')).toBeOnTheScreen()
+  expect(await screen.findByText('Connect with friends')).toBeOnTheScreen()
   return { searchCourses, submit, onComplete }
 }
 
@@ -152,16 +152,13 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
 
-    fireEvent.press(screen.getByRole('button', { name: 'Scenic views' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Public courses' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
-
-    fireEvent.press(screen.getByRole('button', { name: 'Foursome' }))
-    fireEvent.press(screen.getByRole('button', { name: '$$$' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Cart' }))
-    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.press(screen.getByRole('button', { name: '$$$ $100 – $250' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with $$$' }))
 
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+    expect(await screen.findByText("You're all set!")).toBeOnTheScreen()
+    expect(screen.queryByText('AI recommendations ready')).toBeNull()
+    expect(screen.getByText('From your played history')).toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Go to My Profile' }))
 
     await waitFor(() => {
@@ -169,7 +166,7 @@ describe('OnboardingForm', () => {
         home_region: 'Santa Cruz, CA',
         max_green_fee: 175,
         difficulty: 'any',
-        access: 'public',
+        access: 'any',
         onboarding_data: expect.objectContaining({
           first_name: 'Rohan',
           last_name: 'Kohli',
@@ -177,10 +174,7 @@ describe('OnboardingForm', () => {
           home_course_id: '11',
           played_course_ids: ['12', '13'],
           favorite_wins: ['12'],
-          preferences: ['Scenic views', 'Public courses'],
-          group_size: 'Foursome',
           budget: '$$$',
-          transportation: 'Cart',
           notifications: false,
         }),
       })
@@ -271,7 +265,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Import Contacts' }))
 
     await waitFor(() => expect(linkContacts).toHaveBeenCalledWith(['friend@example.com']))
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
   })
 
   it('surfaces a permission error and stays on the friends step when contacts access is denied', async () => {
@@ -283,7 +277,7 @@ describe('OnboardingForm', () => {
 
     expect(await screen.findByText('Contacts permission is needed to find friends who join Fairway.')).toBeOnTheScreen()
     expect(linkContacts).not.toHaveBeenCalled()
-    expect(screen.getByText('Find your friends')).toBeOnTheScreen()
+    expect(screen.getByText('Connect with friends')).toBeOnTheScreen()
   })
 
   it('surfaces a sync failure without advancing past the friends step', async () => {
@@ -295,7 +289,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Import Contacts' }))
 
     expect(await screen.findByText('Unable to link contacts. Please try again.')).toBeOnTheScreen()
-    expect(screen.getByText('Find your friends')).toBeOnTheScreen()
+    expect(screen.getByText('Connect with friends')).toBeOnTheScreen()
   })
 
   it('treats a contact list with no email or phone as a successful, empty sync', async () => {
@@ -307,7 +301,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Import Contacts' }))
 
     await waitFor(() => expect(linkContacts).toHaveBeenCalledWith([]))
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
   })
 
   it('shares an invite and advances on success', async () => {
@@ -317,7 +311,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Invite Friends' }))
 
     await waitFor(() => expect(shareSpy).toHaveBeenCalledWith(expect.objectContaining({ message: expect.any(String) })))
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
     shareSpy.mockRestore()
   })
 
@@ -328,7 +322,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Invite Friends' }))
 
     expect(await screen.findByText('Sharing unavailable')).toBeOnTheScreen()
-    expect(screen.getByText('Find your friends')).toBeOnTheScreen()
+    expect(screen.getByText('Connect with friends')).toBeOnTheScreen()
     shareSpy.mockRestore()
   })
 
@@ -339,7 +333,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Invite Friends' }))
 
     await waitFor(() => expect(shareSpy).toHaveBeenCalled())
-    expect(screen.getByText('Find your friends')).toBeOnTheScreen()
+    expect(screen.getByText('Connect with friends')).toBeOnTheScreen()
     shareSpy.mockRestore()
   })
 
@@ -362,111 +356,109 @@ describe('OnboardingForm', () => {
       await Promise.resolve()
     })
 
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
-  })
-
-  it('searches golfers by username and follows one from the results', async () => {
-    jest.useFakeTimers()
-    const searchUsers = jest.fn().mockResolvedValue([alexKim])
-    const followUser = jest.fn().mockResolvedValue(undefined)
-
-    await renderAtFriendsStep({ searchUsers, followUser })
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'alex')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
-    })
-    await waitFor(() => expect(searchUsers).toHaveBeenCalledWith('alex'))
-
-    fireEvent.press(await screen.findByRole('button', { name: 'Follow Alex Kim' }))
-    await waitFor(() => expect(followUser).toHaveBeenCalledWith(1))
-    expect(await screen.findByRole('button', { name: 'Following Alex Kim' })).toBeOnTheScreen()
-
-    jest.useRealTimers()
-  })
-
-  it('shows an empty state when no golfers match the search', async () => {
-    jest.useFakeTimers()
-    const searchUsers = jest.fn().mockResolvedValue([])
-
-    await renderAtFriendsStep({ searchUsers })
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'nobody')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
-    })
-
-    expect(await screen.findByText('No golfers matched that search.')).toBeOnTheScreen()
-    jest.useRealTimers()
-  })
-
-  it('surfaces a search error instead of a silent empty list', async () => {
-    jest.useFakeTimers()
-    const searchUsers = jest.fn().mockRejectedValue(new Error('Unable to search golfers.'))
-
-    await renderAtFriendsStep({ searchUsers })
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'alex')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
-    })
-
-    expect(await screen.findByText('Unable to search golfers.')).toBeOnTheScreen()
-    jest.useRealTimers()
-  })
-
-  it('keeps the follow button actionable after a follow request fails', async () => {
-    jest.useFakeTimers()
-    const searchUsers = jest.fn().mockResolvedValue([alexKim])
-    const followUser = jest.fn().mockRejectedValue(new Error('Unable to follow this golfer. Please try again.'))
-
-    await renderAtFriendsStep({ searchUsers, followUser })
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'alex')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
-    })
-    fireEvent.press(await screen.findByRole('button', { name: 'Follow Alex Kim' }))
-
-    expect(await screen.findByText('Unable to follow this golfer. Please try again.')).toBeOnTheScreen()
-    expect(screen.getByRole('button', { name: 'Follow Alex Kim' })).toBeOnTheScreen()
-
-    jest.useRealTimers()
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
   })
 
   it('advances past the friends step with a plain Continue button', async () => {
     await renderAtFriendsStep()
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
   })
 
-  it('still shows Following after leaving and re-entering the friends step, because the search API reports the existing relationship', async () => {
+  it('clamps played courses to 2 and shows the count badge', async () => {
     jest.useFakeTimers()
-    const searchUsers = jest.fn().mockResolvedValue([alexKim])
-    const followUser = jest.fn().mockResolvedValue(undefined)
-
-    await renderAtFriendsStep({ searchUsers, followUser })
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'alex')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
+    const searchCourses = jest.fn(async (query: string) => {
+      const normalized = query.toLowerCase()
+      return [pasatiempo, pebble, spyglass].filter((course) => course.name.toLowerCase().includes(normalized))
     })
-    fireEvent.press(await screen.findByRole('button', { name: 'Follow Alex Kim' }))
-    await waitFor(() => expect(followUser).toHaveBeenCalledWith(1))
 
-    // Continue past this step (the friends-step component unmounts) and come
-    // back to it, simulating the reported bug: press Follow, then Continue,
-    // then search the same user again.
+    render(<OnboardingForm searchCourses={searchCourses} submit={jest.fn()} onComplete={jest.fn()} />)
+    expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('First Name'), 'Rohan')
+    fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
+    fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
-    expect(await screen.findByText('What matters most in a golf experience?')).toBeOnTheScreen()
-    fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
-    expect(await screen.findByText('Find your friends')).toBeOnTheScreen()
 
-    // The follow is now real backend state, so a fresh search reports it via
-    // is_following instead of relying on the (just-destroyed) local state.
-    searchUsers.mockResolvedValue([{ ...alexKim, is_following: true }])
-    fireEvent.changeText(screen.getByLabelText('Search usernames'), 'alex')
-    await act(async () => {
-      jest.advanceTimersByTime(300)
+    expect(await screen.findByText("What's your home course?")).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Somewhere')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText("Pick 2 courses you've played")).toBeOnTheScreen()
+    expect(screen.getByText('0 of 2 selected')).toBeOnTheScreen()
+
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Pas')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pasatiempo Golf Club Santa Cruz, CA' }))
+    expect(screen.getByText('1 of 2 selected')).toBeOnTheScreen()
+
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Peb')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pebble Beach Golf Links Monterey, CA' }))
+    expect(screen.getByText('2 of 2 selected ✓')).toBeOnTheScreen()
+
+    // Selecting a third replaces the second course, staying at 2
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Spy')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Spyglass Hill Golf Course Pebble Beach, CA' }))
+    expect(screen.getByText('2 of 2 selected ✓')).toBeOnTheScreen()
+
+    jest.useRealTimers()
+  })
+
+  it('allows selecting green fee budget tiers and advancing', async () => {
+    await renderAtFriendsStep()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: '$$ $50 – $100' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with $$' }))
+
+    expect(await screen.findByText('Stay in the loop')).toBeOnTheScreen()
+  })
+
+  it('displays contextual wishlist badge on the success screen when a dream course is present', async () => {
+    jest.useFakeTimers()
+    const searchCourses = jest.fn(async (query: string) => {
+      const normalized = query.toLowerCase()
+      return [pasatiempo, pebble, spyglass].filter((course) => course.name.toLowerCase().includes(normalized))
     })
 
-    expect(await screen.findByRole('button', { name: 'Following Alex Kim' })).toBeOnTheScreen()
+    render(<OnboardingForm searchCourses={searchCourses} submit={jest.fn()} onComplete={jest.fn()} />)
+    expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('First Name'), 'Rohan')
+    fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
+    fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText("What's your home course?")).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Somewhere')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    // Skip played
+    fireEvent.press(await screen.findByRole('button', { name: 'Skip for now' }))
+
+    // Pick dream course
+    expect(await screen.findByText('What courses are on your bucket list?')).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('Search dream courses'), 'Peb')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pebble Beach Golf Links Monterey, CA' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Save 1 dream courses' }))
+
+    // Skip contacts
+    expect(await screen.findByText('Connect with friends')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+    // Skip budget
+    expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+    // Skip notifications
+    expect(await screen.findByText('Stay in the loop')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByText("You're all set!")).toBeOnTheScreen()
+    expect(screen.getByText('First stop on your wishlist')).toBeOnTheScreen()
+    expect(screen.queryByText('AI recommendations ready')).toBeNull()
+
     jest.useRealTimers()
   })
 })
