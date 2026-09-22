@@ -175,7 +175,7 @@ def _summary_out(
     username = profile.username if profile and profile.username else onboarding.get("username")
     raw_home_course_id = onboarding.get("home_course_id")
     resolved_course = resolved_courses.get(raw_home_course_id) if (resolved_courses and raw_home_course_id) else None
-    canonical_home_course_id = str(resolved_course.id) if resolved_course else (str(raw_home_course_id) if raw_home_course_id else None)
+    canonical_home_course_id = str(resolved_course.id) if resolved_course else None
     return UserSummaryOut(
         id=user.id,
         username=username,

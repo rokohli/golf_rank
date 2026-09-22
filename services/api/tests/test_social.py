@@ -1401,6 +1401,17 @@ def test_home_course_search_and_suggestions() -> None:
     app = create_app(Settings())
     client = TestClient(app)
 
+    with app.state.session_factory() as session:
+        c_spy = Course(name="Spyglass Hill", region="Pebble Beach, CA", latitude=36.58, longitude=-121.96, source="manual", source_course_id="spyglass")
+        c_torrey = Course(name="Torrey Pines", region="La Jolla, CA", latitude=32.89, longitude=-117.25, source="manual", source_course_id="torrey")
+        c_bethpage = Course(name="Bethpage Black", region="Farmingdale, NY", latitude=40.74, longitude=-73.45, source="manual", source_course_id="bethpage")
+        session.add_all([c_spy, c_torrey, c_bethpage])
+        session.flush()
+        spy_id = str(c_spy.id)
+        torrey_id = str(c_torrey.id)
+        bethpage_id = str(c_bethpage.id)
+        session.commit()
+
     def create_golfer(subject: str, username: str, region: str, course_id: str, course_name: str) -> dict[str, str]:
         headers = {"X-Development-Subject": subject}
         res = client.put(
@@ -1425,10 +1436,10 @@ def test_home_course_search_and_suggestions() -> None:
         assert res.status_code == 200
         return headers
 
-    u1 = create_golfer("dev:user-spy-1", "spy_alex", "Monterey, CA", "101", "Spyglass Hill")
-    u2 = create_golfer("dev:user-spy-2", "spy_blake", "Pebble Beach, CA", "101", "Spyglass Hill")
-    u3 = create_golfer("dev:user-torrey", "torrey_chris", "Monterey, CA", "202", "Torrey Pines")
-    _u4 = create_golfer("dev:user-bethpage", "bethpage_dan", "Farmingdale, NY", "303", "Bethpage Black")
+    u1 = create_golfer("dev:user-spy-1", "spy_alex", "Monterey, CA", spy_id, "Spyglass Hill")
+    u2 = create_golfer("dev:user-spy-2", "spy_blake", "Pebble Beach, CA", spy_id, "Spyglass Hill")
+    u3 = create_golfer("dev:user-torrey", "torrey_chris", "Monterey, CA", torrey_id, "Torrey Pines")
+    _u4 = create_golfer("dev:user-bethpage", "bethpage_dan", "Farmingdale, NY", bethpage_id, "Bethpage Black")
 
     # 1. Search by home course name (excludes self for u1, finds both for third party u4)
     search_spy = client.get("/api/v1/users", headers=u1, params={"q": "Spyglass"}).json()
@@ -1445,7 +1456,7 @@ def test_home_course_search_and_suggestions() -> None:
     # 2. Public profile includes home course
     u2_id = [u["id"] for u in search_spy if u["username"] == "spy_blake"][0]
     profile_u2 = client.get(f"/api/v1/users/{u2_id}", headers=u1).json()
-    assert profile_u2["home_course_id"] == "101"
+    assert profile_u2["home_course_id"] == spy_id
     assert profile_u2["home_course_name"] == "Spyglass Hill"
 
     # 3. Suggested users prioritizes same home course, then same home region
@@ -1598,6 +1609,45 @@ def test_suggested_users_reconciled_course_and_popularity_tie_breaker() -> None:
     assert u4_info[0]["home_course_id"] == str(canonical_id)
     public_u4 = client.get(f"/api/v1/users/{u4_info[0]['id']}", headers=u1).json()
     assert public_u4["home_course_id"] == str(canonical_id)
+
+
+def test_unresolved_home_course_id_is_cleared() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+    headers = {"X-Development-Subject": "dev:ghost-user"}
+    res = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Ghost",
+                "last_name": "Golfer",
+                "username": "ghost_golfer",
+                "home_course_id": "9999999",  # Nonexistent course ID
+                "home_course_search": "Ghost Course",
+                "travel_distance": "Any",
+                "preferred_tee_time": "Morning",
+            },
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["onboarding_data"]["home_course_id"] is None
+    assert data["onboarding_data"]["home_course_search"] == "Ghost Course"
+
+    profile = client.get("/api/v1/me/profile", headers=headers).json()
+    assert profile["onboarding_data"]["home_course_id"] is None
+
+    headers_other = {"X-Development-Subject": "dev:other-viewer"}
+    search_res = client.get("/api/v1/users", headers=headers_other, params={"q": "ghost_golfer"}).json()
+    assert len(search_res) == 1
+    assert search_res[0]["home_course_id"] is None
+    assert search_res[0]["home_course_name"] == "Ghost Course"
+
 
 
 

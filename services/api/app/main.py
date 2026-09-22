@@ -268,8 +268,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _assign_unique_username(session, profile, stored_user.id, onboarding_data["username"])
                 if onboarding_data.get("home_course_id"):
                     resolved_course = resolve_course_optional(session, onboarding_data["home_course_id"])
-                    if resolved_course:
-                        onboarding_data["home_course_id"] = str(resolved_course.id)
+                    onboarding_data["home_course_id"] = str(resolved_course.id) if resolved_course else None
             preferences.onboarding_data = onboarding_data
         session.add_all([profile, preferences])
         try:
@@ -342,8 +341,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         onboarding_data = dict(preferences.onboarding_data) if preferences.onboarding_data else None
         if onboarding_data and onboarding_data.get("home_course_id"):
             resolved_course = resolve_course_optional(session, onboarding_data["home_course_id"])
-            if resolved_course:
-                onboarding_data["home_course_id"] = str(resolved_course.id)
+            onboarding_data["home_course_id"] = str(resolved_course.id) if resolved_course else None
         return ProfileOut(
             home_region=stored_profile.home_region,
             max_green_fee=preferences.max_green_fee,
