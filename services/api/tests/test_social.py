@@ -1508,3 +1508,86 @@ def test_home_course_search_and_suggestions() -> None:
         assert pat_item[0]["home_course_name"] is None
 
 
+def test_suggested_users_reconciled_course_and_popularity_tie_breaker() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        canonical = Course(
+            name="Pine Valley Golf Club",
+            region="Clementon, NJ",
+            latitude=39.79,
+            longitude=-74.97,
+            source="manual",
+            source_course_id="pine-valley-main",
+        )
+        session.add(canonical)
+        session.flush()
+        canonical_id = canonical.id
+
+        alias = Course(
+            name="Pine Valley Alternate",
+            region="Clementon, NJ",
+            latitude=39.79,
+            longitude=-74.97,
+            source="partner",
+            source_course_id="pv-partner-1",
+        )
+        session.add(alias)
+        session.flush()
+        alias_id = alias.id
+
+        session.add(
+            CourseReconciliation(
+                source="partner",
+                source_course_id="pv-partner-1",
+                canonical_course_id=canonical_id,
+                match_status="confirmed",
+            )
+        )
+        session.commit()
+
+    def create_user(subject: str, username: str, course_id: str | None, course_name: str | None) -> dict[str, str]:
+        headers = {"X-Development-Subject": subject}
+        res = client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": "New York, NY",
+                "max_green_fee": 500,
+                "difficulty": "any",
+                "access": "any",
+                "onboarding_data": {
+                    "first_name": username.capitalize(),
+                    "last_name": "Golfer",
+                    "username": username,
+                    "home_course_id": course_id,
+                    "home_course_search": course_name or "",
+                    "travel_distance": "Any",
+                    "preferred_tee_time": "Morning",
+                },
+            },
+        )
+        assert res.status_code == 200
+        return headers
+
+    u1 = create_user("dev:pv-user-1", "pv_player_1", str(canonical_id), "Pine Valley Golf Club")
+    u2 = create_user("dev:pv-user-2", "pv_player_2", str(alias_id), "Pine Valley Alternate")
+    u3 = create_user("dev:pv-user-3", "pv_player_3", str(alias_id), "Pine Valley Alternate")
+
+    u3_info = client.get("/api/v1/users", headers=u1, params={"q": "pv_player_3"}).json()
+    u3_id = u3_info[0]["id"]
+
+    follower_a = create_user("dev:pv-fan-a", "pv_fan_a", None, None)
+    follower_b = create_user("dev:pv-fan-b", "pv_fan_b", None, None)
+    client.put(f"/api/v1/me/follows/{u3_id}", headers=follower_a)
+    client.put(f"/api/v1/me/follows/{u3_id}", headers=follower_b)
+
+    suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    suggested_names = [u["username"] for u in suggestions]
+    assert "pv_player_2" in suggested_names
+    assert "pv_player_3" in suggested_names
+    assert suggested_names.index("pv_player_3") < suggested_names.index("pv_player_2")
+
+
+

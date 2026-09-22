@@ -54,7 +54,7 @@ from .schemas import (
     UserCourseVisitOut,
 )
 from .domain import blocked_ids as _blocked_ids
-from .domain import course_identity_ids, course_identity_ids_bulk
+from .domain import course_identity_ids, course_identity_ids_bulk, resolve_courses_optional
 from .domain import muted_ids as _muted_ids
 from .domain import notifications_enabled as _notifications_enabled
 
@@ -477,26 +477,69 @@ def suggested_users(
     my_region_tokens = [tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()]
     my_state = my_region_tokens[-1] if len(my_region_tokens) > 1 else None
 
+    follower_subq = (
+        select(Follow.followed_id, func.count(Follow.id).label("follower_count"))
+        .group_by(Follow.followed_id)
+        .subquery()
+    )
+
     # Evaluate and score all eligible users before applying candidate limits
     rows = session.execute(
-        select(User.id, Profile.home_region, OnboardingPreference.onboarding_data)
+        select(
+            User.id,
+            Profile.home_region,
+            OnboardingPreference.onboarding_data,
+            func.coalesce(follower_subq.c.follower_count, 0).label("follower_count"),
+        )
         .select_from(User)
         .outerjoin(Profile, Profile.user_id == User.id)
         .outerjoin(OnboardingPreference, OnboardingPreference.user_id == User.id)
+        .outerjoin(follower_subq, follower_subq.c.followed_id == User.id)
         .where(User.id.not_in(excluded))
     ).all()
     if not rows:
         return []
 
-    scored_candidates: list[tuple[int, int]] = []
-    fallback_candidates: list[int] = []
+    raw_course_ids = set()
+    if my_home_course_id:
+        raw_course_ids.add(my_home_course_id)
+    for _, _, cand_onboarding_data, _ in rows:
+        if isinstance(cand_onboarding_data, dict):
+            cid = cand_onboarding_data.get("home_course_id")
+            if cid:
+                raw_course_ids.add(cid)
 
-    for uid, cand_home_region, cand_onboarding_data in rows:
+    resolved_courses = resolve_courses_optional(session, raw_course_ids) if raw_course_ids else {}
+    my_course = (
+        resolved_courses.get(my_home_course_id)
+        or (resolved_courses.get(str(my_home_course_id)) if my_home_course_id is not None else None)
+        or (resolved_courses.get(int(my_home_course_id)) if str(my_home_course_id).isdigit() else None)
+    ) if my_home_course_id else None
+    my_canonical_id = my_course.id if my_course else None
+
+    scored_candidates: list[tuple[int, int, int]] = []
+    fallback_candidates: list[tuple[int, int]] = []
+
+    for uid, cand_home_region, cand_onboarding_data, raw_cnt in rows:
+        follower_count = int(raw_cnt or 0)
         score = 0
         cand_onboarding = cand_onboarding_data if isinstance(cand_onboarding_data, dict) else {}
         cand_home_course_id = cand_onboarding.get("home_course_id")
-        if my_home_course_id and cand_home_course_id and str(cand_home_course_id) == str(my_home_course_id):
-            score += 100
+
+        if my_home_course_id and cand_home_course_id:
+            cand_course = (
+                resolved_courses.get(cand_home_course_id)
+                or (resolved_courses.get(str(cand_home_course_id)) if cand_home_course_id is not None else None)
+                or (resolved_courses.get(int(cand_home_course_id)) if str(cand_home_course_id).isdigit() else None)
+            )
+            cand_canonical_id = cand_course.id if cand_course else None
+
+            if (
+                my_canonical_id is not None
+                and cand_canonical_id is not None
+                and my_canonical_id == cand_canonical_id
+            ) or (str(cand_home_course_id).strip() == str(my_home_course_id).strip()):
+                score += 100
 
         if my_home_region and cand_home_region:
             cand_region_norm = cand_home_region.casefold().strip()
@@ -509,39 +552,32 @@ def suggested_users(
                     score += 25
 
         if score > 0:
-            scored_candidates.append((score, uid))
+            scored_candidates.append((score, follower_count, uid))
         else:
-            fallback_candidates.append(uid)
+            fallback_candidates.append((follower_count, uid))
 
-    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+    # Rank by affinity score first, then popularity / follower count as the tie-breaker before truncating
+    scored_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    fallback_candidates.sort(key=lambda item: item[0], reverse=True)
 
-    selected_uids: list[int] = [uid for _, uid in scored_candidates[:25]]
+    selected_uids: list[int] = [uid for _, _, uid in scored_candidates[:25]]
     needed = max(0, 10 - len(selected_uids))
     if needed > 0 and fallback_candidates:
-        top_followed = session.scalars(
-            select(Follow.followed_id)
-            .where(Follow.followed_id.in_(fallback_candidates))
-            .group_by(Follow.followed_id)
-            .order_by(func.count(Follow.id).desc())
-            .limit(needed)
-        ).all()
-        selected_uids.extend(top_followed)
-        if len(selected_uids) < 10:
-            selected_set = set(selected_uids)
-            for f_uid in fallback_candidates:
-                if f_uid not in selected_set:
-                    selected_uids.append(f_uid)
-                    selected_set.add(f_uid)
-                    if len(selected_uids) >= 10:
-                        break
+        selected_set = set(selected_uids)
+        for _, f_uid in fallback_candidates:
+            if f_uid not in selected_set:
+                selected_uids.append(f_uid)
+                selected_set.add(f_uid)
+                if len(selected_uids) >= 10:
+                    break
 
     if not selected_uids:
         return []
 
     summaries = _summaries(session, set(selected_uids))
-    score_map = {uid: score for score, uid in scored_candidates}
+    score_map = {uid: score for score, _, uid in scored_candidates}
 
-    scored_results: list[tuple[int, UserSearchResultOut]] = []
+    scored_results: list[tuple[int, int, UserSearchResultOut]] = []
     fallback_results: list[tuple[int, UserSearchResultOut]] = []
 
     for uid in selected_uids:
@@ -552,12 +588,12 @@ def suggested_users(
         res = UserSearchResultOut(**s.model_dump(), is_following=False)
         if base_score > 0:
             final_score = base_score + min(s.follower_count, 10)
-            scored_results.append((final_score, res))
+            scored_results.append((final_score, s.follower_count, res))
         else:
             fallback_results.append((s.follower_count, res))
 
-    scored_results.sort(key=lambda item: (item[0], item[1].follower_count), reverse=True)
-    results = [item[1] for item in scored_results[:20]]
+    scored_results.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    results = [item[2] for item in scored_results[:20]]
     if len(results) < 10:
         fallback_results.sort(key=lambda item: item[0], reverse=True)
         for _, res in fallback_results:
