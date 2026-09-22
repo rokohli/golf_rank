@@ -6,6 +6,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 import { getCourseRegions, getProfile, searchCourses, submitCourseCandidate } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
+import { CourseRowSkeleton } from '../src/components/Skeleton'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { DEFAULT_COURSE_REGION, resolveCurrentLocation } from '../src/location/currentRegion'
 import { loadSavedRegion, saveRegion } from '../src/location/regionPreference'
@@ -190,7 +191,13 @@ export default function Discover() {
       <View style={styles.chips}><FilterChip label={coordinates ? `Within ${radiusMiles} mi` : region} active /><FilterChip label={`${activeFilterCount} filters`} active={activeFilterCount > 0} onPress={() => setFiltersOpen(true)} />{activeFilterCount || query ? <FilterChip label="Clear all" onPress={clearFilters} /> : null}</View>
 
       <SectionTitle title={searchActive ? 'SEARCH RESULTS' : `${region} COURSES`} />
-      {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading courses" color={colors.pine} /><Text style={styles.muted}>Searching the catalog…</Text></View> : null}
+      {loading && courses.length === 0 ? (
+        <View accessibilityLabel="Loading courses">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <CourseRowSkeleton key={i} hasIndex />
+          ))}
+        </View>
+      ) : null}
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void loadCourses()} style={styles.primary}><Text style={styles.primaryText}>Try again</Text></Pressable></View> : null}
       {!loading && !error && !courses.length ? <View style={styles.state}><Feather name="map" size={25} color={colors.muted} /><Text style={styles.emptyTitle}>{query || activeFilterCount ? 'No matching courses' : 'The catalog is empty'}</Text><Text style={styles.muted}>{query || activeFilterCount ? 'Try widening your region or clearing a filter.' : `Add catalog data for ${region} to make courses discoverable.`}</Text></View> : null}
       <View>{courses.map((course, index) => <CourseRow key={course.id} course={toDisplayCourse(course, index)} index={index + 1} showReviewCount={false} onPress={() => router.push(`/course/${course.id}` as never)} />)}</View>

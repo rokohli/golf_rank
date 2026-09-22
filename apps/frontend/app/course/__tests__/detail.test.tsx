@@ -713,6 +713,15 @@ describe('course detail ratings', () => {
     expect(screen.queryByText('Pebble Beach Golf Links')).toBeNull()
   })
 
+  it('renders skeleton loader and functional back button while course is loading', async () => {
+    mockGetCourse.mockReturnValue(new Promise(() => {}))
+    render(<CourseDetail />)
+    expect(screen.getByLabelText('Loading course')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
+    expect(mockRouter.back).toHaveBeenCalled()
+    await waitFor(() => expect(mockGetSavedLists).toHaveBeenCalled())
+  })
+
   it('offers retry when the public course fails to load', async () => {
     mockGetCourse.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce(course)
 

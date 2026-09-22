@@ -8,6 +8,7 @@ import { createSavedList, getCourse, getCourseRating, getFriendsCourseThoughts, 
 import { MAX_PHOTOS_PER_ROUND, pickCoursePhotoAsset, uploadCoursePhoto } from '../../src/api/coursePhotoUpload'
 import { ApiHeaders, useAuthHeaders } from '../../src/auth/useAuthToken'
 import { CourseVisual, IconButton, ProductScreen } from '../../src/components/ProductUI'
+import { CourseDetailSkeleton } from '../../src/components/Skeleton'
 import { PhotoViewer } from '../../src/components/PhotoViewer'
 import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
@@ -329,16 +330,21 @@ export default function CourseDetail() {
   }, [refreshFriendsThoughts, refreshPublicCourse, refreshRating, refreshSavedState]))
 
   if (!course) {
+    if (courseError) {
+      return <>
+        <Stack.Screen options={{ headerShown: false }} />
+        <ProductScreen>
+          <IconButton icon="arrow-left" label="Go back" onPress={() => router.back()} />
+          <Text accessibilityRole="alert" style={styles.loadingText}>
+            {courseError}
+          </Text>
+          <Pressable accessibilityRole="button" onPress={() => void loadCourse()} style={styles.retryButton}><Text style={styles.retryText}>Retry</Text></Pressable>
+        </ProductScreen>
+      </>
+    }
     return <>
       <Stack.Screen options={{ headerShown: false }} />
-      <ProductScreen>
-        <IconButton icon="arrow-left" label="Go back" onPress={() => router.back()} />
-        {courseLoading ? <ActivityIndicator accessibilityLabel="Loading course" color={colors.pine} /> : null}
-        <Text accessibilityRole={courseError ? 'alert' : undefined} style={styles.loadingText}>
-          {courseError ?? 'Loading course...'}
-        </Text>
-        {courseError ? <Pressable accessibilityRole="button" onPress={() => void loadCourse()} style={styles.retryButton}><Text style={styles.retryText}>Retry</Text></Pressable> : null}
-      </ProductScreen>
+      <CourseDetailSkeleton topInset={insets.top} onBack={() => router.back()} />
     </>
   }
 

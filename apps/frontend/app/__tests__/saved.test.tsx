@@ -35,6 +35,12 @@ jest.mock('../../src/auth/useAuthToken', () => ({
 describe('saved courses', () => {
   beforeEach(() => jest.clearAllMocks())
 
+  it('renders skeleton loader while saved lists are loading', () => {
+    mockGetSavedLists.mockReturnValue(new Promise(() => {}))
+    render(<Saved />)
+    expect(screen.getByLabelText('Loading saved courses')).toBeOnTheScreen()
+  })
+
   it('renders persisted courses rather than demo catalog content', async () => {
     mockGetSavedLists.mockResolvedValue([{
       id: 12,

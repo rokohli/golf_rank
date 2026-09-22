@@ -1,10 +1,11 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { getSavedLists } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseCard, ProductScreen, ScreenHeader, Segmented } from '../src/components/ProductUI'
+import { CourseCardSkeleton } from '../src/components/Skeleton'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { Course, SavedList } from '../src/types'
 import { colors } from '../src/ui/theme'
@@ -46,7 +47,15 @@ export default function Saved() {
     <ProductScreen>
       <ScreenHeader title="Saved Courses" onBack={() => router.back()} />
       {options.length > 1 && selected ? <Segmented options={options} selected={selected.name} onSelect={(name) => setSelectedId(lists.find((list) => list.name === name)?.id ?? null)} /> : null}
-      {loading ? <ActivityIndicator accessibilityLabel="Loading saved courses" color={colors.pine} /> : null}
+      {loading && lists.length === 0 ? (
+        <View accessibilityLabel="Loading saved courses" style={styles.grid}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <View key={i} style={styles.item}>
+              <CourseCardSkeleton compact />
+            </View>
+          ))}
+        </View>
+      ) : null}
       {error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
       {!loading && !error && !selected ? <Text style={styles.empty}>Courses you save will appear here.</Text> : null}
       {!loading && !error && selected && selected.courses.length === 0 ? <Text style={styles.empty}>No courses saved to {selected.name} yet.</Text> : null}

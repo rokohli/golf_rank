@@ -107,6 +107,12 @@ describe('profile experience', () => {
     mockLaunchImageLibraryAsync.mockResolvedValue({ canceled: true, assets: [] })
   })
 
+  it('renders skeleton loader while profile is loading', () => {
+    mockGetRoundSummary.mockReturnValue(new Promise(() => {}))
+    render(<Profile />)
+    expect(screen.getByLabelText('Loading profile')).toBeOnTheScreen()
+  })
+
   it('renders the compact profile and opens its primary destinations', async () => {
     render(<Profile />)
 

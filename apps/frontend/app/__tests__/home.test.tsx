@@ -53,6 +53,12 @@ describe('Home social feed', () => {
     mockSetReaction.mockResolvedValue({ reaction_count: 1, viewer_reacted: true })
   })
 
+  it('renders skeleton loader while feed is loading', () => {
+    mockGetFeed.mockReturnValue(new Promise(() => {}))
+    render(<Home />)
+    expect(screen.getByLabelText('Loading friends activity')).toBeOnTheScreen()
+  })
+
   it('renders real activity and activates the reaction control', async () => {
     render(<Home />)
     expect(screen.getByText('RK')).toBeOnTheScreen()
