@@ -267,6 +267,24 @@ def _notify_tagged_companions(
     return created
 
 
+def _is_onboarding_played_course(session: Session, user_id: int, course_id: int) -> bool:
+    pref = session.get(OnboardingPreference, user_id)
+    if not pref or not pref.onboarding_data or not isinstance(pref.onboarding_data, dict):
+        return False
+    played_ids = pref.onboarding_data.get("played_course_ids") or []
+    if not isinstance(played_ids, list):
+        return False
+    try:
+        target_canonical_id = require_course(session, course_id).id
+    except HTTPException:
+        target_canonical_id = course_id
+    for raw_id in played_ids:
+        course = resolve_course_optional(session, raw_id)
+        if course is not None and course.id == target_canonical_id:
+            return True
+    return False
+
+
 def _refresh_course_state(session: Session, user_id: int, course_id: int) -> None:
     count, last_played = session.execute(
         select(func.count(Round.id), func.max(Round.played_on)).where(
@@ -282,7 +300,7 @@ def _refresh_course_state(session: Session, user_id: int, course_id: int) -> Non
     if state is None:
         state = UserCourseState(user_id=user_id, course_id=course_id)
     state.round_count = count
-    state.has_played = count > 0
+    state.has_played = (count > 0) or _is_onboarding_played_course(session, user_id, course_id)
     state.last_played_on = last_played
     session.add(state)
 

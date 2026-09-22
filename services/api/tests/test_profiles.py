@@ -339,3 +339,73 @@ def test_resolve_course_optional_disambiguates_and_rejects_ambiguity() -> None:
         assert resolve_course_optional(session, "nonexistent-id-xyz") is None
 
 
+def test_onboarding_played_course_preserved_across_round_deletion() -> None:
+    client = TestClient(create_app())
+    headers = {"X-Development-Subject": "dev:onboarding-round-delete"}
+    # 1. Complete onboarding with course 1 as played
+    response = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=headers,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 175,
+            "difficulty": "intermediate",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Rory",
+                "last_name": "Golfer",
+                "username": "rorygolf",
+                "home_course_id": "1",
+                "home_course_search": "Pebble Beach",
+                "played_course_ids": ["1"],
+                "favorite_wins": [],
+                "dream_course_ids": [],
+                "travel_distance": "Up to 45 minutes",
+                "preferred_tee_time": "Weekend mornings",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    # Course 1 is recorded as played with round_count=0
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert any(s["course"]["id"] == 1 and s["has_played"] and s["round_count"] == 0 for s in states)
+
+    # 2. Log a round for course 1
+    logged_1 = client.post(
+        "/api/v1/me/rounds",
+        headers=headers,
+        json={"course_id": 1, "played_on": "2026-07-01", "score": 72, "visibility": "public"},
+    )
+    assert logged_1.status_code == 201
+    round_1_id = logged_1.json()["id"]
+
+    # Course 1 now has round_count=1
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert any(s["course"]["id"] == 1 and s["has_played"] and s["round_count"] == 1 for s in states)
+
+    # 3. Log and delete a round for course 2 (not in onboarding)
+    logged_2 = client.post(
+        "/api/v1/me/rounds",
+        headers=headers,
+        json={"course_id": 2, "played_on": "2026-07-02", "score": 75, "visibility": "public"},
+    )
+    assert logged_2.status_code == 201
+    round_2_id = logged_2.json()["id"]
+
+    deleted_2 = client.delete(f"/api/v1/me/rounds/{round_2_id}", headers=headers)
+    assert deleted_2.status_code == 204
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    assert not any(s["course"]["id"] == 2 and s["has_played"] for s in states)
+
+    # 4. Delete the only round for course 1 (which WAS in onboarding)
+    deleted_1 = client.delete(f"/api/v1/me/rounds/{round_1_id}", headers=headers)
+    assert deleted_1.status_code == 204
+
+    # Course 1 MUST still be in played history with has_played=True, round_count=0
+    states = client.get("/api/v1/me/course-states", headers=headers).json()
+    course_1_state = next(s for s in states if s["course"]["id"] == 1)
+    assert course_1_state["has_played"] is True
+    assert course_1_state["round_count"] == 0
+
+
