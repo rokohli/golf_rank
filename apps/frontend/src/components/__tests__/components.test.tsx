@@ -406,6 +406,81 @@ describe('OnboardingForm', () => {
     jest.useRealTimers()
   })
 
+  it('clears a stale ranking win when the played-course pair changes after ranking', async () => {
+    jest.useFakeTimers()
+    const submit = jest.fn().mockResolvedValue(undefined)
+    const onComplete = jest.fn()
+    const searchCourses = jest.fn(async (query: string) => {
+      const normalized = query.toLowerCase()
+      return [pasatiempo, pebble, spyglass].filter((course) => course.name.toLowerCase().includes(normalized))
+    })
+
+    render(<OnboardingForm searchCourses={searchCourses} submit={submit} onComplete={onComplete} />)
+
+    expect(await screen.findByText('Build Your Profile')).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('First Name'), 'Rohan')
+    fireEvent.changeText(screen.getByLabelText('Last Name'), 'Kohli')
+    fireEvent.changeText(screen.getByLabelText('Username'), 'rohank')
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByText("What's your home course?")).toBeOnTheScreen()
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Pas')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pasatiempo Golf Club Santa Cruz, CA' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Peb')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pebble Beach Golf Links Monterey, CA' }))
+
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Spy')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Spyglass Hill Golf Course Pebble Beach, CA' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with 2 selected' }))
+
+    expect(await screen.findByText('Which course did you enjoy more?')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: /Choose Spyglass Hill Golf Course/ }))
+
+    // Navigate back to the played-courses step and swap out the winner for a new course.
+    expect(await screen.findByText('What courses are on your bucket list?')).toBeOnTheScreen()
+    fireEvent.press(screen.getByLabelText('Go back'))
+    expect(await screen.findByText('Which course did you enjoy more?')).toBeOnTheScreen()
+    fireEvent.press(screen.getByLabelText('Go back'))
+    expect(await screen.findByText("Pick 2 courses you've played")).toBeOnTheScreen()
+
+    // Pebble and Spyglass are already selected; picking a third course (Pasatiempo)
+    // replaces Spyglass, changing the pair that was just ranked.
+    fireEvent.changeText(screen.getByLabelText('Search'), 'Pas')
+    await act(async () => { jest.advanceTimersByTime(300) })
+    fireEvent.press(await screen.findByRole('button', { name: 'Pasatiempo Golf Club Santa Cruz, CA' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with 2 selected' }))
+
+    // The new pair (Pebble vs. Pasatiempo) has never been ranked, so skip it.
+    expect(await screen.findByText('Which course did you enjoy more?')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.press(screen.getByRole('button', { name: '$$$ $100 – $250' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue with $$$' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByText("You're all set!")).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Go to My Profile' }))
+
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          onboarding_data: expect.objectContaining({
+            played_course_ids: ['12', '11'],
+            favorite_wins: [],
+          }),
+        }),
+      )
+    })
+
+    jest.useRealTimers()
+  })
+
   it('allows selecting green fee budget tiers and advancing', async () => {
     await renderAtFriendsStep()
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))

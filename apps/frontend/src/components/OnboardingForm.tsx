@@ -418,9 +418,13 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
         } else {
           nextPlayed = [selected[0], course.id]
         }
+        const pairChanged = nextPlayed.length !== selected.length || nextPlayed.some((id, index) => id !== selected[index])
         return {
           ...current,
           playedCourseIds: nextPlayed,
+          // The matchup pair is derived from playedCourseIds, so a stale win
+          // from a since-replaced pair must not be reused for the new pair.
+          favoriteWins: pairChanged ? [] : current.favoriteWins,
         }
       })
       return
