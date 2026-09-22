@@ -162,7 +162,7 @@ function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fa
 
 function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   const homeCourse = draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null
-  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 650 : 175
+  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 650 : 250
   const difficulty: Difficulty = draft.preferences?.includes('Beginner friendly')
     ? 'beginner'
     : draft.preferences?.includes('Tough layouts') || draft.preferences?.includes('Championship courses')
@@ -254,6 +254,27 @@ function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, qu
   return { results, searching, searchError }
 }
 
+function migrateDraftStepIndex(parsedStepIndex: number, draftVersion: number | undefined): number {
+  if (draftVersion && draftVersion >= 5) {
+    return Math.min(parsedStepIndex, steps.length - 1)
+  }
+  // Drafts from version 4 had 10 steps:
+  // ['profile', 'home', 'played', 'rank', 'dreams', 'friends', 'preferences', 'planning', 'notifications', 'success']
+  // Streamlined flow has 9 steps:
+  // ['profile', 'home', 'played', 'rank', 'dreams', 'contacts', 'budget', 'notifications', 'success']
+  const v4StepNames = ['profile', 'home', 'played', 'rank', 'dreams', 'friends', 'preferences', 'planning', 'notifications', 'success']
+  const effectiveIndex = draftVersion && draftVersion >= 2 ? parsedStepIndex : Math.max(parsedStepIndex - 2, 0)
+  const stepName = v4StepNames[effectiveIndex]
+  if (stepName === 'friends') return steps.indexOf('contacts')
+  if (stepName === 'preferences' || stepName === 'planning') return steps.indexOf('budget')
+  if (stepName === 'notifications') return steps.indexOf('notifications')
+  if (stepName === 'success') return steps.indexOf('success')
+  if (stepName && steps.indexOf(stepName as StepKey) !== -1) {
+    return steps.indexOf(stepName as StepKey)
+  }
+  return Math.min(effectiveIndex, steps.length - 1)
+}
+
 export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser, requestPushPermission }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
@@ -298,8 +319,8 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
           homeCourseId,
         })
         if (typeof parsed.stepIndex === 'number') {
-          const migratedStepIndex = parsed.draftVersion && parsed.draftVersion >= 2 ? parsed.stepIndex : Math.max(parsed.stepIndex - 2, 0)
-          setStepIndex(Math.min(migratedStepIndex, steps.length - 1))
+          const migratedStepIndex = migrateDraftStepIndex(parsed.stepIndex, parsed.draftVersion)
+          setStepIndex(migratedStepIndex)
         }
         if (typeof parsed.rankIndex === 'number') setRankIndex(parsed.rankIndex)
       })
@@ -322,7 +343,7 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
 
   useEffect(() => {
     if (!hydrated) return
-    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 4, rankIndex, stepIndex })).catch(() => undefined)
+    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 5, rankIndex, stepIndex })).catch(() => undefined)
   }, [draft, hydrated, rankIndex, stepIndex])
 
   const playedCourses = useMemo(

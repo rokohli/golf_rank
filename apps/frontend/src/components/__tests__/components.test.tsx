@@ -164,7 +164,7 @@ describe('OnboardingForm', () => {
     await waitFor(() => {
       expect(submit).toHaveBeenCalledWith({
         home_region: 'Santa Cruz, CA',
-        max_green_fee: 175,
+        max_green_fee: 250,
         difficulty: 'any',
         access: 'any',
         onboarding_data: expect.objectContaining({
