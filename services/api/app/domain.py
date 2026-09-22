@@ -1,5 +1,7 @@
+from collections import defaultdict
 from datetime import datetime, timezone
 import hashlib
+from typing import Any, Iterable
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -166,73 +168,151 @@ def require_courses(session: Session, course_ids) -> dict[int, Course]:
     return result
 
 
+def resolve_courses_optional(
+    session: Session, raw_ids: Iterable[Any]
+) -> dict[Any, Course]:
+    """Bulk resolve a collection of raw course identifiers to their canonical Course objects.
+
+    Supports:
+    - Integer database IDs (e.g. 123, "123")
+    - Source-qualified IDs ('source:source_course_id' or 'source/source_course_id')
+    - Unique or unanimously reconciled source course IDs (e.g. 'pebble-beach')
+
+    Executes in a fixed small number of queries (typically 2-4) regardless of input size,
+    avoiding N+1 queries during bulk onboarding operations.
+    """
+    raw_list = list(raw_ids)
+    if not raw_list:
+        return {}
+
+    parsed_items: list[tuple[Any, str, int | None, tuple[str, str] | None, tuple[str, str] | None]] = []
+    for raw in raw_list:
+        if raw is None:
+            continue
+        raw_str = str(raw).strip()
+        if not raw_str:
+            continue
+
+        parsed_id: int | None = None
+        try:
+            val = int(raw_str)
+            if val > 0:
+                parsed_id = val
+        except (TypeError, ValueError):
+            pass
+
+        colon_prefix: tuple[str, str] | None = None
+        if ":" in raw_str:
+            p, s = raw_str.split(":", 1)
+            p, s = p.strip(), s.strip()
+            if p and s:
+                colon_prefix = (p, s)
+
+        slash_prefix: tuple[str, str] | None = None
+        if "/" in raw_str:
+            p, s = raw_str.split("/", 1)
+            p, s = p.strip(), s.strip()
+            if p and s:
+                slash_prefix = (p, s)
+
+        parsed_items.append((raw, raw_str, parsed_id, colon_prefix, slash_prefix))
+
+    if not parsed_items:
+        return {}
+
+    raw_initial_course: dict[Any, Course] = {}
+    raw_ambiguous_matches: dict[Any, list[Course]] = {}
+
+    # Step 1: Integer primary key lookups
+    candidate_ints = {p_id for _, _, p_id, _, _ in parsed_items if p_id is not None}
+    if candidate_ints:
+        courses_by_id = {
+            c.id: c
+            for c in session.scalars(select(Course).where(Course.id.in_(candidate_ints))).all()
+        }
+        for raw, _, p_id, _, _ in parsed_items:
+            if p_id is not None and p_id in courses_by_id:
+                raw_initial_course[raw] = courses_by_id[p_id]
+
+    # Step 2: Source-prefixed lookups
+    unresolved_items = [item for item in parsed_items if item[0] not in raw_initial_course]
+    prefix_keys: set[tuple[str, str]] = set()
+    for _, _, _, colon_prefix, slash_prefix in unresolved_items:
+        if colon_prefix is not None:
+            prefix_keys.add(colon_prefix)
+        if slash_prefix is not None:
+            prefix_keys.add(slash_prefix)
+
+    if prefix_keys:
+        prefix_courses = session.scalars(
+            select(Course).where(
+                tuple_(Course.source, Course.source_course_id).in_(prefix_keys)
+            )
+        ).all()
+        courses_by_prefix = {(c.source, c.source_course_id): c for c in prefix_courses}
+        for raw, _, _, colon_prefix, slash_prefix in unresolved_items:
+            if colon_prefix is not None and colon_prefix in courses_by_prefix:
+                raw_initial_course[raw] = courses_by_prefix[colon_prefix]
+            elif slash_prefix is not None and slash_prefix in courses_by_prefix:
+                raw_initial_course[raw] = courses_by_prefix[slash_prefix]
+
+    # Step 3: Unprefixed source_course_id lookups
+    unresolved_items = [item for item in unresolved_items if item[0] not in raw_initial_course]
+    unprefixed_strings = {raw_str for _, raw_str, _, _, _ in unresolved_items}
+    if unprefixed_strings:
+        unprefixed_matches = session.scalars(
+            select(Course).where(Course.source_course_id.in_(unprefixed_strings))
+        ).all()
+        matches_by_sc_id: dict[str, list[Course]] = defaultdict(list)
+        for c in unprefixed_matches:
+            matches_by_sc_id[c.source_course_id].append(c)
+
+        for raw, raw_str, _, _, _ in unresolved_items:
+            matches = matches_by_sc_id.get(raw_str) or []
+            if len(matches) == 1:
+                raw_initial_course[raw] = matches[0]
+            elif len(matches) > 1:
+                raw_ambiguous_matches[raw] = matches
+
+    # Step 4: Batch canonicalization across all found candidate courses
+    candidate_course_ids: set[int] = {c.id for c in raw_initial_course.values()}
+    for matches in raw_ambiguous_matches.values():
+        for c in matches:
+            candidate_course_ids.add(c.id)
+
+    if not candidate_course_ids:
+        return {}
+
+    canonical_map = require_courses(session, candidate_course_ids)
+
+    result: dict[Any, Course] = {}
+    for raw, course in raw_initial_course.items():
+        canonical = canonical_map.get(course.id)
+        if canonical is not None:
+            result[raw] = canonical
+
+    for raw, matches in raw_ambiguous_matches.items():
+        canons = [canonical_map[c.id] for c in matches if c.id in canonical_map]
+        if len(canons) == len(matches):
+            canonical_ids = {c.id for c in canons}
+            if len(canonical_ids) == 1:
+                result[raw] = canons[0]
+
+    return result
+
+
+def resolve_course_ids(session: Session, raw_ids: Iterable[Any]) -> set[int]:
+    """Bulk resolve raw course identifiers to a set of canonical Course IDs."""
+    resolved = resolve_courses_optional(session, raw_ids)
+    return {course.id for course in resolved.values()}
+
+
 def resolve_course_optional(session: Session, raw: str | int | None) -> Course | None:
     """Resolve a course by integer id, source-qualified id ('source:source_course_id'),
     or unique source_course_id, canonicalizing if reconciled and rejecting ambiguous matches."""
     if raw is None:
         return None
-    raw_str = str(raw).strip()
-    if not raw_str:
-        return None
-
-    course: Course | None = None
-    try:
-        parsed_id = int(raw_str)
-        if parsed_id > 0:
-            course = session.get(Course, parsed_id)
-    except (TypeError, ValueError):
-        pass
-
-    if course is None and ":" in raw_str:
-        source_prefix, sc_id = raw_str.split(":", 1)
-        source_prefix = source_prefix.strip()
-        sc_id = sc_id.strip()
-        if source_prefix and sc_id:
-            course = session.scalar(
-                select(Course).where(
-                    Course.source == source_prefix,
-                    Course.source_course_id == sc_id,
-                )
-            )
-
-    if course is None and "/" in raw_str:
-        source_prefix, sc_id = raw_str.split("/", 1)
-        source_prefix = source_prefix.strip()
-        sc_id = sc_id.strip()
-        if source_prefix and sc_id:
-            course = session.scalar(
-                select(Course).where(
-                    Course.source == source_prefix,
-                    Course.source_course_id == sc_id,
-                )
-            )
-
-    if course is None:
-        matches = session.scalars(
-            select(Course).where(Course.source_course_id == raw_str)
-        ).all()
-        if len(matches) == 1:
-            course = matches[0]
-        elif len(matches) > 1:
-            # Ambiguous across sources: only resolve if all candidates reconcile to the same canonical course
-            canonical_ids: set[int] = set()
-            for cand in matches:
-                try:
-                    canon = require_course(session, cand.id)
-                    canonical_ids.add(canon.id)
-                except HTTPException:
-                    pass
-            if len(canonical_ids) == 1:
-                course = session.get(Course, next(iter(canonical_ids)))
-            else:
-                return None
-
-    if course is None:
-        return None
-    try:
-        return require_course(session, course.id)
-    except HTTPException:
-        return None
+    return resolve_courses_optional(session, [raw]).get(raw)
 
 
 def canonical_courses_only():

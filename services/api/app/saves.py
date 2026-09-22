@@ -17,6 +17,7 @@ from .domain import (
     require_courses,
     require_user,
     resolve_course_optional,
+    resolve_courses_optional,
     stored_user,
 )
 from .models import ActivityEvent, Course, SavedCourse, SavedList
@@ -319,10 +320,16 @@ def seed_onboarding_dream_courses(session: Session, user_id: int, dream_course_i
         session.add(default_list)
         session.flush()
 
+    resolved_courses = resolve_courses_optional(session, dream_course_ids)
+    if not resolved_courses:
+        return
+
+    seen_course_ids: set[int] = set()
     for raw_id in dream_course_ids:
-        course = resolve_course_optional(session, raw_id)
-        if course is None:
+        course = resolved_courses.get(raw_id)
+        if course is None or course.id in seen_course_ids:
             continue
+        seen_course_ids.add(course.id)
         identity_ids = course_identity_ids(session, course)
         already_saved = session.scalar(
             select(SavedCourse.id).where(

@@ -409,3 +409,182 @@ def test_onboarding_played_course_preserved_across_round_deletion() -> None:
     assert course_1_state["round_count"] == 0
 
 
+def test_resolve_courses_optional_bulk_resolution() -> None:
+    from app.domain import resolve_course_ids, resolve_courses_optional
+    from app.models import Course, CourseReconciliation
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        c1 = Course(
+            name="Bulk Pebble",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_a",
+            source_course_id="shared-bulk",
+        )
+        c2 = Course(
+            name="Bulk Spyglass",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_b",
+            source_course_id="shared-bulk",
+        )
+        c3 = Course(
+            name="Bulk Cypress",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="src_c",
+            source_course_id="unique-bulk",
+        )
+        session.add_all([c1, c2, c3])
+        session.commit()
+
+        # Reconcile c2 to c1
+        session.add(
+            CourseReconciliation(
+                source="src_b",
+                source_course_id="shared-bulk",
+                canonical_course_id=c1.id,
+                match_status="confirmed",
+            )
+        )
+        session.commit()
+
+        raw_inputs = [
+            c1.id,
+            str(c3.id),
+            "src_a:shared-bulk",
+            "src_b/shared-bulk",
+            "unique-bulk",
+            "shared-bulk",
+            "nonexistent-id-999",
+            None,
+            "",
+        ]
+
+        resolved = resolve_courses_optional(session, raw_inputs)
+        assert resolved[c1.id].id == c1.id
+        assert resolved[str(c3.id)].id == c3.id
+        assert resolved["src_a:shared-bulk"].id == c1.id
+        assert resolved["src_b/shared-bulk"].id == c1.id
+        assert resolved["unique-bulk"].id == c3.id
+        assert resolved["shared-bulk"].id == c1.id
+        assert "nonexistent-id-999" not in resolved
+        assert None not in resolved
+        assert "" not in resolved
+
+        canonical_ids = resolve_course_ids(session, raw_inputs)
+        assert canonical_ids == {c1.id, c3.id}
+
+
+def test_is_onboarding_played_course_batches_queries_with_many_courses() -> None:
+    from sqlalchemy import event
+    from app.models import Course, OnboardingPreference, User
+    from app.rounds import _is_onboarding_played_course
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        user = User(provider_subject="dev:bulk-onboarding-test")
+        session.add(user)
+        session.commit()
+        # Generate 250 played course strings
+        played_ids = [f"course-provider-id-{i}" for i in range(250)]
+
+        pref = session.get(OnboardingPreference, user.id)
+        if pref is None:
+            pref = OnboardingPreference(
+                user_id=user.id,
+                max_green_fee=150,
+                difficulty="intermediate",
+                access="public",
+                onboarding_data={"played_course_ids": played_ids},
+            )
+            session.add(pref)
+        else:
+            pref.onboarding_data = {"played_course_ids": played_ids}
+            session.add(pref)
+        session.commit()
+
+        # Target course that does exist in DB but is NOT in played_ids
+        target_course = Course(
+            name="Target Unplayed",
+            region="Monterey, CA",
+            latitude=36.5,
+            longitude=-121.9,
+            source="manual",
+            source_course_id="target-not-in-played",
+        )
+        session.add(target_course)
+        session.commit()
+
+        query_count = 0
+
+        def count_queries(conn, cursor, statement, parameters, context, executemany):
+            nonlocal query_count
+            query_count += 1
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", count_queries)
+        try:
+            is_played = _is_onboarding_played_course(session, user.id, target_course.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", count_queries)
+
+        assert is_played is False
+        # Instead of 250 queries (1 per id), bulk resolution executes in at most 4 queries!
+        assert query_count <= 4
+
+        # Fast path test: target course ID directly in played_ids
+        pref.onboarding_data = {"played_course_ids": [str(target_course.id)] + played_ids}
+        session.add(pref)
+        session.commit()
+
+        query_count = 0
+        event.listen(engine, "before_cursor_execute", count_queries)
+        try:
+            is_played_fast = _is_onboarding_played_course(session, user.id, target_course.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", count_queries)
+
+        assert is_played_fast is True
+        # Fast path needs at most 2 queries: fetch OnboardingPreference and require_course
+        assert query_count <= 2
+
+
+def test_seed_onboarding_played_courses_bulk() -> None:
+    from sqlalchemy import select
+    from app.models import Course, User, UserCourseState
+    from app.rounds import seed_onboarding_played_courses
+
+    app = create_app()
+    with app.state.session_factory() as session:
+        user = User(provider_subject="dev:seed-played-bulk")
+        c1 = Course(name="Seed C1", region="CA", latitude=36.0, longitude=-121.0, source="s1", source_course_id="c1")
+        c2 = Course(name="Seed C2", region="CA", latitude=36.0, longitude=-121.0, source="s2", source_course_id="c2")
+        session.add_all([user, c1, c2])
+        session.commit()
+
+        # Existing state for c1 with round_count=2, has_played=False
+        session.add(UserCourseState(user_id=user.id, course_id=c1.id, has_played=False, round_count=2))
+        session.commit()
+
+        # Seed both courses
+        seed_onboarding_played_courses(session, user.id, ["s1:c1", str(c2.id), "invalid-course"])
+        session.commit()
+
+        s1 = session.scalar(select(UserCourseState).where(UserCourseState.user_id == user.id, UserCourseState.course_id == c1.id))
+        assert s1 is not None
+        assert s1.has_played is True
+        assert s1.round_count == 2  # Preserved
+
+        s2 = session.scalar(select(UserCourseState).where(UserCourseState.user_id == user.id, UserCourseState.course_id == c2.id))
+        assert s2 is not None
+        assert s2.has_played is True
+        assert s2.round_count == 0  # Default for newly seeded course
+
+
+
+

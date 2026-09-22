@@ -8,7 +8,17 @@ from sqlalchemy.orm import Session
 
 from .core.auth import CurrentUser, current_user
 from .db import get_session
-from .domain import course_data, delete_permanent_objects, notifications_enabled, require_course, require_user, resolve_course_optional, stored_user
+from .domain import (
+    course_data,
+    delete_permanent_objects,
+    notifications_enabled,
+    require_course,
+    require_user,
+    resolve_course_ids,
+    resolve_course_optional,
+    resolve_courses_optional,
+    stored_user,
+)
 from .push_notifications import run_push_delivery_task
 from .models import (
     ActivityEvent,
@@ -272,17 +282,20 @@ def _is_onboarding_played_course(session: Session, user_id: int, course_id: int)
     if not pref or not pref.onboarding_data or not isinstance(pref.onboarding_data, dict):
         return False
     played_ids = pref.onboarding_data.get("played_course_ids") or []
-    if not isinstance(played_ids, list):
+    if not isinstance(played_ids, list) or not played_ids:
         return False
     try:
         target_canonical_id = require_course(session, course_id).id
     except HTTPException:
         target_canonical_id = course_id
-    for raw_id in played_ids:
-        course = resolve_course_optional(session, raw_id)
-        if course is not None and course.id == target_canonical_id:
-            return True
-    return False
+
+    # Fast path: if the target canonical ID is directly in played_ids (either as int or str)
+    if target_canonical_id in played_ids or str(target_canonical_id) in played_ids:
+        return True
+
+    # Bulk-resolve all played_ids to canonical Course IDs without looping N+1 queries
+    canonical_played_ids = resolve_course_ids(session, played_ids)
+    return target_canonical_id in canonical_played_ids
 
 
 def _refresh_course_state(session: Session, user_id: int, course_id: int) -> None:
@@ -642,16 +655,22 @@ def seed_onboarding_played_courses(session: Session, user_id: int, played_course
     """Seed played courses selected during onboarding into UserCourseState so they appear on profile."""
     if not played_course_ids or not isinstance(played_course_ids, list):
         return
-    for raw_id in played_course_ids:
-        course = resolve_course_optional(session, raw_id)
-        if course is None:
-            continue
-        state = session.scalar(
+    resolved_courses = resolve_courses_optional(session, played_course_ids)
+    if not resolved_courses:
+        return
+    unique_courses = {course.id: course for course in resolved_courses.values()}.values()
+    target_course_ids = [course.id for course in unique_courses]
+    existing_states = {
+        state.course_id: state
+        for state in session.scalars(
             select(UserCourseState).where(
                 UserCourseState.user_id == user_id,
-                UserCourseState.course_id == course.id,
+                UserCourseState.course_id.in_(target_course_ids),
             )
-        )
+        ).all()
+    }
+    for course in unique_courses:
+        state = existing_states.get(course.id)
         if state is None:
             state = UserCourseState(user_id=user_id, course_id=course.id, has_played=True, round_count=0)
             session.add(state)
