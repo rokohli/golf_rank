@@ -463,9 +463,13 @@ def search_users(
     followed_ids, _mutual_ids = _relationship_sets(session, current_record.id)
     needle = q.casefold()
     users = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
+    user_ids = {u.id for u in users}
+    summaries = _summaries(session, user_ids)
     results: list[UserSearchResultOut] = []
     for user in users:
-        summary = _summary(session, user)
+        summary = summaries.get(user.id)
+        if not summary:
+            continue
         haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''} {summary.home_course_name or ''}".casefold()
         if needle in haystack:
             results.append(UserSearchResultOut(**summary.model_dump(), is_following=user.id in followed_ids))
@@ -1100,8 +1104,18 @@ def list_follows(
     follows = session.scalars(
         select(Follow).where(Follow.follower_id == user.id, Follow.followed_id.not_in(blocked)).order_by(Follow.created_at.desc())
     ).all()
+    followed_uids = {f.followed_id for f in follows}
+    summaries = _summaries(session, followed_uids)
     reverse_ids = set(session.scalars(select(Follow.follower_id).where(Follow.followed_id == user.id)).all())
-    return [FollowOut(user=_summary(session, session.get(User, follow.followed_id)), is_mutual=follow.followed_id in reverse_ids, followed_at=follow.created_at) for follow in follows]
+    return [
+        FollowOut(
+            user=summaries[follow.followed_id],
+            is_mutual=follow.followed_id in reverse_ids,
+            followed_at=follow.created_at,
+        )
+        for follow in follows
+        if follow.followed_id in summaries
+    ]
 
 
 @router.get("/api/v1/feed", response_model=FeedPageOut)
@@ -1191,14 +1205,17 @@ def activity_feed(
 
         courses_by_id = require_courses(session, batch_course_ids)
         preload_round_visibility(session, courses_by_id.values())
+        batch_actor_ids = {actor.id for _, actor, _ in surviving}
+        actor_summaries = _summaries(session, batch_actor_ids)
         for event, actor, data in surviving:
             course_id = data.get("course_id")
             stored_course = courses_by_id.get(course_id) if isinstance(course_id, int) else None
             course = course_data(stored_course) if stored_course is not None else None
             reaction_count, viewer_reacted = _reaction_state(session, event.id, user.id)
+            actor_summary = actor_summaries.get(actor.id) or _summary(session, actor)
             output.append(ActivityOut(
                 id=event.id, event_type=event.event_type, subject_type=event.subject_type,
-                subject_id=event.subject_id, actor=_summary(session, actor), course=course,
+                subject_id=event.subject_id, actor=actor_summary, course=course,
                 data=data, reaction_count=reaction_count, viewer_reacted=viewer_reacted,
                 is_own_activity=event.actor_user_id == user.id,
                 created_at=event.created_at,
@@ -1338,12 +1355,13 @@ def list_blocked_users(
         .where(UserBlock.blocker_id == user.id)
         .order_by(UserBlock.created_at.desc(), UserBlock.id.desc())
     ).all()
+    blocked_uids = {b.blocked_id for b in blocks}
+    summaries = _summaries(session, blocked_uids)
     output: list[BlockedUserOut] = []
     for block in blocks:
-        target = session.get(User, block.blocked_id)
-        if target is None:
+        summary = summaries.get(block.blocked_id)
+        if summary is None:
             continue
-        summary = _summary(session, target)
         output.append(BlockedUserOut(**summary.model_dump(), blocked_at=block.created_at))
     return output
 
@@ -1368,11 +1386,16 @@ def list_muted_users(
         .where(UserMute.muter_id == user.id)
         .order_by(UserMute.created_at.desc(), UserMute.id.desc())
     ).all()
+    blocked = _blocked_ids(session, user.id)
+    unblocked_muted_uids = {m.muted_id for m in mutes if m.muted_id not in blocked}
+    summaries = _summaries(session, unblocked_muted_uids) if unblocked_muted_uids else {}
     output: list[MutedUserOut] = []
     for mute in mutes:
-        target = session.get(User, mute.muted_id)
-        if target is not None:
-            output.append(_muted_user_summary(session, user.id, target))
+        if mute.muted_id in blocked:
+            output.append(MutedUserOut(id=mute.muted_id, display_name="Muted account", username=None))
+        elif mute.muted_id in summaries:
+            s = summaries[mute.muted_id]
+            output.append(MutedUserOut(id=mute.muted_id, display_name=s.display_name, username=s.username))
     return output
 
 
