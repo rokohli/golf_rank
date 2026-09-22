@@ -1466,14 +1466,17 @@ def test_home_course_search_and_suggestions() -> None:
     updated_usernames = [u["username"] for u in updated_suggestions]
     assert "spy_blake" not in updated_usernames
 
-    # 4. Region matching compares components, avoiding substring false matches (e.g. 'or' in 'york')
+    # 4. Region matching compares state component, avoiding substring/city-only false matches
     portland_user = create_golfer("dev:user-portland", "portland_pat", "Portland, OR", "401", "Pumpkin Ridge")
     eugene_user = create_golfer("dev:user-eugene", "eugene_eric", "Eugene, OR", "402", "Eugene CC")
+    create_golfer("dev:user-portland-me", "portland_mary", "Portland, ME", "404", "Riverside")
     create_golfer("dev:user-ny", "ny_ned", "New York, NY", "403", "Bethpage")
 
     p_suggestions = client.get("/api/v1/users/suggested", headers=portland_user).json()
     p_suggestion_names = [u["username"] for u in p_suggestions]
     assert "eugene_eric" in p_suggestion_names
+    if "portland_mary" in p_suggestion_names:
+        assert p_suggestion_names.index("eugene_eric") < p_suggestion_names.index("portland_mary")
     if "ny_ned" in p_suggestion_names:
         assert p_suggestion_names.index("eugene_eric") < p_suggestion_names.index("ny_ned")
 

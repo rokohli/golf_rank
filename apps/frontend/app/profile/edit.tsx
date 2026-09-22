@@ -128,10 +128,7 @@ export default function EditProfile() {
           const matches = await searchCourses({ q: resolvedCourseName, limit: 5 })
           const normalized = resolvedCourseName.toLowerCase()
           const exactMatch = matches.find((c) => c.name.toLowerCase() === normalized)
-          const fuzzyMatch = matches.find(
-            (c) => c.name.toLowerCase().includes(normalized) || normalized.includes(c.name.toLowerCase())
-          )
-          const target = exactMatch || (matches.length === 1 ? matches[0] : fuzzyMatch)
+          const target = exactMatch || (matches.length === 1 ? matches[0] : null)
           if (target) {
             resolvedCourseId = String(target.id)
             resolvedCourseName = target.name

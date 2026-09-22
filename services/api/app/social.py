@@ -474,7 +474,8 @@ def suggested_users(
     my_onboarding = my_pref.onboarding_data if my_pref and my_pref.onboarding_data else {}
     my_home_course_id = my_onboarding.get("home_course_id")
     my_home_region = (my_profile.home_region if my_profile else "") or ""
-    my_region_components = {tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()}
+    my_region_tokens = [tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()]
+    my_state = my_region_tokens[-1] if len(my_region_tokens) > 1 else None
 
     # Evaluate and score all eligible users before applying candidate limits
     rows = session.execute(
@@ -501,9 +502,10 @@ def suggested_users(
             cand_region_norm = cand_home_region.casefold().strip()
             if cand_region_norm == my_home_region.casefold().strip():
                 score += 50
-            else:
-                cand_components = {tok.strip().casefold() for tok in cand_home_region.split(",") if tok.strip()}
-                if cand_components & my_region_components:
+            elif my_state:
+                cand_tokens = [tok.strip().casefold() for tok in cand_home_region.split(",") if tok.strip()]
+                cand_state = cand_tokens[-1] if len(cand_tokens) > 1 else None
+                if cand_state and cand_state == my_state:
                     score += 25
 
         if score > 0:
