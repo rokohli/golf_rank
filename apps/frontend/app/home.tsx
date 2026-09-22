@@ -7,6 +7,7 @@ import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
+import { FeedActivitySkeleton } from '../src/components/Skeleton'
 import { openUserProfile } from '../src/navigation/openUserProfile'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreToPar } from '../src/scorePresentation'
@@ -94,7 +95,7 @@ export default function Home() {
       <Pressable accessibilityRole="button" accessibilityLabel="Plan a golf trip" onPress={() => router.push('/planner' as never)} style={({ pressed }) => [styles.planner, pressed && { opacity: 0.7 }]}><View style={styles.plannerIcon}><Feather name="map" size={19} color={colors.pine} /></View><View style={{ flex: 1 }}><Text style={styles.plannerTitle}>Plan a golf trip</Text><Text style={styles.muted}>Build and save a course itinerary from real catalog data.</Text></View><Feather name="chevron-right" size={17} color={colors.pine} /></Pressable>
       <SectionTitle title="FRIENDS ACTIVITY" action="Find friends" onPress={() => router.push('/friends')} />
 
-      {loading ? <View style={styles.state}><ActivityIndicator accessibilityLabel="Loading friends activity" color={colors.pine} /></View> : null}
+      {loading ? <FeedActivitySkeleton /> : null}
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : null}
       {!loading && !error && !activities.length ? <View style={styles.state}><Feather name="users" size={26} color={colors.muted} /><Text style={styles.emptyTitle}>Your feed is quiet</Text><Text style={styles.muted}>Follow golfers to see their rounds, ratings, rankings, and saved courses.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/friends')} style={styles.retry}><Text style={styles.retryText}>Find golfers</Text></Pressable></View> : null}
 

@@ -1,13 +1,14 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { getProfile, getRoundSummary } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, ProductScreen } from '../src/components/ProductUI'
+import { ProfileStatsSkeleton, RecentRoundSkeleton } from '../src/components/Skeleton'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreAccessibilityLabel, scoreToPar } from '../src/scorePresentation'
 import { Course, OnboardingPreferences, RoundSummary } from '../src/types'
@@ -68,36 +69,51 @@ export default function Profile() {
         <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/profile/edit' as never)}><Text style={styles.editLink}>Edit profile</Text></Pressable>
       </View>
 
-      {loading ? <ActivityIndicator accessibilityLabel="Loading profile" color={colors.pine} /> : null}
-      {error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
-
-      <View style={styles.stats}>
-        <ProfileStat label="Rounds" value={summary?.total_rounds ?? '—'} />
-        <ProfileStat label="Courses" value={summary?.distinct_courses ?? '—'} />
-        <ProfileStat label="Avg score" value={formatAverage(summary?.average_score)} />
-        <ProfileStat label="Best" value={summary?.best_score ?? '—'} last />
-      </View>
-
-      <View style={styles.actions}>
-        <ProfileAction icon="users" label="Friends" onPress={() => router.push('/friends')} />
-        <ProfileAction icon="bookmark" label="Saved" onPress={() => router.push('/saved')} />
-        <ProfileAction icon="clock" label="Rounds" onPress={() => router.push('/rounds')} />
-        <ProfileAction icon="map" label="Trips" onPress={() => router.push('/planner' as never)} />
-      </View>
-
-      <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Recent round</Text></View>
-      {latestRound ? <>
-        <Pressable accessibilityLabel={`Open ${latestRound.course.name} round`} accessibilityRole="button" onPress={() => router.push(`/round/${latestRound.id}` as never)} style={({ pressed }) => [styles.recent, pressed && styles.pressed]}>
-          <View style={styles.recentImage}><CourseVisual course={displayCourse(latestRound.course)} height={62} /></View>
-          <View style={styles.recentCopy}>
-            <Text numberOfLines={1} style={styles.recentTitle}>{latestRound.course.name}</Text>
-            <Text numberOfLines={1} style={styles.recentMeta}>{formatDate(latestRound.played_on)} · {latestRound.course.region}</Text>
+      {loading && !summary ? (
+        <View accessibilityLabel="Loading profile">
+          <ProfileStatsSkeleton />
+          <View style={styles.actions}>
+            <ProfileAction icon="users" label="Friends" onPress={() => router.push('/friends')} />
+            <ProfileAction icon="bookmark" label="Saved" onPress={() => router.push('/saved')} />
+            <ProfileAction icon="clock" label="Rounds" onPress={() => router.push('/rounds')} />
+            <ProfileAction icon="map" label="Trips" onPress={() => router.push('/planner' as never)} />
           </View>
-          <View style={styles.recentScoreBlock}><Text accessibilityLabel={scoreAccessibilityLabel(latestRound.score, latestRound.course.par)} style={styles.recentScore}>{latestRound.score ?? '—'}</Text>{latestRoundToPar ? <View style={styles.recentToParBadge}><Text style={styles.recentToPar}>{latestRoundToPar}</Text></View> : null}</View>
-          {latestRound.is_favorite ? <Feather accessibilityLabel="Favorite round" name="star" size={18} color={colors.gold} /> : null}
-        </Pressable>
-        <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/rounds')}><Text style={styles.viewAll}>View all rounds</Text></Pressable>
-      </> : !loading && !error ? <View style={styles.empty}><Text style={styles.emptyText}>Your most recent round will appear here.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/round/new' as never)}><Text style={styles.logLink}>Log a round</Text></Pressable></View> : null}
+          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Recent round</Text></View>
+          <RecentRoundSkeleton />
+        </View>
+      ) : (
+        <>
+          {error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
+
+          <View style={styles.stats}>
+            <ProfileStat label="Rounds" value={summary?.total_rounds ?? '—'} />
+            <ProfileStat label="Courses" value={summary?.distinct_courses ?? '—'} />
+            <ProfileStat label="Avg score" value={formatAverage(summary?.average_score)} />
+            <ProfileStat label="Best" value={summary?.best_score ?? '—'} last />
+          </View>
+
+          <View style={styles.actions}>
+            <ProfileAction icon="users" label="Friends" onPress={() => router.push('/friends')} />
+            <ProfileAction icon="bookmark" label="Saved" onPress={() => router.push('/saved')} />
+            <ProfileAction icon="clock" label="Rounds" onPress={() => router.push('/rounds')} />
+            <ProfileAction icon="map" label="Trips" onPress={() => router.push('/planner' as never)} />
+          </View>
+
+          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Recent round</Text></View>
+          {latestRound ? <>
+            <Pressable accessibilityLabel={`Open ${latestRound.course.name} round`} accessibilityRole="button" onPress={() => router.push(`/round/${latestRound.id}` as never)} style={({ pressed }) => [styles.recent, pressed && styles.pressed]}>
+              <View style={styles.recentImage}><CourseVisual course={displayCourse(latestRound.course)} height={62} /></View>
+              <View style={styles.recentCopy}>
+                <Text numberOfLines={1} style={styles.recentTitle}>{latestRound.course.name}</Text>
+                <Text numberOfLines={1} style={styles.recentMeta}>{formatDate(latestRound.played_on)} · {latestRound.course.region}</Text>
+              </View>
+              <View style={styles.recentScoreBlock}><Text accessibilityLabel={scoreAccessibilityLabel(latestRound.score, latestRound.course.par)} style={styles.recentScore}>{latestRound.score ?? '—'}</Text>{latestRoundToPar ? <View style={styles.recentToParBadge}><Text style={styles.recentToPar}>{latestRoundToPar}</Text></View> : null}</View>
+              {latestRound.is_favorite ? <Feather accessibilityLabel="Favorite round" name="star" size={18} color={colors.gold} /> : null}
+            </Pressable>
+            <Pressable accessibilityRole="button" hitSlop={8} onPress={() => router.push('/rounds')}><Text style={styles.viewAll}>View all rounds</Text></Pressable>
+          </> : !loading && !error ? <View style={styles.empty}><Text style={styles.emptyText}>Your most recent round will appear here.</Text><Pressable accessibilityRole="button" onPress={() => router.push('/round/new' as never)}><Text style={styles.logLink}>Log a round</Text></Pressable></View> : null}
+        </>
+      )}
     </ProductScreen>
     <BottomNav />
   </>

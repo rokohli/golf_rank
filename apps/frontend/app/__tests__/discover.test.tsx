@@ -57,6 +57,13 @@ describe('Discover location search', () => {
     mockResolveCurrentRegion.mockResolvedValue({ label: 'San Diego, CA', latitude: 32.7, longitude: -117.1 })
   })
 
+  it('renders skeleton loader while courses are loading', async () => {
+    mockSearchCourses.mockReturnValue(new Promise(() => {}))
+    render(<Discover />)
+    expect(screen.getByLabelText('Loading courses')).toBeOnTheScreen()
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalled())
+  })
+
   it('requests current location only after search is activated and uses it as the editable region', async () => {
     render(<Discover />)
 
