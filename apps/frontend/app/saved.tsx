@@ -47,7 +47,7 @@ export default function Saved() {
     <ProductScreen>
       <ScreenHeader title="Saved Courses" onBack={() => router.back()} />
       {options.length > 1 && selected ? <Segmented options={options} selected={selected.name} onSelect={(name) => setSelectedId(lists.find((list) => list.name === name)?.id ?? null)} /> : null}
-      {loading ? (
+      {loading && lists.length === 0 ? (
         <View accessibilityLabel="Loading saved courses" style={styles.grid}>
           {Array.from({ length: 4 }).map((_, i) => (
             <View key={i} style={styles.item}>

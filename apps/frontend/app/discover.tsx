@@ -191,7 +191,7 @@ export default function Discover() {
       <View style={styles.chips}><FilterChip label={coordinates ? `Within ${radiusMiles} mi` : region} active /><FilterChip label={`${activeFilterCount} filters`} active={activeFilterCount > 0} onPress={() => setFiltersOpen(true)} />{activeFilterCount || query ? <FilterChip label="Clear all" onPress={clearFilters} /> : null}</View>
 
       <SectionTitle title={searchActive ? 'SEARCH RESULTS' : `${region} COURSES`} />
-      {loading ? (
+      {loading && courses.length === 0 ? (
         <View accessibilityLabel="Loading courses">
           {Array.from({ length: 6 }).map((_, i) => (
             <CourseRowSkeleton key={i} hasIndex />
