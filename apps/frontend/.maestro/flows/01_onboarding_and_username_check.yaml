@@ -30,21 +30,41 @@ appId: com.rokohli.golfrank.dev
 - tapOn: "Pebble Beach Golf Links Monterey, CA"
 - tapOn: "Continue"
 
-# 5. Played courses step
-- assertVisible: "Which courses have you played?"
+# 5. Played courses step - the streamlined flow requires 2 courses to unlock the ranking step
+- assertVisible: "Pick 2 courses you've played"
 - tapOn: "Search courses you've played"
 - inputText: "Spyglass"
 - tapOn: "Spyglass Hill Golf Course Monterey, CA"
-- tapOn:
-    text: "Continue with .* selected"
+- tapOn: "Search courses you've played"
+- eraseText
+- inputText: "Pasatiempo"
+- tapOn: "Pasatiempo Golf Club Santa Cruz, CA"
+- tapOn: "Continue with 2 selected"
 
 # 6. Head-to-Head ranking duel step
-- assertVisible: "Which would you rather play again?"
+- assertVisible: "Which course did you enjoy more?"
 - tapOn:
     text: "Choose .*"
 
-# 7. Complete remaining steps and land on Home
-- tapOn: "Skip for now"
-- tapOn: "Continue"
+# 7. Dream courses step - skip
+- assertVisible: "What courses are on your bucket list?"
+- tapOn: "Skip"
+
+# 8. Contacts step - skip
+- assertVisible: "Connect with friends"
+- tapOn: "Skip"
+
+# 9. Budget step
+- assertVisible: "What's your typical green fee budget?"
+- tapOn: "$$ $50 – $100"
+- tapOn:
+    text: "Continue with .*"
+
+# 10. Notifications step - skip
+- assertVisible: "Stay in the loop"
+- tapOn: "Skip"
+
+# 11. Complete onboarding and land on Home
+- assertVisible: "You're all set!"
 - tapOn: "Explore Home"
 - assertVisible: "Featured Courses"

@@ -303,7 +303,9 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
         // Older drafts can carry course ids with no matching catalog entry (catalog
         // wasn't persisted yet, or the shape changed) — drop those so downstream steps
         // never look up an undefined course and dead-end.
-        const playedCourseIds = (parsed.playedCourseIds ?? initialDraft.playedCourseIds).filter((id) => courseCatalog[id])
+        // The streamlined picker caps played courses at 2; legacy v4 drafts could hold
+        // more, which would otherwise stall the count label and Continue button.
+        const playedCourseIds = (parsed.playedCourseIds ?? initialDraft.playedCourseIds).filter((id) => courseCatalog[id]).slice(0, 2)
         const dreamCourseIds = (parsed.dreamCourseIds ?? initialDraft.dreamCourseIds).filter((id) => courseCatalog[id])
         const favoriteWins = (parsed.favoriteWins ?? initialDraft.favoriteWins).filter((id) => courseCatalog[id])
         const homeCourseId = parsed.homeCourseId && courseCatalog[parsed.homeCourseId] ? parsed.homeCourseId : null
