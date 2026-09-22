@@ -307,6 +307,32 @@ def test_resolve_course_optional_disambiguates_and_rejects_ambiguity() -> None:
         # Now both provider_a and provider_b point to canonical c1
         assert resolve_course_optional(session, "shared-id").id == c1.id
 
+        # Add a 3rd provider course sharing source_course_id="shared-id" that is NOT reconciled to c1
+        c4 = Course(
+            name="Delta Highlands",
+            region="Highlands, NC",
+            latitude=35.0,
+            longitude=-83.2,
+            source="provider_d",
+            source_course_id="shared-id",
+        )
+        session.add(c4)
+        session.commit()
+
+        # Unqualified "shared-id" must inspect all 3 matches and reject because c4 does not resolve to c1
+        assert resolve_course_optional(session, "shared-id") is None
+
+        # Once provider_d is also reconciled to c1, all 3 matches agree and resolve to c1
+        recon_d = CourseReconciliation(
+            source="provider_d",
+            source_course_id="shared-id",
+            canonical_course_id=c1.id,
+            match_status="confirmed",
+        )
+        session.add(recon_d)
+        session.commit()
+        assert resolve_course_optional(session, "shared-id").id == c1.id
+
         # Invalid / unknown inputs return None
         assert resolve_course_optional(session, None) is None
         assert resolve_course_optional(session, "") is None

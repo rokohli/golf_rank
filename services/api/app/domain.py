@@ -209,7 +209,7 @@ def resolve_course_optional(session: Session, raw: str | int | None) -> Course |
 
     if course is None:
         matches = session.scalars(
-            select(Course).where(Course.source_course_id == raw_str).limit(2)
+            select(Course).where(Course.source_course_id == raw_str)
         ).all()
         if len(matches) == 1:
             course = matches[0]
