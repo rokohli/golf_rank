@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import Friends from '../friends'
 
 const mockGetFollows = jest.fn()
+const mockGetProfile = jest.fn()
+const mockGetSuggestedUsers = jest.fn()
 const mockSearchUsers = jest.fn()
 const mockFollowUser = jest.fn()
 const mockUnfollowUser = jest.fn()
@@ -29,6 +31,8 @@ jest.mock('../../src/api/client', () => ({
   blockUser: (...args: unknown[]) => mockBlockUser(...args),
   followUser: (...args: unknown[]) => mockFollowUser(...args),
   getFollows: (...args: unknown[]) => mockGetFollows(...args),
+  getProfile: (...args: unknown[]) => mockGetProfile(...args),
+  getSuggestedUsers: (...args: unknown[]) => mockGetSuggestedUsers(...args),
   muteUser: (...args: unknown[]) => mockMuteUser(...args),
   searchUsers: (...args: unknown[]) => mockSearchUsers(...args),
   unfollowUser: (...args: unknown[]) => mockUnfollowUser(...args),
@@ -36,12 +40,22 @@ jest.mock('../../src/api/client', () => ({
 
 jest.mock('../../src/auth/useAuthToken', () => ({ useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }) }))
 
-const user = { id: 2, display_name: 'Maya Golfer', username: 'maya', home_region: 'San Diego, CA', follower_count: 4, following_count: 5 }
+const user = { id: 2, display_name: 'Maya Golfer', username: 'maya', home_region: 'San Diego, CA', home_course_name: 'Torrey Pines', follower_count: 4, following_count: 5 }
 
 describe('Following', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockGetFollows.mockResolvedValue([{ user, is_mutual: true, followed_at: '2026-07-15T12:00:00Z' }])
+    mockGetProfile.mockResolvedValue({
+      home_region: 'San Diego, CA',
+      max_green_fee: 250,
+      difficulty: 'any',
+      access: 'any',
+      onboarding_data: { home_course_search: 'Torrey Pines' },
+    })
+    mockGetSuggestedUsers.mockResolvedValue([
+      { id: 10, display_name: 'Local Golfer', username: 'local_g', home_course_name: 'Torrey Pines', home_region: 'San Diego, CA', follower_count: 2, following_count: 1, is_following: false },
+    ])
     mockSearchUsers.mockResolvedValue([{ ...user, id: 3, display_name: 'Morgan Golfer', username: 'morgan' }])
     mockFollowUser.mockResolvedValue({ user: { ...user, id: 3, display_name: 'Morgan Golfer' }, is_mutual: false, followed_at: '2026-07-15T12:00:00Z' })
     mockMuteUser.mockResolvedValue(undefined)
@@ -83,5 +97,29 @@ describe('Following', () => {
     expect(screen.getByText(/Muted accounts/)).toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Confirm mute Maya Golfer' }))
     await waitFor(() => expect(mockMuteUser).toHaveBeenCalledWith(2, true, expect.objectContaining({ Authorization: 'Bearer test-token' })))
+  })
+
+  it('shows suggested local golfers and quick chips in search mode', async () => {
+    render(<Friends />)
+    await screen.findByText('Maya Golfer')
+    fireEvent.press(screen.getByRole('button', { name: 'Search golfers' }))
+
+    expect(await screen.findByText('Suggested golfers near you')).toBeOnTheScreen()
+    expect(screen.getByText('Local Golfer')).toBeOnTheScreen()
+    expect(screen.getByText(/Torrey Pines · San Diego, CA/)).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Search near San Diego, CA' })).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Search at Torrey Pines' })).toBeOnTheScreen()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Search at Torrey Pines' }))
+    expect(screen.getByDisplayValue('Torrey Pines')).toBeOnTheScreen()
+  })
+
+  it('renders suggested golfers in empty following state', async () => {
+    mockGetFollows.mockResolvedValue([])
+    render(<Friends />)
+
+    expect(await screen.findByText('Find your golf people')).toBeOnTheScreen()
+    expect(screen.getByText('Suggested golfers near you')).toBeOnTheScreen()
+    expect(screen.getByText('Local Golfer')).toBeOnTheScreen()
   })
 })

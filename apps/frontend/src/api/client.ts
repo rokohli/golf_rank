@@ -548,6 +548,12 @@ export async function searchUsers(query: string, headers: ApiHeaders): Promise<U
   return response.json()
 }
 
+export async function getSuggestedUsers(headers: ApiHeaders): Promise<UserSearchResult[]> {
+  const response = await fetch(`${baseUrl}/api/v1/users/suggested`, { headers })
+  if (!response.ok) throw await responseError(response, 'Unable to load suggested golfers. Please try again.')
+  return response.json()
+}
+
 export async function getUserProfile(userId: number, headers: ApiHeaders): Promise<PublicProfile> {
   const response = await fetch(`${baseUrl}/api/v1/users/${userId}`, { headers })
   if (!response.ok) throw await responseError(response, 'Unable to load this profile. Please try again.')

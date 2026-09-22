@@ -1396,3 +1396,74 @@ def test_search_results_report_whether_the_caller_already_follows_them() -> None
     unrelated = client.get("/api/v1/users", headers=bob, params={"q": "searchfollowalice"}).json()
     assert unrelated[0]["is_following"] is False
 
+
+def test_home_course_search_and_suggestions() -> None:
+    app = create_app(Settings())
+    client = TestClient(app)
+
+    def create_golfer(subject: str, username: str, region: str, course_id: str, course_name: str) -> dict[str, str]:
+        headers = {"X-Development-Subject": subject}
+        res = client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": region,
+                "max_green_fee": 500,
+                "difficulty": "any",
+                "access": "any",
+                "onboarding_data": {
+                    "first_name": username.capitalize(),
+                    "last_name": "Golfer",
+                    "username": username,
+                    "home_course_id": course_id,
+                    "home_course_search": course_name,
+                    "travel_distance": "Any",
+                    "preferred_tee_time": "Morning",
+                },
+            },
+        )
+        assert res.status_code == 200
+        return headers
+
+    u1 = create_golfer("dev:user-spy-1", "spy_alex", "Monterey, CA", "101", "Spyglass Hill")
+    u2 = create_golfer("dev:user-spy-2", "spy_blake", "Pebble Beach, CA", "101", "Spyglass Hill")
+    u3 = create_golfer("dev:user-torrey", "torrey_chris", "Monterey, CA", "202", "Torrey Pines")
+    _u4 = create_golfer("dev:user-bethpage", "bethpage_dan", "Farmingdale, NY", "303", "Bethpage Black")
+
+    # 1. Search by home course name (excludes self for u1, finds both for third party u4)
+    search_spy = client.get("/api/v1/users", headers=u1, params={"q": "Spyglass"}).json()
+    spy_usernames = {u["username"] for u in search_spy}
+    assert "spy_alex" not in spy_usernames  # Excludes self
+    assert "spy_blake" in spy_usernames
+    assert "torrey_chris" not in spy_usernames
+
+    search_spy_all = client.get("/api/v1/users", headers=_u4, params={"q": "Spyglass"}).json()
+    all_spy_usernames = {u["username"] for u in search_spy_all}
+    assert "spy_alex" in all_spy_usernames
+    assert "spy_blake" in all_spy_usernames
+
+    # 2. Public profile includes home course
+    u2_id = [u["id"] for u in search_spy if u["username"] == "spy_blake"][0]
+    profile_u2 = client.get(f"/api/v1/users/{u2_id}", headers=u1).json()
+    assert profile_u2["home_course_id"] == "101"
+    assert profile_u2["home_course_name"] == "Spyglass Hill"
+
+    # 3. Suggested users prioritizes same home course, then same home region
+    suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    suggestion_usernames = [u["username"] for u in suggestions]
+    assert "spy_alex" not in suggestion_usernames  # Excludes self
+    assert "spy_blake" in suggestion_usernames  # Same home course
+    assert "torrey_chris" in suggestion_usernames  # Same region
+
+    # spy_blake (same home course) should rank ahead of torrey_chris (different course, same region)
+    idx_blake = suggestion_usernames.index("spy_blake")
+    idx_chris = suggestion_usernames.index("torrey_chris")
+    assert idx_blake < idx_chris
+
+    # Following a user excludes them from suggestions
+    client.put(f"/api/v1/me/follows/{u2_id}", headers=u1)
+    updated_suggestions = client.get("/api/v1/users/suggested", headers=u1).json()
+    updated_usernames = [u["username"] for u in updated_suggestions]
+    assert "spy_blake" not in updated_usernames
+
+

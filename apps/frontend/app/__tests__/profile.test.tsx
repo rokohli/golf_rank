@@ -119,9 +119,12 @@ describe('profile experience', () => {
     expect(await screen.findByText('Rohan Kohli')).toBeOnTheScreen()
     expect(screen.getByText('@rohank')).toBeOnTheScreen()
     expect(screen.getByText('84.1')).toBeOnTheScreen()
-    expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+    expect(screen.getByRole('button', { name: 'Home course: Pebble Beach Golf Links' })).toBeOnTheScreen()
+    expect(screen.getAllByText('Pebble Beach Golf Links')).toHaveLength(2)
     expect(screen.getByText('+12')).toBeOnTheScreen()
 
+    fireEvent.press(screen.getByRole('button', { name: 'Home course: Pebble Beach Golf Links' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/course/pebble')
     fireEvent.press(screen.getByRole('button', { name: 'Profile settings' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/settings')
     fireEvent.press(screen.getByRole('button', { name: 'Edit profile' }))
@@ -138,13 +141,14 @@ describe('profile experience', () => {
     await screen.findByDisplayValue('Rohan')
     fireEvent.changeText(screen.getByLabelText('First name'), 'Rowan')
     fireEvent.changeText(screen.getByLabelText('Home region'), 'Carmel, CA')
+    fireEvent.changeText(screen.getByLabelText('Home course'), 'Spyglass Hill')
     fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => {
       expect(mockUpdateUserProfile).toHaveBeenCalledWith({ firstName: 'Rowan', lastName: 'Kohli', username: 'rohank' })
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         home_region: 'Carmel, CA',
-        onboarding_data: expect.objectContaining({ first_name: 'Rowan' }),
+        onboarding_data: expect.objectContaining({ first_name: 'Rowan', home_course_search: 'Spyglass Hill' }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })

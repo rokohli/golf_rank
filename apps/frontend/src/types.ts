@@ -213,6 +213,8 @@ export type FriendSummary = {
 
 export type UserSummary = FriendSummary & {
   home_region: string | null
+  home_course_id?: string | null
+  home_course_name?: string | null
   follower_count: number
   following_count: number
 }

@@ -69,6 +69,8 @@ class UserSummaryOut(BaseModel):
     username: str | None
     display_name: str
     home_region: str | None
+    home_course_id: str | None = None
+    home_course_name: str | None = None
     follower_count: int
     following_count: int
 
@@ -171,6 +173,8 @@ def _summary_out(
         username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
+        home_course_id=onboarding.get("home_course_id"),
+        home_course_name=onboarding.get("home_course_search"),
         follower_count=follower_count,
         following_count=following_count,
     )
@@ -446,11 +450,69 @@ def search_users(
     results: list[UserSearchResultOut] = []
     for user in users:
         summary = _summary(session, user)
-        haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''}".casefold()
+        haystack = f"{summary.username or ''} {summary.display_name} {summary.home_region or ''} {summary.home_course_name or ''}".casefold()
         if needle in haystack:
             results.append(UserSearchResultOut(**summary.model_dump(), is_following=user.id in followed_ids))
         if len(results) == 25:
             break
+    return results
+
+
+@router.get("/api/v1/users/suggested", response_model=list[UserSearchResultOut])
+def suggested_users(
+    current: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[UserSearchResultOut]:
+    current_record = require_user(session, current, create=True)
+    followed_ids, _ = _relationship_sets(session, current_record.id)
+    blocked = _blocked_ids(session, current_record.id)
+    muted = _muted_ids(session, current_record.id)
+    excluded = blocked | muted | followed_ids | {current_record.id}
+
+    my_profile = session.get(Profile, current_record.id)
+    my_pref = session.get(OnboardingPreference, current_record.id)
+    my_onboarding = my_pref.onboarding_data if my_pref and my_pref.onboarding_data else {}
+    my_home_course_id = my_onboarding.get("home_course_id")
+    my_home_region = (my_profile.home_region if my_profile else "") or ""
+    my_region_tokens = [tok.strip().casefold() for tok in my_home_region.split(",") if tok.strip()]
+
+    candidates = session.scalars(select(User).where(User.id.not_in(excluded)).limit(200)).all()
+    if not candidates:
+        return []
+
+    user_ids = {u.id for u in candidates}
+    summaries = _summaries(session, user_ids)
+
+    scored: list[tuple[int, UserSearchResultOut]] = []
+    fallback: list[tuple[int, UserSearchResultOut]] = []
+    for u in candidates:
+        s = summaries.get(u.id)
+        if not s:
+            continue
+        score = 0
+        if my_home_course_id and s.home_course_id and str(s.home_course_id) == str(my_home_course_id):
+            score += 100
+        if my_home_region and s.home_region:
+            cand_region = s.home_region.casefold()
+            if cand_region == my_home_region.casefold():
+                score += 50
+            elif any(tok in cand_region for tok in my_region_tokens):
+                score += 25
+        res = UserSearchResultOut(**s.model_dump(), is_following=False)
+        if score > 0:
+            score += min(s.follower_count, 10)
+            scored.append((score, res))
+        else:
+            fallback.append((s.follower_count, res))
+
+    scored.sort(key=lambda item: (item[0], item[1].follower_count), reverse=True)
+    results = [item[1] for item in scored[:20]]
+    if len(results) < 10:
+        fallback.sort(key=lambda item: item[0], reverse=True)
+        for _, res in fallback:
+            if len(results) >= 10:
+                break
+            results.append(res)
     return results
 
 
