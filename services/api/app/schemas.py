@@ -28,7 +28,7 @@ class OnboardingData(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     profile_photo_added: bool = False
     home_course_id: str | None = Field(default=None, max_length=120)
-    home_course_search: str = Field(min_length=2, max_length=255)
+    home_course_search: str = Field(default="", max_length=255)
     played_course_ids: list[str] = Field(default_factory=list, max_length=250)
     favorite_wins: list[str] = Field(default_factory=list, max_length=250)
     dream_course_ids: list[str] = Field(default_factory=list, max_length=250)

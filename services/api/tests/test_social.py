@@ -1468,7 +1468,7 @@ def test_home_course_search_and_suggestions() -> None:
 
     # 4. Region matching compares components, avoiding substring false matches (e.g. 'or' in 'york')
     portland_user = create_golfer("dev:user-portland", "portland_pat", "Portland, OR", "401", "Pumpkin Ridge")
-    create_golfer("dev:user-eugene", "eugene_eric", "Eugene, OR", "402", "Eugene CC")
+    eugene_user = create_golfer("dev:user-eugene", "eugene_eric", "Eugene, OR", "402", "Eugene CC")
     create_golfer("dev:user-ny", "ny_ned", "New York, NY", "403", "Bethpage")
 
     p_suggestions = client.get("/api/v1/users/suggested", headers=portland_user).json()
@@ -1476,5 +1476,32 @@ def test_home_course_search_and_suggestions() -> None:
     assert "eugene_eric" in p_suggestion_names
     if "ny_ned" in p_suggestion_names:
         assert p_suggestion_names.index("eugene_eric") < p_suggestion_names.index("ny_ned")
+
+    # 5. Empty home course is permitted when updating preferences
+    clear_res = client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=portland_user,
+        json={
+            "home_region": "Portland, OR",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Portland",
+                "last_name": "Golfer",
+                "username": "portland_pat",
+                "home_course_id": None,
+                "home_course_search": "",
+                "travel_distance": "Any",
+                "preferred_tee_time": "Morning",
+            },
+        },
+    )
+    assert clear_res.status_code == 200
+    cleared_summary = client.get("/api/v1/users/suggested", headers=eugene_user).json()
+    pat_item = [u for u in cleared_summary if u["username"] == "portland_pat"]
+    if pat_item:
+        assert pat_item[0]["home_course_id"] is None
+        assert pat_item[0]["home_course_name"] is None
 
 

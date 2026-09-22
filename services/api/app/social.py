@@ -173,8 +173,8 @@ def _summary_out(
         username=username,
         display_name=display_name or f"Golfer {user.id}",
         home_region=profile.home_region if profile else None,
-        home_course_id=onboarding.get("home_course_id"),
-        home_course_name=onboarding.get("home_course_search"),
+        home_course_id=onboarding.get("home_course_id") or None,
+        home_course_name=onboarding.get("home_course_search") or None,
         follower_count=follower_count,
         following_count=following_count,
     )
@@ -537,7 +537,7 @@ def suggested_users(
         return []
 
     summaries = _summaries(session, set(selected_uids))
-    score_map = dict(scored_candidates)
+    score_map = {uid: score for score, uid in scored_candidates}
 
     scored_results: list[tuple[int, UserSearchResultOut]] = []
     fallback_results: list[tuple[int, UserSearchResultOut]] = []
