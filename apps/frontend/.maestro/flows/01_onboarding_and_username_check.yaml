@@ -56,7 +56,7 @@ appId: com.rokohli.golfrank.dev
 
 # 9. Budget step
 - assertVisible: "What's your typical green fee budget?"
-- tapOn: "$$ $50 – $100"
+- tapOn: "$$ Up to $100"
 - tapOn:
     text: "Continue with .*"
 

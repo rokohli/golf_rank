@@ -152,7 +152,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
 
-    fireEvent.press(screen.getByRole('button', { name: '$$$ $100 – $250' }))
+    fireEvent.press(screen.getByRole('button', { name: '$$$ Up to $250' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue with $$$' }))
 
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
@@ -460,7 +460,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
-    fireEvent.press(screen.getByRole('button', { name: '$$$ $100 – $250' }))
+    fireEvent.press(screen.getByRole('button', { name: '$$$ Up to $250' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue with $$$' }))
     fireEvent.press(screen.getByRole('button', { name: 'Skip' }))
 
@@ -534,7 +534,7 @@ describe('OnboardingForm', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByText("What's your typical green fee budget?")).toBeOnTheScreen()
-    fireEvent.press(screen.getByRole('button', { name: '$$ $50 – $100' }))
+    fireEvent.press(screen.getByRole('button', { name: '$$ Up to $100' }))
     fireEvent.press(screen.getByRole('button', { name: 'Continue with $$' }))
 
     expect(await screen.findByText('Stay in the loop')).toBeOnTheScreen()

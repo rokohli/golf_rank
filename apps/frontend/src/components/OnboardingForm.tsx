@@ -1061,11 +1061,15 @@ function ContactsStep({
   )
 }
 
+// max_green_fee is a single ceiling on the backend (see toPreferences below) — there's
+// no persisted lower bound, so course discovery for any tier still surfaces cheaper
+// courses too. Label these as "Up to $X" ceilings rather than exclusive ranges so the
+// copy matches what's actually enforced.
 const budgetOptions: { tier: '$' | '$$' | '$$$' | '$$$$'; label: string; desc: string }[] = [
-  { tier: '$', label: 'Under $50', desc: 'Budget-friendly & muni courses' },
-  { tier: '$$', label: '$50 – $100', desc: 'Quality public tracks & local favorites' },
-  { tier: '$$$', label: '$100 – $250', desc: 'Premium resort & championship layouts' },
-  { tier: '$$$$', label: '$250 – $2,000', desc: 'Bucket-list destinations & world-class golf' },
+  { tier: '$', label: 'Up to $50', desc: 'Budget-friendly & muni courses' },
+  { tier: '$$', label: 'Up to $100', desc: 'Quality public tracks & local favorites' },
+  { tier: '$$$', label: 'Up to $250', desc: 'Premium resort & championship layouts' },
+  { tier: '$$$$', label: 'Up to $2,000', desc: 'Bucket-list destinations & world-class golf' },
 ]
 
 function BudgetStep({
