@@ -48,9 +48,8 @@ type StepKey =
   | 'played'
   | 'rank'
   | 'dreams'
-  | 'friends'
-  | 'preferences'
-  | 'planning'
+  | 'contacts'
+  | 'budget'
   | 'notifications'
   | 'success'
 
@@ -82,9 +81,8 @@ const steps: StepKey[] = [
   'played',
   'rank',
   'dreams',
-  'friends',
-  'preferences',
-  'planning',
+  'contacts',
+  'budget',
   'notifications',
   'success',
 ]
@@ -103,8 +101,8 @@ const initialDraft: OnboardingDraft = {
   preferences: [],
   groupSize: null,
   budget: null,
-  travelDistance: 'Up to 45 minutes',
-  preferredTeeTime: 'Weekend mornings',
+  travelDistance: '',
+  preferredTeeTime: '',
   transportation: null,
   notifications: null,
   courseCatalog: {},
@@ -152,11 +150,10 @@ function homeRegionForCourse(course: CourseOption | null, fallbackSearch: string
 }
 
 function buildRankPairs(playedCourseIds: string[]): [string, string][] {
-  const pairs: [string, string][] = []
-  for (let index = 0; index + 1 < playedCourseIds.length && pairs.length < 3; index += 2) {
-    pairs.push([playedCourseIds[index], playedCourseIds[index + 1]])
+  if (playedCourseIds.length >= 2) {
+    return [[playedCourseIds[0], playedCourseIds[1]]]
   }
-  return pairs
+  return []
 }
 
 function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fallback: CourseOption | null = null) {
@@ -165,15 +162,15 @@ function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fa
 
 function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   const homeCourse = draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null
-  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 650 : 175
-  const difficulty: Difficulty = draft.preferences.includes('Beginner friendly')
+  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 2000 : 250
+  const difficulty: Difficulty = draft.preferences?.includes('Beginner friendly')
     ? 'beginner'
-    : draft.preferences.includes('Tough layouts') || draft.preferences.includes('Championship courses')
+    : draft.preferences?.includes('Tough layouts') || draft.preferences?.includes('Championship courses')
       ? 'challenging'
       : 'any'
-  const access: Access = draft.preferences.includes('Public courses')
+  const access: Access = draft.preferences?.includes('Public courses')
     ? 'public'
-    : draft.preferences.includes('Private clubs')
+    : draft.preferences?.includes('Private clubs')
       ? 'private'
       : 'any'
 
@@ -192,12 +189,12 @@ function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
       played_course_ids: draft.playedCourseIds,
       favorite_wins: draft.favoriteWins,
       dream_course_ids: draft.dreamCourseIds,
-      friend_search: draft.friendSearch.trim(),
-      preferences: draft.preferences,
+      friend_search: (draft.friendSearch ?? '').trim(),
+      preferences: draft.preferences ?? [],
       group_size: draft.groupSize,
       budget: draft.budget,
-      travel_distance: draft.travelDistance.trim(),
-      preferred_tee_time: draft.preferredTeeTime.trim(),
+      travel_distance: (draft.travelDistance ?? '').trim(),
+      preferred_tee_time: (draft.preferredTeeTime ?? '').trim(),
       transportation: draft.transportation,
       notifications: draft.notifications,
     },
@@ -257,6 +254,27 @@ function useCourseSearch(searchCourses: (query: string) => Promise<Course[]>, qu
   return { results, searching, searchError }
 }
 
+function migrateDraftStepIndex(parsedStepIndex: number, draftVersion: number | undefined): number {
+  if (draftVersion && draftVersion >= 5) {
+    return Math.min(parsedStepIndex, steps.length - 1)
+  }
+  // Drafts from version 4 had 10 steps:
+  // ['profile', 'home', 'played', 'rank', 'dreams', 'friends', 'preferences', 'planning', 'notifications', 'success']
+  // Streamlined flow has 9 steps:
+  // ['profile', 'home', 'played', 'rank', 'dreams', 'contacts', 'budget', 'notifications', 'success']
+  const v4StepNames = ['profile', 'home', 'played', 'rank', 'dreams', 'friends', 'preferences', 'planning', 'notifications', 'success']
+  const effectiveIndex = draftVersion && draftVersion >= 2 ? parsedStepIndex : Math.max(parsedStepIndex - 2, 0)
+  const stepName = v4StepNames[effectiveIndex]
+  if (stepName === 'friends') return steps.indexOf('contacts')
+  if (stepName === 'preferences' || stepName === 'planning') return steps.indexOf('budget')
+  if (stepName === 'notifications') return steps.indexOf('notifications')
+  if (stepName === 'success') return steps.indexOf('success')
+  if (stepName && steps.indexOf(stepName as StepKey) !== -1) {
+    return steps.indexOf(stepName as StepKey)
+  }
+  return Math.min(effectiveIndex, steps.length - 1)
+}
+
 export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser, requestPushPermission }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
@@ -285,7 +303,9 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
         // Older drafts can carry course ids with no matching catalog entry (catalog
         // wasn't persisted yet, or the shape changed) — drop those so downstream steps
         // never look up an undefined course and dead-end.
-        const playedCourseIds = (parsed.playedCourseIds ?? initialDraft.playedCourseIds).filter((id) => courseCatalog[id])
+        // The streamlined picker caps played courses at 2; legacy v4 drafts could hold
+        // more, which would otherwise stall the count label and Continue button.
+        const playedCourseIds = (parsed.playedCourseIds ?? initialDraft.playedCourseIds).filter((id) => courseCatalog[id]).slice(0, 2)
         const dreamCourseIds = (parsed.dreamCourseIds ?? initialDraft.dreamCourseIds).filter((id) => courseCatalog[id])
         const favoriteWins = (parsed.favoriteWins ?? initialDraft.favoriteWins).filter((id) => courseCatalog[id])
         const homeCourseId = parsed.homeCourseId && courseCatalog[parsed.homeCourseId] ? parsed.homeCourseId : null
@@ -301,10 +321,17 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
           homeCourseId,
         })
         if (typeof parsed.stepIndex === 'number') {
-          const migratedStepIndex = parsed.draftVersion && parsed.draftVersion >= 2 ? parsed.stepIndex : Math.max(parsed.stepIndex - 2, 0)
-          setStepIndex(Math.min(migratedStepIndex, steps.length - 1))
+          const migratedStepIndex = migrateDraftStepIndex(parsed.stepIndex, parsed.draftVersion)
+          setStepIndex(migratedStepIndex)
         }
-        if (typeof parsed.rankIndex === 'number') setRankIndex(parsed.rankIndex)
+        if (typeof parsed.rankIndex === 'number') {
+          // rankPairs is derived from the (now clamped) playedCourseIds and never holds
+          // more than one pair, so a legacy rankIndex pointing past that must be reset —
+          // otherwise the rank step finds no matching pair, silently skips itself, and
+          // going Back just re-triggers the same skip instead of reaching the prior step.
+          const maxRankIndex = Math.max(buildRankPairs(playedCourseIds).length - 1, 0)
+          setRankIndex(Math.min(parsed.rankIndex, maxRankIndex))
+        }
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true))
@@ -325,17 +352,8 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
 
   useEffect(() => {
     if (!hydrated) return
-    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 4, rankIndex, stepIndex })).catch(() => undefined)
+    SecureStore.setItemAsync(DRAFT_KEY, JSON.stringify({ ...draft, draftVersion: 5, rankIndex, stepIndex })).catch(() => undefined)
   }, [draft, hydrated, rankIndex, stepIndex])
-
-  useEffect(() => {
-    if (step !== 'rank') return
-    if (rankPairs.length === 0) {
-      setStepIndex((current) => Math.min(current + 1, steps.length - 1))
-      return
-    }
-    if (rankIndex >= rankPairs.length) setRankIndex(0)
-  }, [rankIndex, rankPairs.length, step])
 
   const playedCourses = useMemo(
     () => draft.playedCourseIds.map((id) => draft.courseCatalog[id]).filter(Boolean) as CourseOption[],
@@ -349,6 +367,15 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
     draft.courseCatalog,
     draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null,
   )
+
+  useEffect(() => {
+    if (step !== 'rank') return
+    if (rankPairs.length === 0 || !leftRankCourse || !rightRankCourse) {
+      setStepIndex((current) => Math.min(current + 1, steps.length - 1))
+      return
+    }
+    if (rankIndex >= rankPairs.length) setRankIndex(0)
+  }, [leftRankCourse, rankIndex, rankPairs.length, rightRankCourse, step])
 
   function patchDraft(patch: Partial<OnboardingDraft>) {
     setDraft((current) => ({ ...current, ...patch }))
@@ -389,7 +416,29 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
       patchDraft({ homeCourseId: course.id, homeCourseSearch: course.name })
       return
     }
-    toggleList(mode === 'played' ? 'playedCourseIds' : 'dreamCourseIds', course.id)
+    if (mode === 'played') {
+      setDraft((current) => {
+        const selected = current.playedCourseIds
+        let nextPlayed: string[]
+        if (selected.includes(course.id)) {
+          nextPlayed = selected.filter((id) => id !== course.id)
+        } else if (selected.length < 2) {
+          nextPlayed = [...selected, course.id]
+        } else {
+          nextPlayed = [selected[0], course.id]
+        }
+        const pairChanged = nextPlayed.length !== selected.length || nextPlayed.some((id, index) => id !== selected[index])
+        return {
+          ...current,
+          playedCourseIds: nextPlayed,
+          // The matchup pair is derived from playedCourseIds, so a stale win
+          // from a since-replaced pair must not be reused for the new pair.
+          favoriteWins: pairChanged ? [] : current.favoriteWins,
+        }
+      })
+      return
+    }
+    toggleList('dreamCourseIds', course.id)
   }
 
   function chooseRankWinner(courseId: string) {
@@ -495,20 +544,18 @@ export function OnboardingForm({ searchCourses, checkUsername, submit, onComplet
             onNext={next}
             onSkip={next}
           />
-        ) : step === 'friends' ? (
-          <FriendsStep
-            draft={draft}
-            onChange={patchDraft}
+        ) : step === 'contacts' ? (
+          <ContactsStep
             onNext={next}
             onSkip={next}
             linkContacts={linkContacts}
-            searchUsers={searchUsers}
-            followUser={followUser}
           />
-        ) : step === 'preferences' ? (
-          <PreferenceStep selected={draft.preferences} onToggle={(value) => toggleList('preferences', value)} onNext={next} />
-        ) : step === 'planning' ? (
-          <PlanningStep draft={draft} onChange={patchDraft} onNext={next} />
+        ) : step === 'budget' ? (
+          <BudgetStep
+            budget={draft.budget}
+            onSelect={(budget) => patchDraft({ budget })}
+            onNext={next}
+          />
         ) : step === 'notifications' ? (
           <NotificationsStep onAllow={() => { patchDraft({ notifications: true }); requestPushPermission?.(); next() }} onSkip={() => { patchDraft({ notifications: false }); next() }} />
         ) : step === 'success' ? (
@@ -808,9 +855,29 @@ function PlayedCoursesStep({
     ...suggestions,
   ]
 
+  const countText = `${selectedIds.length} of 2 selected`
+  const isComplete = selectedIds.length === 2
+
+  let buttonLabel = 'Skip for now'
+  if (selectedIds.length === 2) {
+    buttonLabel = 'Continue with 2 selected'
+  } else if (selectedIds.length === 1) {
+    buttonLabel = 'Continue with 1 selected'
+  }
+
   return (
     <View style={styles.step}>
-      <Heading title="Which courses have you played?" subtitle="Search and select courses from the catalog." />
+      <Heading
+        title="Pick 2 courses you've played"
+        subtitle="Search and select 2 courses so we can set up your initial ranking matchup."
+      />
+      <View style={styles.counterRow}>
+        <View style={[styles.counterBadge, isComplete && styles.counterBadgeComplete]}>
+          <Text style={[styles.counterText, isComplete && styles.counterTextComplete]}>
+            {isComplete ? '2 of 2 selected ✓' : countText}
+          </Text>
+        </View>
+      </View>
       <Field label="Search" value={query} onChangeText={onQuery} placeholder="Search courses you've played" />
       <CourseSearchStatus
         searching={searching}
@@ -825,7 +892,7 @@ function PlayedCoursesStep({
           <CourseCard key={course.id} course={course} selected={selectedIds.includes(course.id)} onPress={() => onSelect(course)} />
         ))}
       </View>
-      <PrimaryButton label={selectedIds.length ? `Continue with ${selectedIds.length} selected` : 'Skip for now'} onPress={onNext} />
+      <PrimaryButton label={buttonLabel} onPress={onNext} />
     </View>
   )
 }
@@ -847,7 +914,7 @@ function RankStep({
 }) {
   return (
     <View style={styles.step}>
-      <Heading title="Which would you rather play again?" subtitle="Choose between courses you've played." />
+      <Heading title="Which course did you enjoy more?" subtitle="Choose between the courses you've played to start your ranking." />
       <View style={styles.miniProgressTrack}>
         <View style={[styles.progressFill, { width: `${((current + 1) / total) * 100}%` }]} />
       </View>
@@ -912,85 +979,18 @@ function DreamCoursesStep({
   )
 }
 
-const FRIEND_SEARCH_MIN_CHARS = 2
-
-function useUserSearch(searchUsers: ((query: string) => Promise<UserSearchResult[]>) | undefined, query: string) {
-  const [results, setResults] = useState<UserSearchResult[]>([])
-  const [searching, setSearching] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
-  const requestId = useRef(0)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current)
-    requestId.current += 1
-  }, [])
-
-  useEffect(() => {
-    const trimmed = query.trim()
-    requestId.current += 1
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = null
-    }
-    if (!searchUsers || trimmed.length < FRIEND_SEARCH_MIN_CHARS) {
-      setResults([])
-      setSearching(false)
-      setSearchError(null)
-      return
-    }
-
-    const currentRequest = requestId.current
-    timer.current = setTimeout(() => {
-      void (async () => {
-        setSearching(true)
-        setSearchError(null)
-        try {
-          const users = await searchUsers(trimmed)
-          if (currentRequest !== requestId.current) return
-          setResults(users)
-        } catch (reason) {
-          if (currentRequest !== requestId.current) return
-          setResults([])
-          setSearchError(reason instanceof Error ? reason.message : 'Unable to search golfers.')
-        } finally {
-          if (currentRequest === requestId.current) setSearching(false)
-        }
-      })()
-    }, 300)
-
-    return () => {
-      if (timer.current) clearTimeout(timer.current)
-    }
-  }, [query, searchUsers])
-
-  return { results, searching, searchError }
-}
-
-function FriendsStep({
-  draft,
-  onChange,
+function ContactsStep({
   onNext,
   onSkip,
   linkContacts,
-  searchUsers,
-  followUser,
 }: {
-  draft: OnboardingDraft
-  onChange: (patch: Partial<OnboardingDraft>) => void
   onNext: () => void
   onSkip: () => void
   linkContacts?: (identifiers: string[]) => Promise<void>
-  searchUsers?: (query: string) => Promise<UserSearchResult[]>
-  followUser?: (userId: number) => Promise<void>
 }) {
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState(false)
   const [contactError, setContactError] = useState<string | null>(null)
-  const [followedIds, setFollowedIds] = useState<number[]>([])
-  const [busyUserId, setBusyUserId] = useState<number | null>(null)
-  const [followError, setFollowError] = useState<string | null>(null)
-  const { results, searching, searchError } = useUserSearch(searchUsers, draft.friendSearch)
   const advanced = useRef(false)
 
   const advanceOnce = (action: () => void = onNext) => {
@@ -1026,65 +1026,34 @@ function FriendsStep({
     }
   }
 
-  const follow = async (user: UserSearchResult) => {
-    setBusyUserId(user.id)
-    setFollowError(null)
-    try {
-      await followUser?.(user.id)
-      setFollowedIds((current) => (current.includes(user.id) ? current : [...current, user.id]))
-    } catch (reason) {
-      setFollowError(reason instanceof Error ? reason.message : `Unable to follow ${user.display_name}.`)
-    } finally {
-      setBusyUserId(null)
-    }
-  }
-
-  const trimmedQuery = draft.friendSearch.trim()
-
   return (
     <View style={styles.step}>
-      <Heading title="Find your friends" subtitle="See where your friends play, compare scores, and rank together." />
-      <Field label="Search usernames" value={draft.friendSearch} onChangeText={(friendSearch) => onChange({ friendSearch })} placeholder="@username" autoCapitalize="none" />
-      {searching ? (
-        <View style={styles.searchStatusRow}>
-          <ActivityIndicator accessibilityLabel="Searching golfers" color="#214D3B" />
-          <Text style={styles.searchStatusText}>Searching golfers…</Text>
+      <Heading title="Connect with friends" subtitle="Find friends who already golf and invite others to compare rounds." />
+      <View style={styles.contactsCard}>
+        <View style={styles.contactsIconCircle}>
+          <Feather name="users" size={28} color="#214D3B" />
         </View>
-      ) : searchError ? (
-        <Text accessibilityRole="alert" style={styles.errorText}>{searchError}</Text>
-      ) : trimmedQuery.length >= FRIEND_SEARCH_MIN_CHARS && results.length === 0 ? (
-        <Text style={styles.searchStatusText}>No golfers matched that search.</Text>
-      ) : null}
-      {results.length ? (
-        <View style={styles.listStack}>
-          {results.map((user) => {
-            const isFollowed = user.is_following || followedIds.includes(user.id)
-            return (
-              <View key={user.id} style={styles.friendRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.courseName}>{user.display_name}</Text>
-                  <Text style={styles.courseLocation}>{user.username ? `@${user.username}` : user.home_region ?? 'Golfer'}</Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={isFollowed ? `Following ${user.display_name}` : `Follow ${user.display_name}`}
-                  accessibilityState={{ disabled: isFollowed || busyUserId === user.id }}
-                  disabled={isFollowed || busyUserId === user.id}
-                  onPress={() => void follow(user)}
-                  style={[styles.followChip, isFollowed && styles.followedChip]}
-                >
-                  {busyUserId === user.id
-                    ? <ActivityIndicator color="#214D3B" size="small" />
-                    : <Text style={[styles.followChipText, isFollowed && styles.followedChipText]}>{isFollowed ? 'Following' : 'Follow'}</Text>}
-                </Pressable>
-              </View>
-            )
-          })}
-        </View>
-      ) : null}
-      {followError ? <Text accessibilityRole="alert" style={styles.errorText}>{followError}</Text> : null}
-      <SecondaryButton label={importing ? 'Importing…' : imported ? 'Contacts imported' : 'Import Contacts'} onPress={() => void importContacts()} disabled={importing} />
-      <SecondaryButton label="Invite Friends" onPress={() => void inviteFriends()} disabled={importing} />
+        <Text style={styles.contactsCardTitle}>Find your golf crew</Text>
+        <Text style={styles.contactsCardDesc}>
+          Sync your contacts to find friends on Fairway, compare course rankings, and share golf plans.
+        </Text>
+      </View>
+      <SecondaryButton
+        label={importing ? 'Importing…' : imported ? 'Contacts imported' : 'Import Contacts'}
+        onPress={() => void importContacts()}
+        disabled={importing}
+      />
+      <SecondaryButton
+        label="Invite Friends"
+        onPress={() => void inviteFriends()}
+        disabled={importing}
+      />
+      <View style={styles.privacyNote}>
+        <Feather name="lock" size={13} color="#66736B" />
+        <Text style={styles.privacyText}>
+          We only use contacts to connect you with friends. We never store raw phone numbers or spam.
+        </Text>
+      </View>
       {contactError ? <Text accessibilityRole="alert" style={styles.errorText}>{contactError}</Text> : null}
       <PrimaryButton label="Continue" onPress={() => advanceOnce(onNext)} disabled={importing} />
       <InlineButton label="Skip" onPress={() => advanceOnce(onSkip)} disabled={importing} />
@@ -1092,30 +1061,58 @@ function FriendsStep({
   )
 }
 
-function PreferenceStep({ selected, onToggle, onNext }: { selected: string[]; onToggle: (value: string) => void; onNext: () => void }) {
-  return (
-    <View style={styles.step}>
-      <Heading title="What matters most in a golf experience?" subtitle="Select what you value most." />
-      <View style={styles.chipWrap}>
-        {preferenceOptions.map((option) => (
-          <Chip key={option} label={option} selected={selected.includes(option)} onPress={() => onToggle(option)} />
-        ))}
-      </View>
-      <PrimaryButton label="Continue" onPress={onNext} />
-    </View>
-  )
-}
+// max_green_fee is a single ceiling on the backend (see toPreferences below) — there's
+// no persisted lower bound, so course discovery for any tier still surfaces cheaper
+// courses too. Label these as "Up to $X" ceilings rather than exclusive ranges so the
+// copy matches what's actually enforced.
+const budgetOptions: { tier: '$' | '$$' | '$$$' | '$$$$'; label: string; desc: string }[] = [
+  { tier: '$', label: 'Up to $50', desc: 'Budget-friendly & muni courses' },
+  { tier: '$$', label: 'Up to $100', desc: 'Quality public tracks & local favorites' },
+  { tier: '$$$', label: 'Up to $250', desc: 'Premium resort & championship layouts' },
+  { tier: '$$$$', label: 'Up to $2,000', desc: 'Bucket-list destinations & world-class golf' },
+]
 
-function PlanningStep({ draft, onChange, onNext }: { draft: OnboardingDraft; onChange: (patch: Partial<OnboardingDraft>) => void; onNext: () => void }) {
+function BudgetStep({
+  budget,
+  onSelect,
+  onNext,
+}: {
+  budget: '$' | '$$' | '$$$' | '$$$$' | null
+  onSelect: (budget: '$' | '$$' | '$$$' | '$$$$') => void
+  onNext: () => void
+}) {
   return (
     <View style={styles.step}>
-      <Heading title="Help our AI plan your perfect trips" subtitle="We'll use this to build better recommendations." />
-      <Segmented label="Typical group size" options={['Solo', 'Twosome', 'Foursome']} selected={draft.groupSize} onSelect={(groupSize) => onChange({ groupSize })} />
-      <Segmented label="Typical budget" options={['$', '$$', '$$$', '$$$$']} selected={draft.budget} onSelect={(budget) => onChange({ budget })} />
-      <Field label="Distance willing to travel" value={draft.travelDistance} onChangeText={(travelDistance) => onChange({ travelDistance })} placeholder="Up to 45 minutes" />
-      <Field label="Preferred tee time" value={draft.preferredTeeTime} onChangeText={(preferredTeeTime) => onChange({ preferredTeeTime })} placeholder="Weekend mornings" />
-      <Segmented label="Transportation" options={['Walking', 'Cart', 'Either']} selected={draft.transportation} onSelect={(transportation) => onChange({ transportation })} />
-      <PrimaryButton label="Continue" onPress={onNext} />
+      <Heading
+        title="What's your typical green fee budget?"
+        subtitle="We'll tailor course recommendations and trip planning around your budget."
+      />
+      <View style={styles.budgetGrid}>
+        {budgetOptions.map((option) => {
+          const selected = budget === option.tier
+          return (
+            <Pressable
+              key={option.tier}
+              accessibilityLabel={`${option.tier} ${option.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              onPress={() => onSelect(option.tier)}
+              style={({ pressed }) => [
+                styles.budgetCard,
+                selected && styles.selectedBudgetCard,
+                pressed && styles.softPressed,
+              ]}
+            >
+              <View style={styles.budgetCardHeader}>
+                <Text style={[styles.budgetTier, selected && styles.selectedBudgetTier]}>{option.tier}</Text>
+                <Text style={[styles.budgetRange, selected && styles.selectedBudgetRange]}>{option.label}</Text>
+              </View>
+              <Text style={[styles.budgetDesc, selected && styles.selectedBudgetDesc]}>{option.desc}</Text>
+            </Pressable>
+          )
+        })}
+      </View>
+      <PrimaryButton label={budget ? `Continue with ${budget}` : 'Continue'} onPress={onNext} />
     </View>
   )
 }
@@ -1136,6 +1133,19 @@ function NotificationsStep({ onAllow, onSkip }: { onAllow: () => void; onSkip: (
   )
 }
 
+function featuredCourseBadge(course: CourseOption, draft: OnboardingDraft): string {
+  if (draft.dreamCourseIds.includes(course.id)) {
+    return 'First stop on your wishlist'
+  }
+  if (draft.homeCourseId === course.id) {
+    return 'Your home club'
+  }
+  if (draft.playedCourseIds.includes(course.id)) {
+    return 'From your played history'
+  }
+  return 'Featured course'
+}
+
 function SuccessStep({
   draft,
   recommendation,
@@ -1151,17 +1161,23 @@ function SuccessStep({
   onExploreHome: () => void
   onViewProfile: () => void
 }) {
+  const badge = recommendation ? featuredCourseBadge(recommendation, draft) : null
+
   return (
     <View style={styles.step}>
-      <Heading title="You're all set!" subtitle="Here's what we've built for you." />
+      <Heading title="You're all set!" subtitle="Your golf profile and personalized feed are ready." />
       <View style={styles.summaryCard}>
-        <SummaryLine text={`${playedCount} courses played`} />
-        <SummaryLine text={`${draft.dreamCourseIds.length} dream courses saved`} />
-        <SummaryLine text={draft.homeCourseId ? 'Home course selected' : 'Home region saved'} />
-        <SummaryLine text="AI recommendations ready" />
-        <SummaryLine text={draft.friendSearch ? 'Friends search queued' : 'Friends waiting'} />
+        <SummaryLine text={`${playedCount} ${playedCount === 1 ? 'course' : 'courses'} played`} />
+        <SummaryLine text={`${draft.dreamCourseIds.length} bucket-list ${draft.dreamCourseIds.length === 1 ? 'course' : 'courses'} saved`} />
+        <SummaryLine text={draft.homeCourseId ? 'Home course connected' : 'Home region saved'} />
+        {draft.budget ? <SummaryLine text={`Typical budget: ${draft.budget}`} /> : null}
       </View>
-      {recommendation ? <CourseCard course={recommendation} selected={false} onPress={() => undefined} /> : null}
+      {recommendation ? (
+        <View style={styles.featuredCourseWrap}>
+          {badge ? <Text style={styles.featuredCourseBadge}>{badge}</Text> : null}
+          <CourseCard course={recommendation} selected={false} onPress={() => undefined} fullWidth />
+        </View>
+      ) : null}
       <PrimaryButton disabled={saving} label={saving ? 'Saving profile' : 'Explore Home'} onPress={onExploreHome} />
       <InlineButton disabled={saving} label="Go to My Profile" onPress={onViewProfile} />
     </View>
@@ -1308,14 +1324,14 @@ function CourseButton({ course, selected, onPress }: { course: CourseOption; sel
   )
 }
 
-function CourseCard({ course, selected, onPress }: { course: CourseOption; selected: boolean; onPress: () => void }) {
+function CourseCard({ course, selected, onPress, fullWidth }: { course: CourseOption; selected: boolean; onPress: () => void; fullWidth?: boolean }) {
   return (
     <Pressable
       accessibilityLabel={`${course.name} ${course.location}`}
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={onPress}
-      style={({ pressed }) => [styles.courseCard, selected && styles.selectedCard, pressed && styles.softPressed]}
+      style={({ pressed }) => [styles.courseCard, fullWidth && styles.courseCardFull, selected && styles.selectedCard, pressed && styles.softPressed]}
     >
       <View style={[styles.courseImage, { backgroundColor: course.imageTone }]}>
         <Text style={styles.courseImageText}>{course.meta}</Text>
@@ -1691,6 +1707,9 @@ const styles = StyleSheet.create({
     padding: 7,
     width: '48%',
   },
+  courseCardFull: {
+    width: '100%',
+  },
   selectedCard: {
     backgroundColor: '#F0F6F1',
     borderColor: '#214D3B',
@@ -1855,5 +1874,130 @@ const styles = StyleSheet.create({
     color: '#66736B',
     fontSize: 14,
     lineHeight: 20,
+  },
+  counterRow: {
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  counterBadge: {
+    backgroundColor: '#EEF2EE',
+    borderColor: '#DDE5DF',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  counterBadgeComplete: {
+    backgroundColor: '#E8F3EB',
+    borderColor: '#214D3B',
+  },
+  counterText: {
+    color: '#5E625F',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  counterTextComplete: {
+    color: '#214D3B',
+    fontWeight: '800',
+  },
+  contactsCard: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7E2',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    padding: 20,
+  },
+  contactsIconCircle: {
+    alignItems: 'center',
+    backgroundColor: '#E8F3EB',
+    borderRadius: 28,
+    height: 56,
+    justifyContent: 'center',
+    marginBottom: 4,
+    width: 56,
+  },
+  contactsCardTitle: {
+    color: '#173D30',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  contactsCardDesc: {
+    color: '#5E625F',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  privacyNote: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    marginTop: 4,
+    paddingHorizontal: 16,
+  },
+  privacyText: {
+    color: '#66736B',
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  budgetGrid: {
+    gap: 10,
+  },
+  budgetCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7E2',
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 4,
+    padding: 14,
+  },
+  selectedBudgetCard: {
+    backgroundColor: '#F0F6F1',
+    borderColor: '#214D3B',
+    borderWidth: 2,
+  },
+  budgetCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  budgetTier: {
+    color: '#214D3B',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  selectedBudgetTier: {
+    color: '#173D30',
+  },
+  budgetRange: {
+    color: '#102015',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  selectedBudgetRange: {
+    color: '#102015',
+    fontWeight: '800',
+  },
+  budgetDesc: {
+    color: '#66736B',
+    fontSize: 13,
+  },
+  selectedBudgetDesc: {
+    color: '#25352B',
+  },
+  featuredCourseWrap: {
+    gap: 6,
+  },
+  featuredCourseBadge: {
+    color: '#214D3B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginLeft: 2,
+    textTransform: 'uppercase',
   },
 })
