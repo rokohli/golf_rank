@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 
@@ -8,7 +8,7 @@ import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
 import { CourseRowSkeleton } from '../src/components/Skeleton'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
-import { DEFAULT_COURSE_REGION, resolveCurrentLocation } from '../src/location/currentRegion'
+import { DEFAULT_COURSE_REGION, isAllRegions, resolveCurrentLocation } from '../src/location/currentRegion'
 import { loadSavedRegion, saveRegion } from '../src/location/regionPreference'
 import { Course, CourseRegion } from '../src/types'
 import { colors } from '../src/ui/theme'
@@ -45,29 +45,45 @@ export default function Discover() {
   const locationRequested = useRef(false)
   const requestVersion = useRef(0)
 
-  useEffect(() => {
-    let active = true
-    Promise.all([
-      getAuthHeaders().then(getProfile).catch(() => null),
-      loadSavedRegion().catch(() => null),
-    ]).then(([profile, saved]) => {
-      if (!active) return
+  const syncUserRegion = useCallback(async () => {
+    try {
+      const [profile, saved] = await Promise.all([
+        getAuthHeaders().then(getProfile).catch(() => null),
+        loadSavedRegion().catch(() => null),
+      ])
       const onboardingRegion = profile?.home_region?.trim() || DEFAULT_COURSE_REGION
       setHomeRegion(onboardingRegion)
-      const savedRegion = saved?.trim() && saved !== 'All California' ? saved.trim() : null
-      setRegion(savedRegion || onboardingRegion)
+      const savedRegion = saved && !isAllRegions(saved) ? saved.trim() : null
+      setRegion((current) => {
+        if (savedRegion) return savedRegion
+        if (isAllRegions(current)) return onboardingRegion
+        return current
+      })
       setRegionReady(true)
-    })
-    getCourseRegions().then(setRegions).catch(() => undefined)
-    return () => { active = false }
+    } catch {
+      setRegionReady(true)
+    }
   }, [getAuthHeaders])
+
+  useEffect(() => {
+    void syncUserRegion()
+    getCourseRegions().then(setRegions).catch(() => undefined)
+  }, [syncUserRegion])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isAllRegions(homeRegion)) {
+        void syncUserRegion()
+      }
+    }, [homeRegion, syncUserRegion])
+  )
 
   const searchFilters = useMemo(() => {
     const normalizedQuery = query.trim() || undefined
     const searchingCatalog = normalizedQuery !== undefined
     return {
       q: normalizedQuery,
-      region: !searchingCatalog && !coordinates && region !== DEFAULT_COURSE_REGION ? region : undefined,
+      region: !searchingCatalog && !coordinates && !isAllRegions(region) ? region : undefined,
       lat: !searchingCatalog ? coordinates?.latitude : undefined,
       lng: !searchingCatalog ? coordinates?.longitude : undefined,
       radius_miles: !searchingCatalog && coordinates ? radiusMiles : undefined,
@@ -188,9 +204,9 @@ export default function Discover() {
 
       {searchActive ? <View style={styles.regionSection}><Text style={styles.label}>REGION</Text><View style={styles.regionWrap}><Feather name="map-pin" size={16} color={colors.pine} /><TextInput accessibilityLabel="Region" value={region} onChangeText={updateRegion} onEndEditing={() => void saveRegion(region)} placeholder="City or region" placeholderTextColor={colors.muted} style={styles.regionInput} />{locationLoading ? <ActivityIndicator accessibilityLabel="Finding current location" color={colors.pine} size="small" /> : <Pressable accessibilityRole="button" accessibilityLabel="Use current location" onPress={() => void useCurrentLocation()}><Feather name="navigation" size={16} color={colors.pine} /></Pressable>}</View>{locationMessage ? <Text accessibilityRole="alert" style={styles.muted}>{locationMessage}</Text> : null}</View> : null}
 
-      <View style={styles.chips}><FilterChip label={coordinates ? `Within ${radiusMiles} mi` : region} active /><FilterChip label={`${activeFilterCount} filters`} active={activeFilterCount > 0} onPress={() => setFiltersOpen(true)} />{activeFilterCount || query ? <FilterChip label="Clear all" onPress={clearFilters} /> : null}</View>
+      <View style={styles.chips}><FilterChip label={coordinates ? `Within ${radiusMiles} mi` : (isAllRegions(region) ? DEFAULT_COURSE_REGION : region)} active onPress={() => setFiltersOpen(true)} /><FilterChip label={`${activeFilterCount} filters`} active={activeFilterCount > 0} onPress={() => setFiltersOpen(true)} />{activeFilterCount || query || (!isAllRegions(region) && region !== homeRegion) ? <FilterChip label="Clear all" onPress={clearFilters} /> : null}</View>
 
-      <SectionTitle title={searchActive ? 'SEARCH RESULTS' : `${region} COURSES`} />
+      <SectionTitle title={searchActive ? 'SEARCH RESULTS' : `${isAllRegions(region) ? DEFAULT_COURSE_REGION.toUpperCase() : region.toUpperCase()} COURSES`} />
       {loading && courses.length === 0 ? (
         <View accessibilityLabel="Loading courses">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -199,7 +215,7 @@ export default function Discover() {
         </View>
       ) : null}
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => void loadCourses()} style={styles.primary}><Text style={styles.primaryText}>Try again</Text></Pressable></View> : null}
-      {!loading && !error && !courses.length ? <View style={styles.state}><Feather name="map" size={25} color={colors.muted} /><Text style={styles.emptyTitle}>{query || activeFilterCount ? 'No matching courses' : 'The catalog is empty'}</Text><Text style={styles.muted}>{query || activeFilterCount ? 'Try widening your region or clearing a filter.' : `Add catalog data for ${region} to make courses discoverable.`}</Text></View> : null}
+      {!loading && !error && !courses.length ? <View style={styles.state}><Feather name="map" size={25} color={colors.muted} /><Text style={styles.emptyTitle}>{query || activeFilterCount ? 'No matching courses' : 'The catalog is empty'}</Text><Text style={styles.muted}>{query || activeFilterCount ? 'Try widening your region or clearing a filter.' : `Add catalog data for ${isAllRegions(region) ? DEFAULT_COURSE_REGION : region} to make courses discoverable.`}</Text></View> : null}
       <View>{courses.map((course, index) => <CourseRow key={course.id} course={toDisplayCourse(course, index)} index={index + 1} showReviewCount={false} onPress={() => router.push(`/course/${course.id}` as never)} />)}</View>
       {courses.length >= 50 ? <Pressable accessibilityRole="button" disabled={loadingMore} onPress={() => void loadMore()} style={styles.loadMore}>{loadingMore ? <ActivityIndicator color={colors.pine} /> : <Text style={styles.link}>Load more courses</Text>}</Pressable> : null}
       <Pressable accessibilityRole="button" onPress={() => setMissingOpen(true)} style={styles.missing}><View><Text style={styles.missingTitle}>Can’t find a course?</Text><Text style={styles.muted}>Submit it for catalog review.</Text></View><Feather name="plus-circle" size={19} color={colors.pine} /></Pressable>
@@ -214,7 +230,7 @@ export default function Discover() {
 
 function FilterModal({ visible, onClose, regions, region, setRegion, radius, setRadius, access, setAccess, difficulty, setDifficulty, maxFee, setMaxFee, clear }: { visible: boolean; onClose: () => void; regions: CourseRegion[]; region: string; setRegion: (value: string) => void; radius: number; setRadius: (value: number) => void; access: AccessFilter; setAccess: (value: AccessFilter) => void; difficulty: DifficultyFilter; setDifficulty: (value: DifficultyFilter) => void; maxFee: number | undefined; setMaxFee: (value: number | undefined) => void; clear: () => void }) {
   const cities = regions.filter((item) => item.city).slice(0, 12)
-  return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}><View style={styles.overlay}><ScrollView style={styles.sheet} contentContainerStyle={{ gap: 15 }}><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Course filters</Text><Pressable accessibilityRole="button" accessibilityLabel="Close filters" onPress={onClose}><Feather name="x" size={20} color={colors.ink} /></Pressable></View><Text style={styles.label}>REGION</Text><TextInput accessibilityLabel="Filter region" value={region} onChangeText={setRegion} onEndEditing={() => void saveRegion(region)} style={styles.field} /><View style={styles.chips}>{cities.map((item) => <FilterChip key={`${item.admin1_code}:${item.city}`} label={`${item.city} (${item.course_count})`} onPress={() => setRegion(`${item.city}${item.admin1_code ? `, ${item.admin1_code}` : ''}`)} />)}</View><Text style={styles.label}>DISTANCE</Text><OptionRow options={[10, 25, 50, 100]} selected={radius} onSelect={setRadius} suffix=" mi" /><Text style={styles.label}>ACCESS</Text><OptionRow options={['any', 'public', 'private']} selected={access} onSelect={(value) => setAccess(value as AccessFilter)} /><Text style={styles.label}>DIFFICULTY</Text><OptionRow options={['any', 'beginner', 'intermediate', 'challenging']} selected={difficulty} onSelect={(value) => setDifficulty(value as DifficultyFilter)} /><Text style={styles.label}>MAX GREEN FEE</Text><TextInput accessibilityLabel="Maximum green fee" value={maxFee === undefined ? '' : String(maxFee)} onChangeText={(value) => setMaxFee(value ? Number(value.replace(/\D/g, '')) : undefined)} keyboardType="number-pad" placeholder="Any price" style={styles.field} /><View style={styles.sheetActions}><Pressable accessibilityRole="button" onPress={clear}><Text style={styles.link}>Clear all</Text></Pressable><Pressable accessibilityRole="button" onPress={onClose} style={styles.primary}><Text style={styles.primaryText}>Show courses</Text></Pressable></View></ScrollView></View></Modal>
+  return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}><View style={styles.overlay}><ScrollView style={styles.sheet} contentContainerStyle={{ gap: 15 }}><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Course filters</Text><Pressable accessibilityRole="button" accessibilityLabel="Close filters" onPress={onClose}><Feather name="x" size={20} color={colors.ink} /></Pressable></View><Text style={styles.label}>REGION</Text><TextInput accessibilityLabel="Filter region" value={region} onChangeText={setRegion} onEndEditing={() => void saveRegion(region)} style={styles.field} /><View style={styles.chips}><FilterChip label="All regions" active={isAllRegions(region)} onPress={() => { setRegion(DEFAULT_COURSE_REGION); void saveRegion(DEFAULT_COURSE_REGION) }} />{cities.map((item) => { const cityLabel = `${item.city}${item.admin1_code ? `, ${item.admin1_code}` : ''}`; return <FilterChip key={`${item.admin1_code}:${item.city}`} label={`${item.city} (${item.course_count})`} active={region === cityLabel} onPress={() => { setRegion(cityLabel); void saveRegion(cityLabel) }} /> })}</View><Text style={styles.label}>DISTANCE</Text><OptionRow options={[10, 25, 50, 100]} selected={radius} onSelect={setRadius} suffix=" mi" /><Text style={styles.label}>ACCESS</Text><OptionRow options={['any', 'public', 'private']} selected={access} onSelect={(value) => setAccess(value as AccessFilter)} /><Text style={styles.label}>DIFFICULTY</Text><OptionRow options={['any', 'beginner', 'intermediate', 'challenging']} selected={difficulty} onSelect={(value) => setDifficulty(value as DifficultyFilter)} /><Text style={styles.label}>MAX GREEN FEE</Text><TextInput accessibilityLabel="Maximum green fee" value={maxFee === undefined ? '' : String(maxFee)} onChangeText={(value) => setMaxFee(value ? Number(value.replace(/\D/g, '')) : undefined)} keyboardType="number-pad" placeholder="Any price" style={styles.field} /><View style={styles.sheetActions}><Pressable accessibilityRole="button" onPress={clear}><Text style={styles.link}>Clear all</Text></Pressable><Pressable accessibilityRole="button" onPress={onClose} style={styles.primary}><Text style={styles.primaryText}>Show courses</Text></Pressable></View></ScrollView></View></Modal>
 }
 
 function OptionRow({ options, selected, onSelect, suffix = '' }: { options: (string | number)[]; selected: string | number; onSelect: (value: never) => void; suffix?: string }) { return <View style={styles.chips}>{options.map((option) => <FilterChip key={option} label={`${typeof option === 'string' ? capitalize(option) : option}${suffix}`} active={selected === option} onPress={() => onSelect(option as never)} />)}</View> }

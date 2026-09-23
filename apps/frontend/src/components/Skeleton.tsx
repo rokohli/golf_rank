@@ -23,21 +23,26 @@ export function SkeletonPulse({
   style?: StyleProp<ViewStyle>
   accessibilityLabel?: string
 }) {
-  const opacity = useRef(new Animated.Value(0.45)).current
+  const parentOpacity = useContext(SkeletonContext)
+  const localOpacityRef = useRef<Animated.Value | null>(null)
+  if (!parentOpacity && !localOpacityRef.current) {
+    localOpacityRef.current = new Animated.Value(0.45)
+  }
+  const opacity = parentOpacity ?? localOpacityRef.current!
 
   useEffect(() => {
-    if (process.env.NODE_ENV === 'test') {
+    if (parentOpacity || process.env.NODE_ENV === 'test' || !localOpacityRef.current) {
       return
     }
     const pulse = Animated.loop(
       Animated.sequence([
-        Animated.timing(opacity, { toValue: 0.85, duration: 800, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.45, duration: 800, useNativeDriver: true }),
+        Animated.timing(localOpacityRef.current, { toValue: 0.85, duration: 800, useNativeDriver: true }),
+        Animated.timing(localOpacityRef.current, { toValue: 0.45, duration: 800, useNativeDriver: true }),
       ])
     )
     pulse.start()
     return () => pulse.stop()
-  }, [opacity])
+  }, [parentOpacity])
 
   return (
     <SkeletonContext.Provider value={opacity}>
@@ -66,10 +71,17 @@ export function SkeletonBox({
   accessibilityLabel?: string
 }) {
   const contextOpacity = useContext(SkeletonContext)
-  const localOpacity = useRef(new Animated.Value(0.45)).current
+  const flatStyle = StyleSheet.flatten(style)
+  const hasExplicitOpacity = flatStyle?.opacity !== undefined
+
+  const localOpacityRef = useRef<Animated.Value | null>(null)
+  if (!contextOpacity && !hasExplicitOpacity && !localOpacityRef.current) {
+    localOpacityRef.current = new Animated.Value(0.45)
+  }
+  const localOpacity = localOpacityRef.current
 
   useEffect(() => {
-    if (contextOpacity || process.env.NODE_ENV === 'test') {
+    if (contextOpacity || hasExplicitOpacity || !localOpacity || process.env.NODE_ENV === 'test') {
       return
     }
     const pulse = Animated.loop(
@@ -80,9 +92,27 @@ export function SkeletonBox({
     )
     pulse.start()
     return () => pulse.stop()
-  }, [contextOpacity, localOpacity])
+  }, [contextOpacity, hasExplicitOpacity, localOpacity])
 
-  const opacity = contextOpacity ?? localOpacity
+  if (hasExplicitOpacity) {
+    return (
+      <View
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole="none"
+        style={[
+          styles.box,
+          {
+            borderRadius,
+            height,
+            width,
+          },
+          style,
+        ]}
+      />
+    )
+  }
+
+  const opacity = contextOpacity ?? localOpacity!
 
   return (
     <Animated.View
@@ -154,7 +184,7 @@ export function CourseCardSkeleton({
   style?: StyleProp<ViewStyle>
 }) {
   return (
-    <View style={[styles.card, compact && styles.compactCard, style]}>
+    <SkeletonPulse style={[styles.card, compact && styles.compactCard, style]}>
       <SkeletonBox
         height={compact ? 92 : 132}
         width="100%"
@@ -170,7 +200,7 @@ export function CourseCardSkeleton({
           <SkeletonLine width={42} height={11} style={{ marginLeft: 'auto' }} />
         </View>
       </View>
-    </View>
+    </SkeletonPulse>
   )
 }
 
@@ -182,7 +212,7 @@ export function CourseRowSkeleton({
   style?: StyleProp<ViewStyle>
 }) {
   return (
-    <View style={[styles.courseRow, style]}>
+    <SkeletonPulse style={[styles.courseRow, style]}>
       {hasIndex ? <SkeletonBox width={20} height={20} borderRadius={4} /> : null}
       <SkeletonBox width={76} height={52} borderRadius={6} />
       <View style={{ flex: 1, gap: 5 }}>
@@ -190,8 +220,8 @@ export function CourseRowSkeleton({
         <SkeletonLine width="42%" height={11} />
         <SkeletonLine width="28%" height={11} />
       </View>
-      <SkeletonBox width={14} height={14} borderRadius={7} style={{ opacity: 0.3 }} />
-    </View>
+      <SkeletonBox width={14} height={14} borderRadius={7} style={styles.chevronPlaceholder} />
+    </SkeletonPulse>
   )
 }
 
@@ -237,29 +267,29 @@ export function FeedActivitySkeleton() {
   )
 }
 
-export function ProfileStatsSkeleton() {
+export function ProfileStatsSkeleton({ style }: { style?: StyleProp<ViewStyle> } = {}) {
   return (
-    <View style={styles.statsRow}>
+    <SkeletonPulse style={[styles.statsRow, style]}>
       {Array.from({ length: 4 }).map((_, i) => (
         <View key={i} style={[styles.statBox, i === 3 && styles.statBoxLast]}>
           <SkeletonBox width={34} height={20} borderRadius={4} style={{ marginBottom: 5 }} />
           <SkeletonLine width={44} height={10} />
         </View>
       ))}
-    </View>
+    </SkeletonPulse>
   )
 }
 
-export function RecentRoundSkeleton() {
+export function RecentRoundSkeleton({ style }: { style?: StyleProp<ViewStyle> } = {}) {
   return (
-    <View style={styles.recentRound}>
+    <SkeletonPulse style={[styles.recentRound, style]}>
       <SkeletonBox width={62} height={62} borderRadius={8} />
       <View style={{ flex: 1, gap: 6, marginLeft: 12 }}>
         <SkeletonLine width="65%" height={15} />
         <SkeletonLine width="45%" height={12} />
       </View>
       <SkeletonBox width={40} height={32} borderRadius={6} />
-    </View>
+    </SkeletonPulse>
   )
 }
 
@@ -344,6 +374,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 11,
     paddingVertical: 10,
+  },
+  chevronPlaceholder: {
+    opacity: 0.3,
   },
   featuredContainer: {
     borderRadius: 10,

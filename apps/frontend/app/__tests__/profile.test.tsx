@@ -202,8 +202,8 @@ describe('profile experience', () => {
   it('edits golf preference tiles and preserves the rest of the profile', async () => {
     render(<GolfPreferences />)
 
-    await screen.findByText('$350')
-    fireEvent(screen.getByLabelText('Maximum green fee'), 'accessibilityAction', { nativeEvent: { actionName: 'increment' } })
+    await screen.findByText('BUDGET')
+    fireEvent.press(screen.getByText('$$'))
     fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
     fireEvent.press(screen.getByText('Solo'))
     fireEvent.press(screen.getByRole('button', { name: 'Done' }))
@@ -214,14 +214,14 @@ describe('profile experience', () => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         access: 'private',
         home_region: 'Monterey, CA',
-        max_green_fee: 375,
-        onboarding_data: expect.objectContaining({ first_name: 'Rohan', group_size: 'Solo' }),
+        max_green_fee: 100,
+        onboarding_data: expect.objectContaining({ first_name: 'Rohan', group_size: 'Solo', budget: '$$' }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })
   })
 
-  it('preserves fees above the slider maximum when editing unrelated preferences', async () => {
+  it('reflects the onboarding budget tier even when max_green_fee is a stale legacy value', async () => {
     mockGetProfile.mockResolvedValueOnce({
       home_region: 'Monterey, CA',
       max_green_fee: 650,
@@ -248,7 +248,8 @@ describe('profile experience', () => {
 
     render(<GolfPreferences />)
 
-    await screen.findByText('$650')
+    await screen.findByText('BUDGET')
+    expect(screen.getByRole('button', { name: '$$$$' }).props.accessibilityState.selected).toBe(true)
     fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
     fireEvent.press(screen.getByText('Solo'))
     fireEvent.press(screen.getByRole('button', { name: 'Done' }))
@@ -256,8 +257,8 @@ describe('profile experience', () => {
 
     await waitFor(() => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
-        max_green_fee: 650,
-        onboarding_data: expect.objectContaining({ group_size: 'Solo' }),
+        max_green_fee: 2000,
+        onboarding_data: expect.objectContaining({ group_size: 'Solo', budget: '$$$$' }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })

@@ -2,6 +2,17 @@ import * as Location from 'expo-location'
 
 export const DEFAULT_COURSE_REGION = 'All regions'
 
+export function isAllRegions(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return (
+    !normalized ||
+    normalized === 'all' ||
+    normalized === 'all region' ||
+    normalized === 'all regions' ||
+    normalized === 'all california'
+  )
+}
+
 export type CurrentRegion = {
   label: string
   latitude: number

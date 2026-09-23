@@ -75,4 +75,40 @@ describe('Skeleton components', () => {
     render(<CourseDetailSkeleton topInset={44} />)
     expect(screen.getByLabelText('Loading course')).toBeOnTheScreen()
   })
+
+  it('renders SkeletonBox with explicit opacity without crashing or animating', () => {
+    render(
+      <SkeletonBox
+        width={14}
+        height={14}
+        borderRadius={7}
+        style={{ opacity: 0.3 }}
+        accessibilityLabel="Trailing placeholder"
+      />
+    )
+    const element = screen.getByLabelText('Trailing placeholder')
+    expect(element).toBeOnTheScreen()
+    expect(element.props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ opacity: 0.3 }),
+      ])
+    )
+  })
+
+  it('renders nested SkeletonPulse and child SkeletonBox without issues', () => {
+    render(
+      <SkeletonPulse accessibilityLabel="Outer pulse">
+        <SkeletonBox width={100} height={20} accessibilityLabel="Box in pulse" />
+        <SkeletonPulse accessibilityLabel="Inner pulse">
+          <SkeletonBox width={50} height={10} accessibilityLabel="Box in nested pulse" />
+          <SkeletonBox width={14} height={14} style={{ opacity: 0.3 }} accessibilityLabel="Faded box in nested pulse" />
+        </SkeletonPulse>
+      </SkeletonPulse>
+    )
+    expect(screen.getByLabelText('Outer pulse')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Inner pulse')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Box in pulse')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Box in nested pulse')).toBeOnTheScreen()
+    expect(screen.getByLabelText('Faded box in nested pulse')).toBeOnTheScreen()
+  })
 })
