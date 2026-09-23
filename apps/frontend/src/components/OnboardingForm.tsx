@@ -1065,7 +1065,7 @@ const budgetOptions: { tier: '$' | '$$' | '$$$' | '$$$$'; label: string; desc: s
   { tier: '$', label: 'Under $50', desc: 'Budget-friendly & muni courses' },
   { tier: '$$', label: '$50 – $100', desc: 'Quality public tracks & local favorites' },
   { tier: '$$$', label: '$100 – $250', desc: 'Premium resort & championship layouts' },
-  { tier: '$$$$', label: '$250+', desc: 'Bucket-list destinations & world-class golf' },
+  { tier: '$$$$', label: '$250 – $2,000', desc: 'Bucket-list destinations & world-class golf' },
 ]
 
 function BudgetStep({
