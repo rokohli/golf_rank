@@ -1395,8 +1395,8 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
     try {
       if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
       await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
-      await clearSavedRegion()
       await signOut()
+      await clearSavedRegion()
     } catch (error) {
       // unregisterCurrentPushToken and the tracked registrations never
       // throw (both swallow their own failures) -- only Clerk's raw

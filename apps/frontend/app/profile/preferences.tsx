@@ -33,7 +33,7 @@ export default function GolfPreferences() {
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
   const [access, setAccess] = useState<Access>('any')
   const [difficulty, setDifficulty] = useState<Difficulty>('any')
-  const [budget, setBudget] = useState<BudgetTier>('$$$')
+  const [budget, setBudget] = useState<BudgetTier | null>(null)
   const [groupSize, setGroupSize] = useState<GroupSize>('Foursome')
   const [transportation, setTransportation] = useState<Transportation>('Either')
   const [teeTime, setTeeTime] = useState('Flexible')
@@ -51,7 +51,11 @@ export default function GolfPreferences() {
       setProfile(next)
       setAccess(next.access)
       setDifficulty(next.difficulty)
-      setBudget(next.onboarding_data?.budget ?? tierForMaxGreenFee(next.max_green_fee) ?? '$$$')
+      // Legacy profiles saved before the tier picker existed (or via the old
+      // raw-dollar slider) may have a max_green_fee that matches no tier
+      // exactly -- leave budget unset rather than guessing, so save() below
+      // doesn't silently overwrite their actual fee with a wrong tier.
+      setBudget(next.onboarding_data?.budget ?? tierForMaxGreenFee(next.max_green_fee))
       setGroupSize(next.onboarding_data?.group_size ?? 'Foursome')
       setTransportation(next.onboarding_data?.transportation ?? 'Either')
       setTeeTime(next.onboarding_data?.preferred_tee_time || 'Flexible')
@@ -77,14 +81,18 @@ export default function GolfPreferences() {
         ...profile,
         access,
         difficulty,
-        max_green_fee: maxGreenFeeForTier(budget),
+        // Only override the persisted fee/tier when a tier was actually
+        // resolved (from onboarding_data.budget or an exact legacy match) or
+        // the user picked one in this screen -- otherwise preserve the
+        // profile's existing values untouched.
+        max_green_fee: budget ? maxGreenFeeForTier(budget) : profile.max_green_fee,
         onboarding_data: {
           ...profile.onboarding_data,
           group_size: groupSize,
           preferred_tee_time: teeTime,
           transportation,
           travel_distance: travelDistance,
-          budget,
+          ...(budget ? { budget } : null),
         },
       }, await getAuthHeaders())
       router.back()
