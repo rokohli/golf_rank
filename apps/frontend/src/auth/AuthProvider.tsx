@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { getProfile } from '../api/client'
 import { GetStartedScreen } from '../components/GetStartedScreen'
+import { clearSavedRegion } from '../location/regionPreference'
 import { requestAndRegisterPushToken, unregisterCurrentPushToken } from '../notifications/pushTokens'
 import { hasVerifiedPhone, PhoneSetupScreen } from './PhoneSetupScreen'
 import { ApiHeaders, buildAuthHeaders } from './useAuthToken'
@@ -1395,6 +1396,7 @@ function ClerkUserControls({ children }: { children: ReactNode }) {
       if (pendingRegistrations.current.size > 0) await Promise.all(pendingRegistrations.current)
       await unregisterCurrentPushToken(() => buildAuthHeaders(getToken))
       await signOut()
+      await clearSavedRegion()
     } catch (error) {
       // unregisterCurrentPushToken and the tracked registrations never
       // throw (both swallow their own failures) -- only Clerk's raw

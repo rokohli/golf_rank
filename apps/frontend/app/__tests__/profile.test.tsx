@@ -202,8 +202,8 @@ describe('profile experience', () => {
   it('edits golf preference tiles and preserves the rest of the profile', async () => {
     render(<GolfPreferences />)
 
-    await screen.findByText('$350')
-    fireEvent(screen.getByLabelText('Maximum green fee'), 'accessibilityAction', { nativeEvent: { actionName: 'increment' } })
+    await screen.findByText('BUDGET')
+    fireEvent.press(screen.getByText('$$'))
     fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
     fireEvent.press(screen.getByText('Solo'))
     fireEvent.press(screen.getByRole('button', { name: 'Done' }))
@@ -214,14 +214,14 @@ describe('profile experience', () => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
         access: 'private',
         home_region: 'Monterey, CA',
-        max_green_fee: 375,
-        onboarding_data: expect.objectContaining({ first_name: 'Rohan', group_size: 'Solo' }),
+        max_green_fee: 100,
+        onboarding_data: expect.objectContaining({ first_name: 'Rohan', group_size: 'Solo', budget: '$$' }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })
   })
 
-  it('preserves fees above the slider maximum when editing unrelated preferences', async () => {
+  it('reflects the onboarding budget tier even when max_green_fee is a stale legacy value', async () => {
     mockGetProfile.mockResolvedValueOnce({
       home_region: 'Monterey, CA',
       max_green_fee: 650,
@@ -248,7 +248,8 @@ describe('profile experience', () => {
 
     render(<GolfPreferences />)
 
-    await screen.findByText('$650')
+    await screen.findByText('BUDGET')
+    expect(screen.getByRole('button', { name: '$$$$' }).props.accessibilityState.selected).toBe(true)
     fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
     fireEvent.press(screen.getByText('Solo'))
     fireEvent.press(screen.getByRole('button', { name: 'Done' }))
@@ -256,8 +257,53 @@ describe('profile experience', () => {
 
     await waitFor(() => {
       expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
-        max_green_fee: 650,
-        onboarding_data: expect.objectContaining({ group_size: 'Solo' }),
+        max_green_fee: 2000,
+        onboarding_data: expect.objectContaining({ group_size: 'Solo', budget: '$$$$' }),
+      }), expect.anything())
+      expect(mockRouter.back).toHaveBeenCalled()
+    })
+  })
+
+  it('preserves an unrecognized legacy green fee instead of silently rewriting it to a tier', async () => {
+    mockGetProfile.mockResolvedValueOnce({
+      home_region: 'Monterey, CA',
+      max_green_fee: 175,
+      difficulty: 'any',
+      access: 'public',
+      onboarding_data: {
+        first_name: 'Rohan',
+        last_name: 'Kohli',
+        username: 'rohan',
+        home_course_id: '1',
+        home_course_search: 'Pebble Beach',
+        played_course_ids: ['1'],
+        favorite_wins: ['1'],
+        dream_course_ids: ['2'],
+        preferences: ['Scenic views'],
+        group_size: 'Foursome',
+        budget: null,
+        travel_distance: 'Up to 45 minutes',
+        preferred_tee_time: 'Weekend mornings',
+        transportation: 'Cart',
+        notifications: true,
+      },
+    })
+
+    render(<GolfPreferences />)
+
+    await screen.findByText('BUDGET')
+    for (const tier of ['$', '$$', '$$$', '$$$$']) {
+      expect(screen.getByRole('button', { name: tier }).props.accessibilityState.selected).toBe(false)
+    }
+    fireEvent.press(screen.getByRole('button', { name: 'Usual group, Foursome' }))
+    fireEvent.press(screen.getByText('Solo'))
+    fireEvent.press(screen.getByRole('button', { name: 'Done' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(mockSavePreferences).toHaveBeenCalledWith(expect.objectContaining({
+        max_green_fee: 175,
+        onboarding_data: expect.objectContaining({ group_size: 'Solo', budget: null }),
       }), expect.anything())
       expect(mockRouter.back).toHaveBeenCalled()
     })

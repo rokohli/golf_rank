@@ -36,7 +36,7 @@ const FAQS: FaqItem[] = [
     id: 'budget-tiers',
     question: 'What do the budget tiers ($, $$, $$$, $$$$) mean?',
     answer:
-      'Budget tiers help match course discovery and trip recommendations to what you like to spend per round:\n\n• $ (Budget / Muni): Up to $50\n• $$ (Standard Public): Up to $100\n• $$$ (Premium Public): Up to $250\n• $$$$ (Splurge / Destination): Up to $2,000\n\nYou can fine-tune your exact maximum green fee anytime under Profile > Golf preferences.',
+      'Budget tiers help match course discovery and trip recommendations to what you like to spend per round:\n\n• $ (Budget / Muni): Up to $50\n• $$ (Standard Public): Up to $100\n• $$$ (Premium Public): Up to $250\n• $$$$ (Splurge / Destination): $250+\n\nYou can change your budget tier anytime under Profile > Golf preferences.',
   },
   {
     id: 'hero-photos',

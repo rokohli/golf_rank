@@ -5,8 +5,9 @@ import * as ImagePicker from 'expo-image-picker'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Animated, Image, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native'
 
+import { BudgetTier, budgetTierOptions, maxGreenFeeForTier } from '../budgetTiers'
 import { contactIdentifiers } from '../contactIdentifiers'
-import { Course, OnboardingPreferences, UserSearchResult } from '../types'
+import { Course, OnboardingPreferences } from '../types'
 
 type Difficulty = OnboardingPreferences['difficulty']
 type Access = OnboardingPreferences['access']
@@ -34,7 +35,7 @@ type OnboardingDraft = {
   friendSearch: string
   preferences: string[]
   groupSize: 'Solo' | 'Twosome' | 'Foursome' | null
-  budget: '$' | '$$' | '$$$' | '$$$$' | null
+  budget: BudgetTier | null
   travelDistance: string
   preferredTeeTime: string
   transportation: 'Walking' | 'Cart' | 'Either' | null
@@ -62,8 +63,6 @@ type OnboardingFormProps = {
   saveProfile?: (profile: { firstName: string; lastName: string; username: string }) => Promise<void>
   updatePhoto?: (file: string) => Promise<void>
   linkContacts?: (identifiers: string[]) => Promise<void>
-  searchUsers?: (query: string) => Promise<UserSearchResult[]>
-  followUser?: (userId: number) => Promise<void>
   // Called when the user taps Enable on the notifications step -- the one
   // explicit in-app moment the native permission prompt is allowed to
   // appear. Never called on Skip, and never called anywhere else in this
@@ -162,7 +161,7 @@ function selectedCourse(ids: string[], catalog: Record<string, CourseOption>, fa
 
 function toPreferences(draft: OnboardingDraft): OnboardingPreferences {
   const homeCourse = draft.homeCourseId ? draft.courseCatalog[draft.homeCourseId] ?? null : null
-  const maxGreenFee = draft.budget === '$' ? 50 : draft.budget === '$$' ? 100 : draft.budget === '$$$$' ? 2000 : 250
+  const maxGreenFee = draft.budget ? maxGreenFeeForTier(draft.budget) : 250
   const difficulty: Difficulty = draft.preferences?.includes('Beginner friendly')
     ? 'beginner'
     : draft.preferences?.includes('Tough layouts') || draft.preferences?.includes('Championship courses')
@@ -275,7 +274,7 @@ function migrateDraftStepIndex(parsedStepIndex: number, draftVersion: number | u
   return Math.min(effectiveIndex, steps.length - 1)
 }
 
-export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, searchUsers, followUser, requestPushPermission }: OnboardingFormProps) {
+export function OnboardingForm({ searchCourses, checkUsername, submit, onComplete, onExit, saveProfile, updatePhoto, linkContacts, requestPushPermission }: OnboardingFormProps) {
   const [stepIndex, setStepIndex] = useState(0)
   const [draft, setDraft] = useState<OnboardingDraft>(initialDraft)
   const [courseQuery, setCourseQuery] = useState('')
@@ -1061,24 +1060,13 @@ function ContactsStep({
   )
 }
 
-// max_green_fee is a single ceiling on the backend (see toPreferences below) — there's
-// no persisted lower bound, so course discovery for any tier still surfaces cheaper
-// courses too. Label these as "Up to $X" ceilings rather than exclusive ranges so the
-// copy matches what's actually enforced.
-const budgetOptions: { tier: '$' | '$$' | '$$$' | '$$$$'; label: string; desc: string }[] = [
-  { tier: '$', label: 'Up to $50', desc: 'Budget-friendly & muni courses' },
-  { tier: '$$', label: 'Up to $100', desc: 'Quality public tracks & local favorites' },
-  { tier: '$$$', label: 'Up to $250', desc: 'Premium resort & championship layouts' },
-  { tier: '$$$$', label: 'Up to $2,000', desc: 'Bucket-list destinations & world-class golf' },
-]
-
 function BudgetStep({
   budget,
   onSelect,
   onNext,
 }: {
-  budget: '$' | '$$' | '$$$' | '$$$$' | null
-  onSelect: (budget: '$' | '$$' | '$$$' | '$$$$') => void
+  budget: BudgetTier | null
+  onSelect: (budget: BudgetTier) => void
   onNext: () => void
 }) {
   return (
@@ -1088,7 +1076,7 @@ function BudgetStep({
         subtitle="We'll tailor course recommendations and trip planning around your budget."
       />
       <View style={styles.budgetGrid}>
-        {budgetOptions.map((option) => {
+        {budgetTierOptions.map((option) => {
           const selected = budget === option.tier
           return (
             <Pressable

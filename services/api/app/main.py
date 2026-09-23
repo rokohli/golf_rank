@@ -552,12 +552,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 Course.region.ilike(needle),
             ))
         if region:
-            statement = statement.where(or_(
-                Course.region.ilike(f"%{region}%"),
-                Course.city.ilike(f"%{region}%"),
-                Course.admin1_code.ilike(region),
-                Course.admin1_name.ilike(f"%{region}%"),
-            ))
+            normalized_region = region.strip().lower()
+            if normalized_region in {"all", "all region", "all regions", "all california"}:
+                region = None
+            else:
+                statement = statement.where(or_(
+                    Course.region.ilike(f"%{region}%"),
+                    Course.city.ilike(f"%{region}%"),
+                    Course.admin1_code.ilike(region),
+                    Course.admin1_name.ilike(f"%{region}%"),
+                ))
         if country:
             statement = statement.where(Course.country_code == country.upper())
         if admin1:

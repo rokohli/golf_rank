@@ -1,10 +1,11 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useFocusEffect, useRouter } from 'expo-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AccessibilityActionEvent, ActivityIndicator, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useCallback, useEffect, useState } from 'react'
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { getProfile, savePreferences } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
+import { BudgetTier, budgetTierOptions, maxGreenFeeForTier, tierForMaxGreenFee } from '../../src/budgetTiers'
 import { ProductScreen, ScreenHeader } from '../../src/components/ProductUI'
 import { OnboardingPreferences } from '../../src/types'
 import { colors, radii } from '../../src/ui/theme'
@@ -14,10 +15,6 @@ type Difficulty = OnboardingPreferences['difficulty']
 type GroupSize = NonNullable<NonNullable<OnboardingPreferences['onboarding_data']>['group_size']>
 type Transportation = NonNullable<NonNullable<OnboardingPreferences['onboarding_data']>['transportation']>
 type SheetKey = 'group' | 'transportation' | 'teeTime' | 'travel' | null
-
-const MIN_FEE = 25
-const MAX_FEE = 400
-const FEE_STEP = 25
 
 const accessOptions: Array<{ label: string; value: Access }> = [
   { label: 'Any', value: 'any' }, { label: 'Public', value: 'public' }, { label: 'Private', value: 'private' },
@@ -36,7 +33,7 @@ export default function GolfPreferences() {
   const [profile, setProfile] = useState<OnboardingPreferences | null>(null)
   const [access, setAccess] = useState<Access>('any')
   const [difficulty, setDifficulty] = useState<Difficulty>('any')
-  const [maxFee, setMaxFee] = useState(350)
+  const [budget, setBudget] = useState<BudgetTier | null>(null)
   const [groupSize, setGroupSize] = useState<GroupSize>('Foursome')
   const [transportation, setTransportation] = useState<Transportation>('Either')
   const [teeTime, setTeeTime] = useState('Flexible')
@@ -54,8 +51,11 @@ export default function GolfPreferences() {
       setProfile(next)
       setAccess(next.access)
       setDifficulty(next.difficulty)
-      const initialFee = typeof next.max_green_fee === 'number' ? next.max_green_fee : 175
-      setMaxFee(initialFee > MAX_FEE ? initialFee : clampFee(initialFee))
+      // Legacy profiles saved before the tier picker existed (or via the old
+      // raw-dollar slider) may have a max_green_fee that matches no tier
+      // exactly -- leave budget unset rather than guessing, so save() below
+      // doesn't silently overwrite their actual fee with a wrong tier.
+      setBudget(next.onboarding_data?.budget ?? tierForMaxGreenFee(next.max_green_fee))
       setGroupSize(next.onboarding_data?.group_size ?? 'Foursome')
       setTransportation(next.onboarding_data?.transportation ?? 'Either')
       setTeeTime(next.onboarding_data?.preferred_tee_time || 'Flexible')
@@ -81,13 +81,18 @@ export default function GolfPreferences() {
         ...profile,
         access,
         difficulty,
-        max_green_fee: maxFee,
+        // Only override the persisted fee/tier when a tier was actually
+        // resolved (from onboarding_data.budget or an exact legacy match) or
+        // the user picked one in this screen -- otherwise preserve the
+        // profile's existing values untouched.
+        max_green_fee: budget ? maxGreenFeeForTier(budget) : profile.max_green_fee,
         onboarding_data: {
           ...profile.onboarding_data,
           group_size: groupSize,
           preferred_tee_time: teeTime,
           transportation,
           travel_distance: travelDistance,
+          ...(budget ? { budget } : null),
         },
       }, await getAuthHeaders())
       router.back()
@@ -111,8 +116,8 @@ export default function GolfPreferences() {
           <View style={styles.chips}>{difficultyOptions.map((option) => <ChoiceChip key={option.value} label={option.label} selected={difficulty === option.value} onPress={() => setDifficulty(option.value)} />)}</View>
         </PreferenceSection>
 
-        <PreferenceSection title="MAX GREEN FEE">
-          <FeeSlider value={maxFee} onChange={setMaxFee} />
+        <PreferenceSection title="BUDGET">
+          <View style={styles.chips}>{budgetTierOptions.map((option) => <ChoiceChip key={option.tier} label={option.tier} selected={budget === option.tier} onPress={() => setBudget(option.tier)} />)}</View>
         </PreferenceSection>
 
         <PreferenceSection title="HOW YOU PLAY">
@@ -159,45 +164,6 @@ function ChoiceChip({ label, onPress, selected }: { label: string; onPress: () =
   return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.chip, selected && styles.chipActive]}><Text style={[styles.chipText, selected && styles.selectedText]}>{label}</Text></Pressable>
 }
 
-function FeeSlider({ onChange, value }: { onChange: (value: number) => void; value: number }) {
-  const [width, setWidth] = useState(0)
-  const startValue = useRef(value)
-  const updateFromDelta = useCallback((delta: number) => {
-    if (!width) return
-    const base = Math.min(MAX_FEE, startValue.current)
-    onChange(clampFee(base + (delta / width) * (MAX_FEE - MIN_FEE)))
-  }, [onChange, width])
-  const responder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { startValue.current = value },
-    onPanResponderMove: (_event, gesture) => updateFromDelta(gesture.dx),
-  }), [updateFromDelta, value])
-  const percent = Math.min(100, Math.max(0, ((value - MIN_FEE) / (MAX_FEE - MIN_FEE)) * 100))
-  const adjust = (event: AccessibilityActionEvent) => {
-    const action = event.nativeEvent.actionName
-    if (action === 'decrement') {
-      if (value > MAX_FEE) {
-        onChange(MAX_FEE)
-      } else {
-        onChange(clampFee(value - FEE_STEP))
-      }
-    } else if (action === 'increment') {
-      if (value < MAX_FEE) {
-        onChange(clampFee(value + FEE_STEP))
-      }
-    }
-  }
-  const feeText = value >= MAX_FEE ? (value > MAX_FEE ? `$${value}` : '$400+') : `$${value}`
-  return <View style={styles.feeCard}>
-    <View style={styles.feeHeading}><Text style={styles.feeValue}>{feeText}</Text><Text style={styles.feeUnit}>per round</Text></View>
-    <View accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} accessibilityLabel="Maximum green fee" accessibilityRole="adjustable" accessibilityValue={{ min: MIN_FEE, max: Math.max(MAX_FEE, value), now: value, text: `${feeText} per round` }} onAccessibilityAction={adjust} onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={styles.sliderTouch} {...responder.panHandlers}>
-      <View style={styles.sliderTrack}><View style={[styles.sliderActive, { width: `${percent}%` }]} /><View style={[styles.sliderThumb, { left: `${percent}%` }]} /></View>
-    </View>
-    <View style={styles.sliderLabels}><Text style={styles.sliderLabel}>$25</Text><Text style={styles.sliderLabel}>$400+</Text></View>
-  </View>
-}
-
 function PreferenceTile({ icon, label, onPress, value }: { icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void; value: string }) {
   return <Pressable accessibilityLabel={`${label}, ${value}`} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.tile, pressed && styles.pressed]}><Feather name={icon} size={21} color={colors.pine} /><Text style={styles.tileLabel}>{label}</Text><Text numberOfLines={1} style={styles.tileValue}>{value}</Text><Feather name="chevron-right" size={18} color={colors.muted} /></Pressable>
 }
@@ -219,7 +185,6 @@ function PreferenceSheet({ description, onClose, onDone, options, selected, titl
   </Modal>
 }
 
-function clampFee(value: number) { return Math.min(MAX_FEE, Math.max(MIN_FEE, Math.round(value / FEE_STEP) * FEE_STEP)) }
 function withCurrent(options: string[], current: string) { return options.includes(current) ? options : [current, ...options] }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback }
 
@@ -235,16 +200,6 @@ const styles = StyleSheet.create({
   chip: { alignItems: 'center', backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, flexGrow: 1, justifyContent: 'center', minHeight: 43, paddingHorizontal: 12 },
   chipActive: { backgroundColor: colors.pine, borderColor: colors.pine },
   chipText: { color: colors.ink, fontSize: 12 },
-  feeCard: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, padding: 15 },
-  feeHeading: { alignItems: 'baseline', flexDirection: 'row', gap: 10 },
-  feeValue: { color: colors.ink, fontFamily: 'Georgia', fontSize: 27 },
-  feeUnit: { color: colors.muted, fontSize: 11 },
-  sliderTouch: { justifyContent: 'center', minHeight: 40 },
-  sliderTrack: { backgroundColor: colors.line, borderRadius: 3, height: 5, position: 'relative' },
-  sliderActive: { backgroundColor: colors.pine, borderRadius: 3, bottom: 0, left: 0, position: 'absolute', top: 0 },
-  sliderThumb: { backgroundColor: colors.pine, borderColor: '#FFFFFF', borderRadius: 11, borderWidth: 3, height: 22, marginLeft: -11, marginTop: -8, position: 'absolute', top: 0, width: 22 },
-  sliderLabels: { flexDirection: 'row', justifyContent: 'space-between' },
-  sliderLabel: { color: colors.muted, fontSize: 10 },
   tileGroup: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: radii.small, borderWidth: 1, overflow: 'hidden' },
   tile: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, minHeight: 55, paddingHorizontal: 13 },
   tileLabel: { color: colors.ink, flex: 1, fontFamily: 'Georgia', fontSize: 14 },

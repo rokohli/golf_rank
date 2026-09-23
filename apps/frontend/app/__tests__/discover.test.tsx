@@ -12,11 +12,15 @@ jest.mock('@expo/vector-icons', () => {
   return { Feather: ({ name }: { name: string }) => <Text>{name}</Text> }
 })
 
-jest.mock('expo-router', () => ({
-  Stack: { Screen: () => null },
-  usePathname: () => '/discover',
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-}))
+jest.mock('expo-router', () => {
+  const React = require('react')
+  return {
+    Stack: { Screen: () => null },
+    useFocusEffect: (callback: () => void | (() => void)) => React.useEffect(callback, [callback]),
+    usePathname: () => '/discover',
+    useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+  }
+})
 
 jest.mock('../../src/api/client', () => ({
   getCourseRegions: jest.fn().mockResolvedValue([]),
@@ -29,10 +33,14 @@ jest.mock('../../src/auth/useAuthToken', () => ({
   useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
-jest.mock('../../src/location/currentRegion', () => ({
-  DEFAULT_COURSE_REGION: 'All regions',
-  resolveCurrentLocation: () => mockResolveCurrentRegion(),
-}))
+jest.mock('../../src/location/currentRegion', () => {
+  const actual = jest.requireActual('../../src/location/currentRegion')
+  return {
+    ...actual,
+    DEFAULT_COURSE_REGION: 'All regions',
+    resolveCurrentLocation: () => mockResolveCurrentRegion(),
+  }
+})
 
 jest.mock('../../src/location/regionPreference', () => ({
   loadSavedRegion: jest.fn().mockResolvedValue(null),
@@ -139,5 +147,27 @@ describe('Discover location search', () => {
     expect(await screen.findByText('Pebble Beach Golf Links')).toBeOnTheScreen()
     expect(screen.queryByText('Filters')).toBeNull()
     expect(screen.queryByText('10')).toBeNull()
+  })
+
+  it('ignores saved placeholder "All region" or "All California" and defaults to home_region', async () => {
+    const { loadSavedRegion } = require('../../src/location/regionPreference')
+    loadSavedRegion.mockResolvedValueOnce('All region')
+    mockGetProfile.mockResolvedValueOnce({ home_region: 'San Francisco, CA', max_green_fee: 700, difficulty: 'any', access: 'any' })
+
+    render(<Discover />)
+
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ region: 'San Francisco, CA' })))
+    expect(await screen.findByText('SAN FRANCISCO, CA COURSES')).toBeOnTheScreen()
+  })
+
+  it('preserves an explicit "All regions" selection across reloads instead of reverting to home_region', async () => {
+    const { loadSavedRegion } = require('../../src/location/regionPreference')
+    loadSavedRegion.mockResolvedValueOnce('All regions')
+    mockGetProfile.mockResolvedValueOnce({ home_region: 'San Francisco, CA', max_green_fee: 700, difficulty: 'any', access: 'any' })
+
+    render(<Discover />)
+
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ region: undefined })))
+    expect(await screen.findByText('ALL REGIONS COURSES')).toBeOnTheScreen()
   })
 })

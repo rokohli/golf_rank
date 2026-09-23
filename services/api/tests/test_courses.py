@@ -17,6 +17,15 @@ def test_course_search_filters_by_region_fee_and_access() -> None:
     assert [course["name"] for course in response.json()] == ["Pebble Beach Golf Links"]
 
 
+def test_course_search_treats_all_region_wildcards_as_unfiltered() -> None:
+    client = TestClient(create_app())
+    for region_query in ["All regions", "All region", "all regions", "all", "All California"]:
+        response = client.get("/api/v1/courses", params={"region": region_query})
+        assert response.status_code == 200
+        # Should return all active courses, not an empty list looking for a literal "All region"
+        assert len(response.json()) >= 3
+
+
 def test_max_green_fee_keeps_unknown_fee_courses_discoverable() -> None:
     app = create_app()
     with app.state.session_factory() as session:
