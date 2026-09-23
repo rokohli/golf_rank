@@ -1,19 +1,19 @@
 import * as SecureStore from 'expo-secure-store'
 
-import { DEFAULT_COURSE_REGION, isAllRegions } from './currentRegion'
+import { isLegacyRegionSentinel } from './currentRegion'
 
 const REGION_KEY = 'discover.explicit-region'
 
 export async function loadSavedRegion(): Promise<string | null> {
   const saved = await SecureStore.getItemAsync(REGION_KEY)
-  if (isAllRegions(saved)) {
+  if (isLegacyRegionSentinel(saved)) {
     return null
   }
   return saved!.trim()
 }
 
 export async function saveRegion(region: string): Promise<void> {
-  if (!isAllRegions(region)) {
+  if (!isLegacyRegionSentinel(region)) {
     await SecureStore.setItemAsync(REGION_KEY, region.trim())
   } else {
     await SecureStore.deleteItemAsync(REGION_KEY)

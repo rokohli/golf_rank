@@ -14,7 +14,7 @@ describe('regionPreference', () => {
     jest.clearAllMocks()
   })
 
-  it('returns null when saved region is null, empty, or the default placeholder', async () => {
+  it('returns null when saved region is null, empty, or a legacy pre-rename placeholder', async () => {
     jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(null)
     expect(await loadSavedRegion()).toBeNull()
 
@@ -24,13 +24,7 @@ describe('regionPreference', () => {
     jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce('All California')
     expect(await loadSavedRegion()).toBeNull()
 
-    jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(DEFAULT_COURSE_REGION)
-    expect(await loadSavedRegion()).toBeNull()
-
     jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce('All region')
-    expect(await loadSavedRegion()).toBeNull()
-
-    jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce('all regions')
     expect(await loadSavedRegion()).toBeNull()
   })
 
@@ -39,21 +33,28 @@ describe('regionPreference', () => {
     expect(await loadSavedRegion()).toBe('San Francisco, CA')
   })
 
-  it('deletes the saved key when saving empty, legacy default, or default course region variants', async () => {
+  it('preserves an explicit "All regions" selection as a real saved preference', async () => {
+    jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(DEFAULT_COURSE_REGION)
+    expect(await loadSavedRegion()).toBe(DEFAULT_COURSE_REGION)
+
+    jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce('all regions')
+    expect(await loadSavedRegion()).toBe('all regions')
+  })
+
+  it('deletes the saved key when saving empty or a legacy pre-rename placeholder', async () => {
     await saveRegion('')
     expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('discover.explicit-region')
 
     await saveRegion('All California')
     expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('discover.explicit-region')
 
-    await saveRegion(DEFAULT_COURSE_REGION)
-    expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('discover.explicit-region')
-
     await saveRegion('All region')
     expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('discover.explicit-region')
+  })
 
-    await saveRegion('all regions')
-    expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('discover.explicit-region')
+  it('stores an explicit "All regions" selection instead of discarding it', async () => {
+    await saveRegion(DEFAULT_COURSE_REGION)
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('discover.explicit-region', DEFAULT_COURSE_REGION)
   })
 
   it('stores the custom region when valid', async () => {

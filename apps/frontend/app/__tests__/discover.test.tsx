@@ -149,7 +149,7 @@ describe('Discover location search', () => {
     expect(screen.queryByText('10')).toBeNull()
   })
 
-  it('ignores saved placeholder "All regions", "All region", or "All California" and defaults to home_region', async () => {
+  it('ignores saved placeholder "All region" or "All California" and defaults to home_region', async () => {
     const { loadSavedRegion } = require('../../src/location/regionPreference')
     loadSavedRegion.mockResolvedValueOnce('All region')
     mockGetProfile.mockResolvedValueOnce({ home_region: 'San Francisco, CA', max_green_fee: 700, difficulty: 'any', access: 'any' })
@@ -158,5 +158,16 @@ describe('Discover location search', () => {
 
     await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ region: 'San Francisco, CA' })))
     expect(await screen.findByText('SAN FRANCISCO, CA COURSES')).toBeOnTheScreen()
+  })
+
+  it('preserves an explicit "All regions" selection across reloads instead of reverting to home_region', async () => {
+    const { loadSavedRegion } = require('../../src/location/regionPreference')
+    loadSavedRegion.mockResolvedValueOnce('All regions')
+    mockGetProfile.mockResolvedValueOnce({ home_region: 'San Francisco, CA', max_green_fee: 700, difficulty: 'any', access: 'any' })
+
+    render(<Discover />)
+
+    await waitFor(() => expect(mockSearchCourses).toHaveBeenCalledWith(expect.objectContaining({ region: undefined })))
+    expect(await screen.findByText('ALL REGIONS COURSES')).toBeOnTheScreen()
   })
 })

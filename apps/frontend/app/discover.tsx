@@ -8,7 +8,7 @@ import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { BottomNav, CourseRow, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
 import { CourseRowSkeleton } from '../src/components/Skeleton'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
-import { DEFAULT_COURSE_REGION, isAllRegions, resolveCurrentLocation } from '../src/location/currentRegion'
+import { DEFAULT_COURSE_REGION, isAllRegions, isLegacyRegionSentinel, resolveCurrentLocation } from '../src/location/currentRegion'
 import { loadSavedRegion, saveRegion } from '../src/location/regionPreference'
 import { Course, CourseRegion } from '../src/types'
 import { colors } from '../src/ui/theme'
@@ -44,6 +44,7 @@ export default function Discover() {
   const [missingStatus, setMissingStatus] = useState<string | null>(null)
   const locationRequested = useRef(false)
   const requestVersion = useRef(0)
+  const skippedInitialFocusSync = useRef(false)
 
   const syncUserRegion = useCallback(async () => {
     try {
@@ -53,7 +54,7 @@ export default function Discover() {
       ])
       const onboardingRegion = profile?.home_region?.trim() || DEFAULT_COURSE_REGION
       setHomeRegion(onboardingRegion)
-      const savedRegion = saved && !isAllRegions(saved) ? saved.trim() : null
+      const savedRegion = saved && !isLegacyRegionSentinel(saved) ? saved.trim() : null
       setRegion((current) => {
         if (savedRegion) return savedRegion
         if (isAllRegions(current)) return onboardingRegion
@@ -72,6 +73,16 @@ export default function Discover() {
 
   useFocusEffect(
     useCallback(() => {
+      // The initial focus always coincides with the mount effect above,
+      // which already runs syncUserRegion -- without this guard, both fire
+      // concurrently on cold mount and whichever resolves second wins,
+      // silently discarding the other's result (e.g. an explicit "All
+      // regions" selection resolved by the mount effect, then clobbered by
+      // this racing call's own fallback once it resolves after).
+      if (!skippedInitialFocusSync.current) {
+        skippedInitialFocusSync.current = true
+        return
+      }
       if (isAllRegions(homeRegion)) {
         void syncUserRegion()
       }

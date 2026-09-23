@@ -13,6 +13,19 @@ export function isAllRegions(value: string | null | undefined): boolean {
   )
 }
 
+// Pre-rename/malformed values only -- deliberately excludes "all regions"
+// itself (the current canonical DEFAULT_COURSE_REGION), which is a real,
+// persistable choice a user can explicitly make in the filter sheet, not
+// stale data to discard. Used where a saved value is being read back and
+// must be distinguished from "nothing was ever saved" -- isAllRegions above
+// stays broader for filtering/display, where the canonical value should be
+// treated the same as legacy garbage (both mean "show the unfiltered
+// catalog").
+export function isLegacyRegionSentinel(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return !normalized || normalized === 'all' || normalized === 'all region' || normalized === 'all california'
+}
+
 export type CurrentRegion = {
   label: string
   latitude: number
