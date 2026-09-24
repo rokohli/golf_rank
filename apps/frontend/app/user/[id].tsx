@@ -45,23 +45,23 @@ export default function UserProfileScreen() {
     setError(null)
     try {
       const headers = await getAuthHeaders()
-      const nextProfile = await getUserProfile(userId, headers)
+      const [nextProfile, nextSummary, nextCourses] = await Promise.all([
+        getUserProfile(userId, headers),
+        getUserRoundSummary(userId, headers).catch(() => null),
+        getUserCourses(userId, headers, { limit: coursesPageSize }).catch(() => null),
+      ])
       if (nextProfile.is_self) {
         router.replace('/profile' as never)
         return
       }
       setProfile(nextProfile)
-      setSummary(null)
-      setCourses(null)
-      setCoursesHasMore(false)
-      const [nextSummary, nextCourses] = await Promise.all([
-        getUserRoundSummary(userId, headers).catch(() => null),
-        getUserCourses(userId, headers, { limit: coursesPageSize }).catch(() => null),
-      ])
-      if (nextSummary) setSummary(nextSummary)
+      setSummary(nextSummary)
       if (nextCourses) {
         setCourses(nextCourses)
         setCoursesHasMore(nextCourses.length === coursesPageSize)
+      } else {
+        setCourses([])
+        setCoursesHasMore(false)
       }
     } catch (reason) {
       setProfile(null)

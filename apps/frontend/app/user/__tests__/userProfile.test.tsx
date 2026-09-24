@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
 import UserProfileScreen from '../[id]'
 
@@ -18,14 +18,16 @@ jest.mock('@expo/vector-icons', () => {
   return { Feather: ({ name }: { name: string }) => <Text>{name}</Text> }
 })
 
+const mockRouter = {
+  push: (...args: unknown[]) => mockRouterPush(...args),
+  replace: (...args: unknown[]) => mockRouterReplace(...args),
+  back: (...args: unknown[]) => mockRouterBack(...args),
+}
+
 jest.mock('expo-router', () => ({
   Stack: { Screen: () => null },
   useLocalSearchParams: () => ({ id: '42' }),
-  useRouter: () => ({
-    push: (...args: unknown[]) => mockRouterPush(...args),
-    replace: (...args: unknown[]) => mockRouterReplace(...args),
-    back: (...args: unknown[]) => mockRouterBack(...args),
-  }),
+  useRouter: () => mockRouter,
 }))
 
 jest.mock('../../../src/api/client', () => ({
@@ -38,8 +40,9 @@ jest.mock('../../../src/api/client', () => ({
   unfollowUser: (...args: unknown[]) => mockUnfollowUser(...args),
 }))
 
+const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer token' })
 jest.mock('../../../src/auth/useAuthToken', () => ({
-  useAuthHeaders: () => ({ getAuthHeaders: jest.fn().mockResolvedValue({ Authorization: 'Bearer token' }) }),
+  useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
 describe('UserProfileScreen', () => {
@@ -75,6 +78,7 @@ describe('UserProfileScreen', () => {
 
     expect(await screen.findByText('Alex Golfer')).toBeOnTheScreen()
     await screen.findByText('15')
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull())
     expect(screen.getByText('@alexg')).toBeOnTheScreen()
     expect(screen.getByText('Monterey, CA')).toBeOnTheScreen()
     expect(screen.getByText('Spyglass Hill')).toBeOnTheScreen()

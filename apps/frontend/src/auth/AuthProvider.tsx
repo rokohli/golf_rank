@@ -79,6 +79,14 @@ function useStartupPushRegistrationCheck(
   const hasChecked = useRef(false)
   useEffect(() => {
     if (!ready || hasChecked.current) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const delay = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms)
+        timer.unref?.()
+      })
+
     void (async () => {
       // Bounded retry (mirrors UNREGISTER_ATTEMPTS in pushTokens.ts): the
       // flag above is only set to true once an attempt actually resolves
@@ -88,8 +96,10 @@ function useStartupPushRegistrationCheck(
       // rest of the session, since there's no other trigger to recheck
       // once this effect's own deps stop changing.
       for (let attempt = 1; attempt <= PROFILE_CHECK_ATTEMPTS; attempt++) {
+        if (!active) return
         try {
           const profile = await getProfile(await getAuthHeadersForCheck())
+          if (!active) return
           // A brand-new, not-yet-onboarded account 404s on every attempt --
           // registration for that case only ever happens through
           // onboarding's own explicit Enable tap, never from this check.
@@ -104,25 +114,32 @@ function useStartupPushRegistrationCheck(
           // mark the check done and never try again for the rest of the
           // mounted session.
           for (let regAttempt = 1; regAttempt <= PROFILE_CHECK_ATTEMPTS; regAttempt++) {
+            if (!active) return
             if (await registerPushToken()) {
               hasChecked.current = true
               return
             }
             if (regAttempt < PROFILE_CHECK_ATTEMPTS) {
-              await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+              await delay(PROFILE_CHECK_RETRY_DELAY_MS)
             }
           }
           hasChecked.current = true
           return
         } catch {
+          if (!active) return
           if (attempt === PROFILE_CHECK_ATTEMPTS) {
             hasChecked.current = true
             return
           }
-          await new Promise((resolve) => setTimeout(resolve, PROFILE_CHECK_RETRY_DELAY_MS))
+          await delay(PROFILE_CHECK_RETRY_DELAY_MS)
         }
       }
     })()
+
+    return () => {
+      active = false
+      if (timer) clearTimeout(timer)
+    }
   }, [ready, getAuthHeadersForCheck, registerPushToken])
 }
 
