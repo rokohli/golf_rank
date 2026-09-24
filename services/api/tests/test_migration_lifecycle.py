@@ -402,3 +402,36 @@ def test_0018_migration_preserves_clean_usernames_and_sanitizes_dirty_ones(monke
             # Conflicting user 3 gets deterministic suffix
             assert profiles[3] == "golf_pro_3"
         engine.dispose()
+
+
+def test_0032_adds_daily_featured_courses_and_partial_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        tables = set(inspect(engine).get_table_names())
+        assert "daily_featured_courses" in tables
+        columns = {col["name"] for col in inspect(engine).get_columns("daily_featured_courses")}
+        assert {"user_id", "course_id", "recommendation_date", "sequence", "dismissed", "headline", "rationale", "match_tags", "is_regional_fallback", "generation_status", "estimated_cost_micros"} <= columns
+
+        with engine.connect() as conn:
+            index_sql = conn.execute(text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'uq_daily_featured_active_user_date'"
+            )).scalar()
+        assert index_sql is not None, "partial unique index uq_daily_featured_active_user_date was not created"
+        assert "WHERE" in index_sql.upper()
+        engine.dispose()
+
+        command.downgrade(config, "0031_green_fee_suggestions")
+        engine = make_engine(db_url)
+        tables_after = set(inspect(engine).get_table_names())
+        assert "daily_featured_courses" not in tables_after
+        engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = make_engine(db_url)
+        assert "daily_featured_courses" in set(inspect(engine).get_table_names())
+        engine.dispose()
+

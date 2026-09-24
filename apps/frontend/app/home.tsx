@@ -3,15 +3,16 @@ import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 
-import { getFeed, muteUser, setActivityReaction } from '../src/api/client'
+import { getFeed, getFeaturedCourse, muteUser, saveFeaturedCourse, setActivityReaction } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
-import { FeedActivitySkeleton } from '../src/components/Skeleton'
+import { FeaturedCourseCard } from '../src/components/FeaturedCourseCard'
+import { FeedActivitySkeleton, FeaturedCourseSkeleton } from '../src/components/Skeleton'
 import { openUserProfile } from '../src/navigation/openUserProfile'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreToPar } from '../src/scorePresentation'
-import { Activity, Course, CourseImage } from '../src/types'
+import { Activity, Course, CourseImage, FeaturedCourse } from '../src/types'
 import { colors } from '../src/ui/theme'
 
 export default function Home() {
@@ -25,6 +26,8 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [greeting, setGreeting] = useState(() => greetingForHour(new Date().getHours()))
+  const [featuredCourse, setFeaturedCourse] = useState<FeaturedCourse | null>(null)
+  const [featuredLoading, setFeaturedLoading] = useState(true)
 
   useEffect(() => {
     const updateGreeting = () => setGreeting(greetingForHour(new Date().getHours()))
@@ -37,14 +40,19 @@ export default function Home() {
     else setLoading(true)
     setError(null)
     try {
-      const page = await getFeed(await getAuthHeaders())
+      const [page, featured] = await Promise.all([
+        getFeed(await getAuthHeaders()),
+        getFeaturedCourse(await getAuthHeaders()).catch(() => null),
+      ])
       setActivities(page.items)
       setNextCursor(page.next_cursor)
+      setFeaturedCourse(featured)
     } catch (reason) {
       setActivities([])
       setError(message(reason, 'Unable to load friends activity.'))
     } finally {
       setLoading(false)
+      setFeaturedLoading(false)
       setRefreshing(false)
     }
   }, [getAuthHeaders])
@@ -86,6 +94,16 @@ export default function Home() {
     }
   }
 
+  async function handleSaveFeaturedCourse() {
+    if (!featuredCourse) return
+    try {
+      await saveFeaturedCourse(await getAuthHeaders())
+      setFeaturedCourse((current) => current ? { ...current, is_saved: true } : null)
+    } catch (reason) {
+      setError(message(reason, 'Unable to save featured course.'))
+    }
+  }
+
   const featured = activities.find((activity) => activity.course) ?? null
   const recent = activities.filter((activity) => activity.id !== featured?.id)
   return <>
@@ -93,6 +111,18 @@ export default function Home() {
     <ProductScreen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.pine} />}>
       <View style={styles.topRow}><Text style={styles.title}>{greeting}</Text><View style={styles.topActions}><IconButton icon="bell" label="Notifications" onPress={() => router.push('/notifications')} /><Pressable accessibilityRole="button" accessibilityLabel="Profile" onPress={() => router.push('/profile')}><Avatar imageUrl={profileImageUrl} initials={profileInitials} /></Pressable></View></View>
       <Pressable accessibilityRole="button" accessibilityLabel="Plan a golf trip" onPress={() => router.push('/planner' as never)} style={({ pressed }) => [styles.planner, pressed && { opacity: 0.7 }]}><View style={styles.plannerIcon}><Feather name="map" size={19} color={colors.pine} /></View><View style={{ flex: 1 }}><Text style={styles.plannerTitle}>Plan a golf trip</Text><Text style={styles.muted}>Build and save a course itinerary from real catalog data.</Text></View><Feather name="chevron-right" size={17} color={colors.pine} /></Pressable>
+
+      {featuredLoading && !featuredCourse ? (
+        <FeaturedCourseSkeleton />
+      ) : featuredCourse ? (
+        <FeaturedCourseCard
+          featured={featuredCourse}
+          onOpenCourse={(id) => router.push(`/course/${id}` as never)}
+          onPlanTrip={(id) => router.push({ pathname: '/planner', params: { courseId: String(id) } } as never)}
+          onSave={handleSaveFeaturedCourse}
+        />
+      ) : null}
+
       <SectionTitle title="FRIENDS ACTIVITY" action="Find friends" onPress={() => router.push('/friends')} />
 
       {loading && activities.length === 0 ? <FeedActivitySkeleton /> : null}

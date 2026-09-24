@@ -468,3 +468,18 @@ export type PlanSummary = {
   created_at: string
   updated_at: string
 }
+
+export type FeaturedCourse = {
+  id: number
+  recommendation_date: string
+  sequence: number
+  headline: string
+  rationale: string
+  match_tags: string[]
+  is_regional_fallback: boolean
+  course: Course
+  distance_miles?: number | null
+  is_saved: boolean
+  can_dismiss: boolean
+}
+

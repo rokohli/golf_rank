@@ -302,24 +302,60 @@ def remove_saved_course(
     return Response(status_code=204)
 
 
+def get_or_create_default_saved_list(session: Session, user_id: int) -> SavedList:
+    """Retrieve the user's default saved list or create it if none exists."""
+    default_list = session.scalar(
+        select(SavedList).where(SavedList.user_id == user_id, SavedList.is_default.is_(True))
+    )
+    if default_list is not None:
+        return default_list
+
+    has_lists = session.scalar(select(SavedList.id).where(SavedList.user_id == user_id).limit(1)) is not None
+    default_list = SavedList(
+        user_id=user_id,
+        name="Want to play",
+        visibility="private",
+        is_default=not has_lists,
+    )
+    session.add(default_list)
+    session.flush()
+    return default_list
+
+
+def save_course_to_default_list(session: Session, user_id: int, course: Course) -> tuple[SavedCourse, bool]:
+    """Save a course into the user's default saved list if not already saved.
+    Returns (saved_course, is_new)."""
+    default_list = get_or_create_default_saved_list(session, user_id)
+    identity_ids = course_identity_ids(session, course)
+    existing = session.scalar(
+        select(SavedCourse).where(
+            SavedCourse.list_id == default_list.id,
+            SavedCourse.course_id.in_(identity_ids),
+        ).limit(1)
+    )
+    if existing is not None:
+        return existing, False
+
+    saved = SavedCourse(list_id=default_list.id, course_id=course.id)
+    session.add(saved)
+    session.flush()
+    session.add(
+        ActivityEvent(
+            actor_user_id=user_id,
+            event_type="course_saved",
+            subject_type="saved_course",
+            subject_id=saved.id,
+            visibility=default_list.visibility,
+            event_data={"list_id": default_list.id, "course_id": course.id},
+        )
+    )
+    return saved, True
+
+
 def seed_onboarding_dream_courses(session: Session, user_id: int, dream_course_ids: list[str]) -> None:
     """Seed dream courses selected during onboarding into the user's default saved list."""
     if not dream_course_ids or not isinstance(dream_course_ids, list):
         return
-    default_list = session.scalar(
-        select(SavedList).where(SavedList.user_id == user_id, SavedList.is_default.is_(True))
-    )
-    if default_list is None:
-        has_lists = session.scalar(select(SavedList.id).where(SavedList.user_id == user_id).limit(1)) is not None
-        default_list = SavedList(
-            user_id=user_id,
-            name="Want to play",
-            visibility="private",
-            is_default=not has_lists,
-        )
-        session.add(default_list)
-        session.flush()
-
     resolved_courses = resolve_courses_optional(session, dream_course_ids)
     if not resolved_courses:
         return
@@ -330,24 +366,5 @@ def seed_onboarding_dream_courses(session: Session, user_id: int, dream_course_i
         if course is None or course.id in seen_course_ids:
             continue
         seen_course_ids.add(course.id)
-        identity_ids = course_identity_ids(session, course)
-        already_saved = session.scalar(
-            select(SavedCourse.id).where(
-                SavedCourse.list_id == default_list.id,
-                SavedCourse.course_id.in_(identity_ids),
-            ).limit(1)
-        )
-        if already_saved is None:
-            saved = SavedCourse(list_id=default_list.id, course_id=course.id)
-            session.add(saved)
-            session.flush()
-            session.add(
-                ActivityEvent(
-                    actor_user_id=user_id,
-                    event_type="course_saved",
-                    subject_type="saved_course",
-                    subject_id=saved.id,
-                    visibility=default_list.visibility,
-                    event_data={"list_id": default_list.id, "course_id": course.id},
-                )
-            )
+        save_course_to_default_list(session, user_id, course)
+

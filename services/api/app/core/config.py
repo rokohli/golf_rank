@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     ai_planner_rate_limit_refill_per_second: float = 1 / 120
     ai_planner_daily_quota: int = 25
     ai_planner_monthly_cost_limit_cents: int = 1000
+    ai_featured_course_monthly_cost_limit_cents: int = 1000
     ai_planner_input_cost_micros_per_million_tokens: int = 540_000
     ai_planner_output_cost_micros_per_million_tokens: int = 4_500_000
 
@@ -180,6 +181,9 @@ class Settings(BaseSettings):
             "AI_PLANNER_DAILY_QUOTA": self.ai_planner_daily_quota,
             "AI_PLANNER_MONTHLY_COST_LIMIT_CENTS": (
                 self.ai_planner_monthly_cost_limit_cents
+            ),
+            "AI_FEATURED_COURSE_MONTHLY_COST_LIMIT_CENTS": (
+                self.ai_featured_course_monthly_cost_limit_cents
             ),
             "AI_PLANNER_INPUT_COST_MICROS_PER_MILLION_TOKENS": (
                 self.ai_planner_input_cost_micros_per_million_tokens

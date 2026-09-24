@@ -30,6 +30,7 @@ from .course_images.service import CourseImageService
 from .course_photo_moderation import router as course_photo_moderation_router
 from .course_photo_uploads import router as course_photo_uploads_router
 from .course_ratings import router as course_ratings_router
+from .featured_courses import router as featured_courses_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
     canonical_courses_only,
@@ -173,6 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(course_photo_moderation_router, dependencies=[Depends(admin_rate_limit)])
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
+    app.include_router(featured_courses_router, dependencies=authenticated_dependencies)
 
     app.add_middleware(
         RequestBodyLimitMiddleware,

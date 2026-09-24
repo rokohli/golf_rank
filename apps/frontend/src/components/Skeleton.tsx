@@ -237,6 +237,24 @@ export function FeaturedActivitySkeleton() {
   )
 }
 
+export function FeaturedCourseSkeleton() {
+  return (
+    <View style={styles.featuredCourseCard}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
+        <SkeletonLine width="45%" height={14} />
+        <SkeletonBox width={24} height={24} borderRadius={12} />
+      </View>
+      <SkeletonBox height={160} width="100%" borderRadius={12} style={{ marginBottom: 12 }} />
+      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+        <SkeletonBox width={72} height={22} borderRadius={11} />
+        <SkeletonBox width={80} height={22} borderRadius={11} />
+        <SkeletonBox width={64} height={22} borderRadius={11} />
+      </View>
+      <SkeletonBox height={48} width="100%" borderRadius={8} />
+    </View>
+  )
+}
+
 export function RecentActivitySkeleton({ last = false }: { last?: boolean }) {
   return (
     <View style={[styles.activityRow, last && styles.lastRow]}>
@@ -381,6 +399,14 @@ const styles = StyleSheet.create({
   featuredContainer: {
     borderRadius: 10,
     overflow: 'hidden',
+  },
+  featuredCourseCard: {
+    backgroundColor: colors.card,
+    borderColor: colors.line,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 16,
   },
   sectionDivider: {
     paddingVertical: 4,
