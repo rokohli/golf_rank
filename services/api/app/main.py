@@ -54,6 +54,7 @@ from .models import (
     AppNotification,
     Comparison,
     CourseCandidate,
+    DailyFeaturedCourse,
     DeletedIdentity,
     Follow,
     ItineraryItem,
@@ -440,6 +441,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "plan_candidates": rows(PlanCandidate, PlanCandidate.plan_id.in_(plan_ids)) if plan_ids else [],
             "itinerary_items": rows(ItineraryItem, ItineraryItem.plan_id.in_(plan_ids)) if plan_ids else [],
             "plan_generations": rows(PlanGeneration, PlanGeneration.plan_id.in_(plan_ids)) if plan_ids else [],
+            "featured_courses": rows(DailyFeaturedCourse, DailyFeaturedCourse.user_id == stored_user.id),
         }
         return JSONResponse(
             content=jsonable_encoder(data),

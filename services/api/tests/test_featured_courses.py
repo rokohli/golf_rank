@@ -1122,6 +1122,191 @@ def test_concurrent_one_tap_save_is_idempotent() -> None:
     assert save_res.json()["is_new"] is False
 
 
+def test_featured_budget_tracker_redis_atomic() -> None:
+    from app.featured_courses import FeaturedCourseBudgetTracker
+    import redis
+
+    try:
+        r = redis.Redis.from_url("redis://127.0.0.1:6379/0", socket_timeout=1)
+        r.ping()
+        redis_available = True
+    except Exception:
+        redis_available = False
+
+    if not redis_available:
+        pytest.skip("Local redis not reachable")
+
+    settings = Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-key",
+        redis_url="redis://127.0.0.1:6379/0",
+        ai_featured_course_monthly_cost_limit_cents=1,  # 10,000 micros limit
+    )
+    app = create_app(settings)
+    factory = app.state.session_factory
+
+    tracker = FeaturedCourseBudgetTracker()
+    tracker.reset()
+
+    with factory() as session:
+        # First 4 reservations should succeed (4 * 2500 = 10,000 micros)
+        with tracker.reserve(session, settings) as r1:
+            assert r1 is True
+            assert tracker.in_flight_micros == 2500
+            with tracker.reserve(session, settings) as r2:
+                assert r2 is True
+                assert tracker.in_flight_micros == 5000
+                with tracker.reserve(session, settings) as r3:
+                    assert r3 is True
+                    assert tracker.in_flight_micros == 7500
+                    with tracker.reserve(session, settings) as r4:
+                        assert r4 is True
+                        assert tracker.in_flight_micros == 10000
+                        # 5th reservation should be rejected by Lua script!
+                        with tracker.reserve(session, settings) as r5:
+                            assert r5 is False
+                            assert tracker.in_flight_micros == 10000
+
+    # Once all contexts exit, tracker in_flight_micros in redis is 0
+    assert tracker.in_flight_micros == 0
+
+    # Verify fallback to in-memory lock if Redis connection fails
+    broken_settings = Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-key",
+        redis_url="redis://127.0.0.1:1/0",  # invalid port to force error
+        ai_featured_course_monthly_cost_limit_cents=1,
+    )
+    broken_tracker = FeaturedCourseBudgetTracker()
+    with factory() as session:
+        with broken_tracker.reserve(session, broken_settings) as r_fallback:
+            assert r_fallback is True
+        assert broken_tracker.in_flight_micros == 0
+
+
+def test_featured_course_aggregates_ratings_across_reconciled_identities() -> None:
+    app = create_app()
+    client = TestClient(app)
+    factory = app.state.session_factory
+
+    USER_SUBJECT = "dev:featured-ratings-test"
+    USER_HEADERS = {"X-Development-Subject": USER_SUBJECT}
+
+    with factory() as session:
+        canon = Course(
+            id=3001,
+            name="Canonical Valley",
+            region="Monterey, CA",
+            city="Carmel",
+            admin1_code="CA",
+            latitude=36.55,
+            longitude=-121.90,
+            is_public=True,
+            difficulty="challenging",
+            green_fee=150,
+        )
+        alias = Course(
+            id=3002,
+            name="Alias Valley Course",
+            region="Monterey, CA",
+            city="Carmel",
+            admin1_code="CA",
+            latitude=36.55,
+            longitude=-121.90,
+            source="external_feed",
+            source_course_id="alias-valley-3002",
+        )
+        session.add_all([canon, alias])
+        session.flush()
+
+        session.add(
+            CourseReconciliation(
+                source="external_feed",
+                source_course_id="alias-valley-3002",
+                canonical_course_id=3001,
+                match_status="confirmed",
+            )
+        )
+
+        u1 = User(provider_subject="dev:rater-1")
+        u2 = User(provider_subject="dev:rater-2")
+        session.add_all([u1, u2])
+        session.flush()
+
+        # Create rounds for users before rating
+        r1 = Round(user_id=u1.id, course_id=alias.id, played_on=date.today())
+        r2 = Round(user_id=u2.id, course_id=canon.id, played_on=date.today())
+        session.add_all([r1, r2])
+        session.flush()
+
+        # u1 rates the alias course 5.0
+        session.add(UserCourseRating(user_id=u1.id, course_id=alias.id, round_id=r1.id, rating=5.0, tier="green", confidence=1.0))
+        # u2 rates the canonical course 3.0
+        session.add(UserCourseRating(user_id=u2.id, course_id=canon.id, round_id=r2.id, rating=3.0, tier="green", confidence=1.0))
+        session.commit()
+
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=USER_HEADERS,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 300,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Rating",
+                "last_name": "Tester",
+                "username": "ratingtester",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=USER_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["course"]["community_rating"] == 4.0
+    assert data["course"]["rating_count"] == 2
+
+
+def test_featured_distance_tags_update_with_live_coordinates() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    _setup_alice_preferences(client)
+
+    # Request 1: close to Monterey/Pebble Beach (lat=36.568, lng=-121.95)
+    r1 = client.get("/api/v1/me/featured-course?lat=36.568&lng=-121.95", headers=ALICE)
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["distance_miles"] is not None
+    assert round(d1["distance_miles"]) == 0
+    assert "~0 mi away" in d1["match_tags"]
+
+    # Request 2: user moves to San Francisco (~75-80 miles away)
+    r2 = client.get("/api/v1/me/featured-course?lat=37.7749&lng=-122.4194", headers=ALICE)
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["id"] == d1["id"]
+    assert d2["distance_miles"] is not None
+    live_dist_rounded = round(d2["distance_miles"])
+    assert live_dist_rounded > 50
+    assert f"~{live_dist_rounded} mi away" in d2["match_tags"]
+    assert "~0 mi away" not in d2["match_tags"]
+
+    # Request 3: user does not provide coordinates
+    r3 = client.get("/api/v1/me/featured-course", headers=ALICE)
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["distance_miles"] is None
+    assert not any("mi away" in tag or " mi" in tag for tag in d3["match_tags"])
+
+
+
 
 
 

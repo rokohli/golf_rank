@@ -7,6 +7,7 @@ import math
 import re
 import threading
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Iterator
@@ -27,6 +28,7 @@ from .domain import (
     canonical_courses_only,
     course_data,
     course_identity_ids,
+    course_identity_ids_bulk,
     require_user,
     resolve_course_ids,
 )
@@ -114,25 +116,85 @@ def estimate_max_request_cost_micros(settings: Settings) -> int:
     return max(2_500, cost)
 
 
-class FeaturedCourseBudgetTracker:
-    """Thread-safe budget tracker that reserves estimated AI spend before outbound calls.
+_BUDGET_RESERVE_LUA = """
+local key = KEYS[1]
+local current_inflight = tonumber(redis.call('GET', key) or '0')
+local max_cost = tonumber(ARGV[1])
+local db_cost = tonumber(ARGV[2])
+local cost_limit = tonumber(ARGV[3])
 
-    Prevents both boundary overruns (requests starting when headroom < worst_case_cost)
-    and concurrency races (multiple requests reading stale unbilled spend).
+if db_cost + current_inflight + max_cost <= cost_limit then
+    redis.call('INCRBY', key, max_cost)
+    redis.call('EXPIRE', key, 120)
+    return 1
+else
+    return 0
+end
+"""
+
+_BUDGET_RELEASE_LUA = """
+local key = KEYS[1]
+local max_cost = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', key) or '0')
+if current <= max_cost then
+    redis.call('DEL', key)
+else
+    redis.call('DECRBY', key, max_cost)
+end
+return 1
+"""
+
+
+class FeaturedCourseBudgetTracker:
+    """Thread-safe and multi-process budget tracker that reserves estimated AI spend before outbound calls.
+
+    When Redis is configured via settings.redis_url, reservations are atomic across API worker
+    processes and replicas using atomic Lua scripts. If Redis is unavailable or unconfigured,
+    falls back safely to in-process locking and in-flight counters.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._in_flight_micros = 0
+        self._redis_client: Any = None
+        self._redis_url: str | None = None
+
+    def _get_redis(self, redis_url: str) -> Any:
+        if self._redis_client is None or self._redis_url != redis_url:
+            import redis
+            self._redis_client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+            self._redis_url = redis_url
+        return self._redis_client
 
     @property
     def in_flight_micros(self) -> int:
+        if self._redis_client is not None and self._redis_url is not None:
+            try:
+                now = datetime.now(UTC)
+                key = f"featured_budget_inflight:{now.year}_{now.month}"
+                val = self._redis_client.get(key)
+                if val is not None:
+                    return int(val)
+            except Exception:
+                pass
         with self._lock:
             return self._in_flight_micros
 
     def reset(self) -> None:
         with self._lock:
             self._in_flight_micros = 0
+        if self._redis_client is not None and self._redis_url is not None:
+            try:
+                now = datetime.now(UTC)
+                key = f"featured_budget_inflight:{now.year}_{now.month}"
+                self._redis_client.delete(key)
+            except Exception:
+                pass
 
     @contextmanager
     def reserve(self, session: Session, settings: Settings) -> Iterator[bool]:
@@ -142,13 +204,29 @@ class FeaturedCourseBudgetTracker:
 
         max_cost = estimate_max_request_cost_micros(settings)
         cost_limit_micros = settings.ai_featured_course_monthly_cost_limit_cents * 10_000
+        now = datetime.now(UTC)
+        month_key = f"featured_budget_inflight:{now.year}_{now.month}"
 
         reserved = False
-        with self._lock:
-            db_cost = monthly_ai_cost_micros(session, DailyFeaturedCourse, DailyFeaturedCourse.estimated_cost_micros)
-            if db_cost + self._in_flight_micros + max_cost <= cost_limit_micros:
-                self._in_flight_micros += max_cost
-                reserved = True
+        use_redis = bool(settings.redis_url)
+        redis_client = None
+
+        if use_redis:
+            try:
+                redis_client = self._get_redis(settings.redis_url)  # type: ignore[arg-type]
+                db_cost = monthly_ai_cost_micros(session, DailyFeaturedCourse, DailyFeaturedCourse.estimated_cost_micros)
+                res = redis_client.eval(_BUDGET_RESERVE_LUA, 1, month_key, max_cost, db_cost, cost_limit_micros)
+                reserved = bool(res == 1)
+            except Exception as error:
+                logger.warning("featured_budget_redis_error op=reserve error=%s", error)
+                use_redis = False
+
+        if not use_redis:
+            with self._lock:
+                db_cost = monthly_ai_cost_micros(session, DailyFeaturedCourse, DailyFeaturedCourse.estimated_cost_micros)
+                if db_cost + self._in_flight_micros + max_cost <= cost_limit_micros:
+                    self._in_flight_micros += max_cost
+                    reserved = True
 
         if not reserved:
             yield False
@@ -157,8 +235,14 @@ class FeaturedCourseBudgetTracker:
         try:
             yield True
         finally:
-            with self._lock:
-                self._in_flight_micros -= max_cost
+            if use_redis and redis_client is not None:
+                try:
+                    redis_client.eval(_BUDGET_RELEASE_LUA, 1, month_key, max_cost)
+                except Exception as error:
+                    logger.warning("featured_budget_redis_error op=release error=%s", error)
+            else:
+                with self._lock:
+                    self._in_flight_micros -= max_cost
 
 
 budget_tracker = FeaturedCourseBudgetTracker()
@@ -356,24 +440,43 @@ def resolve_featured_candidate(
             )
         return stmt.order_by(Course.id)
 
-    def fetch_ratings(course_ids: list[int]) -> dict[int, tuple[float | None, int]]:
-        if not course_ids:
+    def fetch_ratings(courses: list[Course]) -> dict[int, tuple[float | None, int]]:
+        if not courses:
             return {}
-        result: dict[int, tuple[float | None, int]] = {}
+        identities_by_canon = course_identity_ids_bulk(session, courses)
+        alias_to_canon: dict[int, int] = {}
+        for canon_id, id_set in identities_by_canon.items():
+            for identity_id in id_set:
+                alias_to_canon[identity_id] = canon_id
+
+        all_query_ids = list(alias_to_canon.keys())
+        canon_sums: dict[int, float] = defaultdict(float)
+        canon_counts: dict[int, int] = defaultdict(int)
+
         chunk_size = 500
-        for i in range(0, len(course_ids), chunk_size):
-            chunk = course_ids[i : i + chunk_size]
+        for i in range(0, len(all_query_ids), chunk_size):
+            chunk = all_query_ids[i : i + chunk_size]
             rows = session.execute(
                 select(
                     UserCourseRating.course_id,
-                    func.avg(UserCourseRating.rating).label("avg_rating"),
+                    func.sum(UserCourseRating.rating).label("sum_rating"),
                     func.count(UserCourseRating.id).label("count_rating"),
                 )
                 .where(UserCourseRating.course_id.in_(chunk))
                 .group_by(UserCourseRating.course_id)
             ).all()
             for r in rows:
-                result[r[0]] = (float(r[1]) if r[1] is not None else None, int(r[2]))
+                cid, s_val, c_val = r[0], float(r[1] or 0), int(r[2] or 0)
+                canon_id = alias_to_canon.get(cid)
+                if canon_id is not None:
+                    canon_sums[canon_id] += s_val
+                    canon_counts[canon_id] += c_val
+
+        result: dict[int, tuple[float | None, int]] = {}
+        for course in courses:
+            cnt = canon_counts.get(course.id, 0)
+            avg = round(canon_sums[course.id] / cnt, 1) if cnt > 0 else None
+            result[course.id] = (avg, cnt)
         return result
 
     primary_excluded = played_ids | past_featured_ids | dismissed_today_ids
@@ -428,8 +531,7 @@ def resolve_featured_candidate(
     if not candidates:
         raise HTTPException(404, "No suitable course available in the catalog.")
 
-    course_ids = [c[0].id for c in candidates]
-    ratings_map = fetch_ratings(course_ids)
+    ratings_map = fetch_ratings([c[0] for c in candidates])
     scored = _score_candidates(candidates, preferences, saved_course_ids, ratings_map, radius_miles)
 
     best_course, best_distance, _ = scored[0]
@@ -502,7 +604,8 @@ async def generate_featured_narrative(
                     "text": (
                         "You write a concise, compelling 1-2 sentence recommendation for this week's featured golf course. "
                         "Ground all rationale strictly in the provided course facts. Never invent prices, tee times, "
-                        "amenities, or course policies. Keep tags short (under 4 words each)."
+                        "amenities, or course policies. Keep tags short (under 4 words each). "
+                        "Do not include mileage, distance, or proximity in tags or rationale, as distance is computed and presented dynamically."
                     )
                 }]
             },
@@ -570,8 +673,6 @@ async def generate_featured_narrative(
     rationale = " ".join(rationale_parts)
 
     tags: list[str] = []
-    if distance_miles is not None:
-        tags.append(f"~{round(distance_miles)} mi away")
     if course.green_fee:
         tags.append(f"${course.green_fee} Fee")
     elif course.is_public is not None:
@@ -608,12 +709,14 @@ def _build_featured_response(
         .limit(1)
     ) is not None
 
-    # Load course community rating
+    # Load course community rating across canonical course and all reconciled aliases
     rating_row = session.execute(
         select(func.avg(UserCourseRating.rating), func.count(UserCourseRating.id))
-        .where(UserCourseRating.course_id == course.id)
+        .where(UserCourseRating.course_id.in_(identities))
     ).first()
     comm_rating = float(rating_row[0]) if rating_row and rating_row[0] is not None else None
+    if comm_rating is not None:
+        comm_rating = round(comm_rating, 1)
     rating_count = int(rating_row[1]) if rating_row and rating_row[1] is not None else 0
 
     c_data = course_data(course)
@@ -622,13 +725,23 @@ def _build_featured_response(
     c_data["distance_miles"] = live_dist
     course_out = CourseOut.model_validate(c_data)
 
+    # Rebuild location-derived tags to stay consistent with live_dist
+    tags: list[str] = []
+    if live_dist is not None:
+        tags.append(f"~{round(live_dist)} mi away")
+    for tag in (featured.match_tags or []):
+        if not re.search(r"mi away\b|\bmi\b", tag, re.IGNORECASE):
+            if tag not in tags:
+                tags.append(tag)
+    match_tags = tags[:4] if tags else ["Featured"]
+
     return FeaturedCourseOut(
         id=featured.id,
         recommendation_date=featured.recommendation_date,
         sequence=featured.sequence,
         headline=featured.headline,
         rationale=featured.rationale,
-        match_tags=featured.match_tags,
+        match_tags=match_tags,
         is_regional_fallback=featured.is_regional_fallback,
         course=course_out,
         distance_miles=live_dist,
