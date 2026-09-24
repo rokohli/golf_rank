@@ -383,6 +383,7 @@ describe('course detail ratings', () => {
       expect(node.type).not.toBe('RCTScrollView')
       node = node.parent
     }
+    fireEvent.press(screen.getByLabelText('Close photo viewer'))
   })
 
   function ratingWithRound(photos: CourseImage[] = []): CourseRatingState {

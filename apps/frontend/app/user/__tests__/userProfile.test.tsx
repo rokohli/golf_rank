@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 
 import UserProfileScreen from '../[id]'
 
@@ -18,14 +18,17 @@ jest.mock('@expo/vector-icons', () => {
   return { Feather: ({ name }: { name: string }) => <Text>{name}</Text> }
 })
 
+let mockUserId = '42'
+const mockRouter = {
+  push: (...args: unknown[]) => mockRouterPush(...args),
+  replace: (...args: unknown[]) => mockRouterReplace(...args),
+  back: (...args: unknown[]) => mockRouterBack(...args),
+}
+
 jest.mock('expo-router', () => ({
   Stack: { Screen: () => null },
-  useLocalSearchParams: () => ({ id: '42' }),
-  useRouter: () => ({
-    push: (...args: unknown[]) => mockRouterPush(...args),
-    replace: (...args: unknown[]) => mockRouterReplace(...args),
-    back: (...args: unknown[]) => mockRouterBack(...args),
-  }),
+  useLocalSearchParams: () => ({ id: mockUserId }),
+  useRouter: () => mockRouter,
 }))
 
 jest.mock('../../../src/api/client', () => ({
@@ -38,13 +41,15 @@ jest.mock('../../../src/api/client', () => ({
   unfollowUser: (...args: unknown[]) => mockUnfollowUser(...args),
 }))
 
+const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer token' })
 jest.mock('../../../src/auth/useAuthToken', () => ({
-  useAuthHeaders: () => ({ getAuthHeaders: jest.fn().mockResolvedValue({ Authorization: 'Bearer token' }) }),
+  useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }),
 }))
 
 describe('UserProfileScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockUserId = '42'
     mockGetUserProfile.mockResolvedValue({
       id: 42,
       display_name: 'Alex Golfer',
@@ -75,6 +80,7 @@ describe('UserProfileScreen', () => {
 
     expect(await screen.findByText('Alex Golfer')).toBeOnTheScreen()
     await screen.findByText('15')
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull())
     expect(screen.getByText('@alexg')).toBeOnTheScreen()
     expect(screen.getByText('Monterey, CA')).toBeOnTheScreen()
     expect(screen.getByText('Spyglass Hill')).toBeOnTheScreen()
@@ -84,5 +90,42 @@ describe('UserProfileScreen', () => {
 
     fireEvent.press(homeCourseButton)
     expect(mockRouterPush).toHaveBeenCalledWith('/course/101')
+  })
+
+  it('renders profile identity without gating on slow round summary', async () => {
+    mockGetUserRoundSummary.mockImplementationOnce(() => new Promise(() => {}))
+    render(<UserProfileScreen />)
+
+    expect(await screen.findByText('Alex Golfer')).toBeOnTheScreen()
+    expect(screen.getByText('@alexg')).toBeOnTheScreen()
+    expect(screen.getByText('Monterey, CA')).toBeOnTheScreen()
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull())
+  })
+
+  it('clears stale round stats when switching to another user profile', async () => {
+    const { rerender } = render(<UserProfileScreen />)
+    expect(await screen.findByText('15')).toBeOnTheScreen()
+
+    mockUserId = '43'
+    mockGetUserProfile.mockResolvedValueOnce({
+      id: 43,
+      display_name: 'Taylor Golfer',
+      username: 'taylorg',
+      home_region: 'Monterey, CA',
+      home_course_id: null,
+      home_course_name: null,
+      follower_count: 3,
+      following_count: 5,
+      is_self: false,
+      is_following: false,
+      is_followed_by: false,
+      is_mutual: false,
+      is_muted: false,
+    })
+    mockGetUserRoundSummary.mockImplementationOnce(() => new Promise(() => {}))
+
+    rerender(<UserProfileScreen />)
+    expect(await screen.findByText('Taylor Golfer')).toBeOnTheScreen()
+    expect(screen.queryByText('15')).toBeNull()
   })
 })

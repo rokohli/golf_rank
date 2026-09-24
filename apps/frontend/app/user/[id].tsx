@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { blockUser, followUser, getUserCourses, getUserProfile, getUserRoundSummary, muteUser, unfollowUser } from '../../src/api/client'
@@ -32,10 +32,12 @@ export default function UserProfileScreen() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sheet, setSheet] = useState<ActionSheet>(null)
+  const requestIdRef = useRef(0)
 
   const userId = Number(id)
 
   const load = useCallback(async () => {
+    const reqId = ++requestIdRef.current
     if (!Number.isInteger(userId) || userId < 1) {
       setError('Profile not found.')
       setLoading(false)
@@ -43,34 +45,45 @@ export default function UserProfileScreen() {
     }
     setLoading(true)
     setError(null)
+    setSummary(null)
+    setCourses(null)
+    setCoursesHasMore(false)
     try {
       const headers = await getAuthHeaders()
+      if (reqId !== requestIdRef.current) return
+      const summaryPromise = getUserRoundSummary(userId, headers).catch(() => null)
+      const coursesPromise = getUserCourses(userId, headers, { limit: coursesPageSize }).catch(() => null)
+
       const nextProfile = await getUserProfile(userId, headers)
+      if (reqId !== requestIdRef.current) return
       if (nextProfile.is_self) {
         router.replace('/profile' as never)
         return
       }
       setProfile(nextProfile)
-      setSummary(null)
-      setCourses(null)
-      setCoursesHasMore(false)
-      const [nextSummary, nextCourses] = await Promise.all([
-        getUserRoundSummary(userId, headers).catch(() => null),
-        getUserCourses(userId, headers, { limit: coursesPageSize }).catch(() => null),
-      ])
-      if (nextSummary) setSummary(nextSummary)
+      setLoading(false)
+
+      const [nextSummary, nextCourses] = await Promise.all([summaryPromise, coursesPromise])
+      if (reqId !== requestIdRef.current) return
+      setSummary(nextSummary)
       if (nextCourses) {
         setCourses(nextCourses)
         setCoursesHasMore(nextCourses.length === coursesPageSize)
+      } else {
+        setCourses([])
+        setCoursesHasMore(false)
       }
     } catch (reason) {
+      if (reqId !== requestIdRef.current) return
       setProfile(null)
       setSummary(null)
       setCourses(null)
       setCoursesHasMore(false)
       setError(message(reason, 'Unable to load this profile.'))
     } finally {
-      setLoading(false)
+      if (reqId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [getAuthHeaders, router, userId])
 

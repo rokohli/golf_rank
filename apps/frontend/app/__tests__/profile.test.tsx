@@ -32,6 +32,15 @@ jest.mock('expo-image-picker', () => ({
   launchImageLibraryAsync: (...args: unknown[]) => mockLaunchImageLibraryAsync(...args),
 }))
 
+jest.mock('expo-notifications', () => ({
+  AndroidImportance: { DEFAULT: 3 },
+  getExpoPushTokenAsync: jest.fn().mockResolvedValue({ data: 'mock-token' }),
+  getPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+  requestPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+  setNotificationChannelAsync: jest.fn().mockResolvedValue(undefined),
+  dismissAllNotificationsAsync: jest.fn().mockResolvedValue(undefined),
+  setNotificationHandler: jest.fn(),
+}))
 jest.mock('@clerk/expo', () => ({ useUser: () => ({ user: { emailAddresses: [], phoneNumbers: [] } }) }))
 const mockRequestContactsPermission = jest.fn()
 const mockGetContacts = jest.fn()
@@ -376,6 +385,7 @@ describe('profile experience', () => {
     mockGetProfile.mockResolvedValue({ home_region: 'Monterey, CA' })
     mockDeleteAccount.mockResolvedValue('deleted')
     mockSignOut.mockRejectedValue(new Error('Clerk network error'))
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
       const deleteButton = buttons?.find((btn) => btn.text === 'Delete account')
       if (deleteButton?.onPress) deleteButton.onPress()
@@ -393,6 +403,7 @@ describe('profile experience', () => {
     })
 
     expect(screen.queryByText(/unable to delete your account/i)).not.toBeOnTheScreen()
+    warnSpy.mockRestore()
     alertSpy.mockRestore()
   })
 

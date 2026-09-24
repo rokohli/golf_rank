@@ -42,6 +42,7 @@ class PushOperationTimeoutError extends Error {}
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new PushOperationTimeoutError('push operation timed out')), ms)
+    timer.unref?.()
     promise.then(
       (value) => { clearTimeout(timer); resolve(value) },
       (reason) => { clearTimeout(timer); reject(reason) },
@@ -61,6 +62,7 @@ async function withAbortTimeout<T>(operation: (signal: AbortSignal) => Promise<T
       controller.abort()
       reject(new PushOperationTimeoutError('push operation timed out'))
     }, ms)
+    timer.unref?.()
     operation(controller.signal).then(
       (value) => { clearTimeout(timer); resolve(value) },
       (reason) => { clearTimeout(timer); reject(reason) },
