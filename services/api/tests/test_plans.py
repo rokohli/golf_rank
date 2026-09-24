@@ -459,3 +459,36 @@ def test_preferred_course_id_guarantees_position_1_in_dense_region() -> None:
     assert data["itinerary"][0]["course"]["id"] == 806
     assert "Play Scottsdale Course 6" in data["itinerary"][0]["title"]
 
+
+def test_ai_itinerary_with_preferred_course_included_and_validated() -> None:
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+
+    # Alice creates a plan with preferred_course_id=2 (Spyglass Hill)
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Monterey Preferred",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 2,
+        },
+    ).json()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_status"] == "generated"
+    assert len(provider.requests) == 1
+    sent_req = provider.requests[0]
+    assert sent_req.preferences.get("preferred_course_id") == 2
+    # Spyglass Hill (ID 2) is in the itinerary
+    assert any(item["course"]["id"] == 2 for item in body["itinerary"])
+
+

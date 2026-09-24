@@ -18,6 +18,7 @@ from .domain import (
     course_identity_ids,
     require_course,
     require_user,
+    resolve_course_ids,
     resolve_course_optional,
     stored_user,
 )
@@ -29,6 +30,7 @@ from .models import (
     PlanConstraint,
     PlanGeneration,
     RankingSnapshot,
+    Round,
     SavedCourse,
     SavedList,
     UserCourseState,
@@ -190,21 +192,23 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             origin_longitude = sum(course.longitude for course in destination_courses) / len(destination_courses)
 
     ranking = _ranking_signal(session, user_id)
-    saved_ids = set(
+    raw_saved = set(
         session.scalars(
             select(SavedCourse.course_id)
             .join(SavedList, SavedList.id == SavedCourse.list_id)
             .where(SavedList.user_id == user_id)
         ).all()
     )
-    played_ids = set(
-        session.scalars(
-            select(UserCourseState.course_id).where(
-                UserCourseState.user_id == user_id,
-                UserCourseState.has_played.is_(True),
-            )
-        ).all()
+    saved_ids = resolve_course_ids(session, raw_saved) | raw_saved
+
+    played_from_rounds = select(Round.course_id).where(Round.user_id == user_id)
+    played_from_states = select(UserCourseState.course_id).where(
+        UserCourseState.user_id == user_id,
+        UserCourseState.has_played.is_(True),
     )
+    raw_played = set(session.scalars(played_from_rounds.union(played_from_states)).all())
+    played_ids = resolve_course_ids(session, raw_played) | raw_played
+
     checked_at = datetime.now(UTC)
     candidates: list[dict] = []
     for course in courses:
@@ -216,7 +220,12 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             )
         )
         distance = None
-        if origin_latitude is not None and origin_longitude is not None:
+        if (
+            origin_latitude is not None
+            and origin_longitude is not None
+            and course.latitude is not None
+            and course.longitude is not None
+        ):
             distance = _distance_miles(
                 origin_latitude,
                 origin_longitude,
@@ -389,6 +398,7 @@ def _narrative_request(
         "transportation",
         "tee_time_window",
         "must_haves",
+        "preferred_course_id",
     }
     return PlannerNarrativeRequest(
         title=plan.title,
@@ -418,6 +428,10 @@ def _validated_items(
         raise ValueError("course order does not match itinerary")
     if len(set(output.ordered_course_ids)) != len(output.ordered_course_ids):
         raise ValueError("duplicate course")
+    preferred_id = request.preferences.get("preferred_course_id")
+    if preferred_id is not None and preferred_id in candidate_by_id and expected_count > 0:
+        if preferred_id not in output.ordered_course_ids:
+            raise ValueError("preferred course omitted from itinerary")
     itinerary_dates = [item.date for item in output.itinerary]
     if len(set(itinerary_dates)) != len(output.itinerary):
         raise ValueError("duplicate date")
