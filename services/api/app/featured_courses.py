@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -155,6 +156,18 @@ class FeaturedCourseBudgetTracker:
 
 
 budget_tracker = FeaturedCourseBudgetTracker()
+_generation_locks: dict[tuple[int, date], asyncio.Lock] = {}
+_generation_locks_guard = asyncio.Lock()
+
+
+async def _get_user_week_lock(user_id: int, target_date: date) -> asyncio.Lock:
+    key = (user_id, target_date)
+    async with _generation_locks_guard:
+        if len(_generation_locks) > 10_000:
+            _generation_locks.clear()
+        if key not in _generation_locks:
+            _generation_locks[key] = asyncio.Lock()
+        return _generation_locks[key]
 
 
 def extract_state_code(region_str: str | None) -> str | None:
@@ -447,7 +460,6 @@ async def generate_featured_narrative(
             "is_regional_fallback": is_regional_fallback,
             "user_preferences": {
                 "preferred_difficulty": user_diff,
-                "transportation": walking_pref,
             },
         }
         schema = {
@@ -471,7 +483,7 @@ async def generate_featured_narrative(
                     "text": (
                         "You write a concise, compelling 1-2 sentence recommendation for this week's featured golf course. "
                         "Ground all rationale strictly in the provided course facts. Never invent prices, tee times, "
-                        "or amenities. Highlight walking-friendliness if user prefers walking. Keep tags short (under 4 words each)."
+                        "amenities, or course policies. Keep tags short (under 4 words each)."
                     )
                 }]
             },
@@ -517,17 +529,25 @@ async def generate_featured_narrative(
     else:
         headline = "This Week's Course Spotlight"
 
-    access_label = "public" if course.is_public else "private"
-    diff_label = course.difficulty.lower() if course.difficulty else "premier"
-    rationale_parts = [
-        f"{course.name} is a {diff_label} {access_label} course in {course.region}."
-    ]
+    descriptors: list[str] = []
+    if course.difficulty:
+        descriptors.append(course.difficulty.lower())
+    if course.is_public is not None:
+        descriptors.append("public" if course.is_public else "private")
+
+    region_str = f" in {course.region}" if course.region else (f" in {course.city}" if course.city else "")
+    if descriptors:
+        desc_text = " ".join(descriptors)
+        article = "an" if desc_text[0].lower() in "aeiou" else "a"
+        main_sentence = f"{course.name} is {article} {desc_text} course{region_str}."
+    else:
+        main_sentence = f"{course.name} is a golf course{region_str}."
+
+    rationale_parts = [main_sentence]
     if in_saved_list:
         rationale_parts.append("A featured pick from your saved list.")
     if course.green_fee:
         rationale_parts.append(f"Green fees start around ${course.green_fee}.")
-    if walking_pref and walking_pref.lower() == "walking":
-        rationale_parts.append("Great layout for walking.")
     rationale = " ".join(rationale_parts)
 
     tags: list[str] = []
@@ -623,64 +643,86 @@ async def get_featured_course(
         )
         return _build_featured_response(session, active, user.id, lat, lng)
 
-    # Lazy on-read generation
-    start_time = time.perf_counter()
-    course, dist, is_regional = resolve_featured_candidate(session, user, target_date, lat, lng)
-    prefs = session.get(OnboardingPreference, user.id)
-    saved_ids = set(session.scalars(
-        select(SavedCourse.course_id)
-        .join(SavedList, SavedList.id == SavedCourse.list_id)
-        .where(SavedList.user_id == user.id)
-    ).all())
-
-    with budget_tracker.reserve(session, settings) as can_use_ai:
-        headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
-            course=course,
-            distance_miles=dist,
-            is_regional_fallback=is_regional,
-            preferences=prefs,
-            saved_course_ids=saved_ids,
-            settings=settings,
-            session=session,
-            can_use_ai=can_use_ai,
-        )
-
-        featured = DailyFeaturedCourse(
-            user_id=user.id,
-            course_id=course.id,
-            recommendation_date=target_date,
-            sequence=1,
-            dismissed=False,
-            headline=headline,
-            rationale=rationale,
-            match_tags=tags,
-            is_regional_fallback=is_regional,
-            generation_status=gen_status,
-            estimated_cost_micros=cost_micros,
-        )
-        session.add(featured)
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()
-            # If a race occurred and another request generated the active row first, return it
-            active = session.scalar(
-                select(DailyFeaturedCourse).where(
-                    DailyFeaturedCourse.user_id == user.id,
-                    DailyFeaturedCourse.recommendation_date == target_date,
-                    DailyFeaturedCourse.dismissed.is_(False),
-                )
+    user_lock = await _get_user_week_lock(user.id, target_date)
+    async with user_lock:
+        active = session.scalar(
+            select(DailyFeaturedCourse).where(
+                DailyFeaturedCourse.user_id == user.id,
+                DailyFeaturedCourse.recommendation_date == target_date,
+                DailyFeaturedCourse.dismissed.is_(False),
             )
-            if active is not None:
-                return _build_featured_response(session, active, user.id, lat, lng)
-            raise
+        )
+        if active is not None:
+            logger.info(
+                "featured_course_served user_id=%s course_id=%s date=%s sequence=%s status=cached generation_status=%s",
+                user.id, active.course_id, target_date, active.sequence, active.generation_status,
+            )
+            return _build_featured_response(session, active, user.id, lat, lng)
 
-    latency_ms = round((time.perf_counter() - start_time) * 1000)
-    logger.info(
-        "featured_course_served user_id=%s course_id=%s date=%s sequence=1 status=generated generation_status=%s latency_ms=%s cost_micros=%s",
-        user.id, course.id, target_date, gen_status, latency_ms, cost_micros,
-    )
-    return _build_featured_response(session, featured, user.id, lat, lng)
+        # Lazy on-read generation
+        start_time = time.perf_counter()
+        course, dist, is_regional = resolve_featured_candidate(session, user, target_date, lat, lng)
+        prefs = session.get(OnboardingPreference, user.id)
+        saved_ids = set(session.scalars(
+            select(SavedCourse.course_id)
+            .join(SavedList, SavedList.id == SavedCourse.list_id)
+            .where(SavedList.user_id == user.id)
+        ).all())
+
+        with budget_tracker.reserve(session, settings) as can_use_ai:
+            headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
+                course=course,
+                distance_miles=dist,
+                is_regional_fallback=is_regional,
+                preferences=prefs,
+                saved_course_ids=saved_ids,
+                settings=settings,
+                session=session,
+                can_use_ai=can_use_ai,
+            )
+
+            featured = DailyFeaturedCourse(
+                user_id=user.id,
+                course_id=course.id,
+                recommendation_date=target_date,
+                sequence=1,
+                dismissed=False,
+                headline=headline,
+                rationale=rationale,
+                match_tags=tags,
+                is_regional_fallback=is_regional,
+                generation_status=gen_status,
+                estimated_cost_micros=cost_micros,
+            )
+            session.add(featured)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                # If a race occurred and another request generated the active row first, preserve spent cost and return it
+                active = session.scalar(
+                    select(DailyFeaturedCourse).where(
+                        DailyFeaturedCourse.user_id == user.id,
+                        DailyFeaturedCourse.recommendation_date == target_date,
+                        DailyFeaturedCourse.dismissed.is_(False),
+                    )
+                )
+                if active is not None:
+                    if cost_micros and cost_micros > 0:
+                        try:
+                            active.estimated_cost_micros = (active.estimated_cost_micros or 0) + cost_micros
+                            session.commit()
+                        except Exception:
+                            session.rollback()
+                    return _build_featured_response(session, active, user.id, lat, lng)
+                raise
+
+        latency_ms = round((time.perf_counter() - start_time) * 1000)
+        logger.info(
+            "featured_course_served user_id=%s course_id=%s date=%s sequence=1 status=generated generation_status=%s latency_ms=%s cost_micros=%s",
+            user.id, course.id, target_date, gen_status, latency_ms, cost_micros,
+        )
+        return _build_featured_response(session, featured, user.id, lat, lng)
 
 
 @router.post("/dismiss", response_model=FeaturedCourseOut, dependencies=[Depends(authenticated_rate_limit)])
@@ -759,6 +801,20 @@ async def dismiss_featured_course(
             session.commit()
         except IntegrityError:
             session.rollback()
+            if cost_micros and cost_micros > 0:
+                try:
+                    active_row = session.scalar(
+                        select(DailyFeaturedCourse).where(
+                            DailyFeaturedCourse.user_id == user.id,
+                            DailyFeaturedCourse.recommendation_date == target_date,
+                            DailyFeaturedCourse.dismissed.is_(False),
+                        )
+                    )
+                    if active_row:
+                        active_row.estimated_cost_micros = (active_row.estimated_cost_micros or 0) + cost_micros
+                        session.commit()
+                except Exception:
+                    session.rollback()
             raise HTTPException(409, "A concurrent recommendation refresh is in progress. Please retry.")
 
     logger.info(

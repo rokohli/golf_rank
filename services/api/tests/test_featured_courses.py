@@ -4,12 +4,15 @@ import threading
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as SASession
 
 from app.core.config import Settings
 from app.featured_courses import budget_tracker, current_week_anchor, monthly_ai_cost_micros
@@ -682,5 +685,169 @@ def test_statewide_fallback_deterministic_scoring_above_50_candidates() -> None:
     # Now all courses are evaluated, and Course 160 with highest rating wins!
     assert data["course"]["id"] == 160
     assert data["course"]["name"] == "Texas Course 60"
+
+
+def test_fallback_copy_truthfulness_and_no_walkability_claim() -> None:
+    """Verifies that fallback rationale does not invent private/premier or walkability claims."""
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        sparse_course = Course(
+            id=999,
+            name="Mystery Dunes",
+            city="Sand City",
+            admin1_code="CA",
+            region="Sand City, CA",
+            latitude=36.61,
+            longitude=-121.84,
+            green_fee=None,
+            difficulty=None,
+            is_public=None,
+            hole_count=18,
+            par=72,
+            status="active",
+        )
+        session.add(sparse_course)
+        session.commit()
+
+    SPARSE_USER = {"X-Development-Subject": "dev:sparse-course-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=SPARSE_USER,
+        json={
+            "home_region": "Sand City, CA",
+            "max_green_fee": 1000,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Sparse",
+                "last_name": "Golfer",
+                "username": "sparse",
+                "transportation": "Walking",
+            },
+        },
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=SPARSE_USER)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["course"]["id"] == 999
+    # Should say "Mystery Dunes is a golf course in Sand City, CA."
+    # Must NOT claim "private", "premier", or "walking"
+    assert "private" not in data["rationale"].lower()
+    assert "premier" not in data["rationale"].lower()
+    assert "walking" not in data["rationale"].lower()
+    assert "Mystery Dunes is a golf course in Sand City, CA." in data["rationale"]
+
+
+def test_race_condition_preserves_billed_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If an insert race occurs (IntegrityError), billed cost from losing request is added to active row."""
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-gemini-key",
+    ))
+    client = TestClient(app)
+    RACE_USER = {"X-Development-Subject": "dev:race-cost-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=RACE_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 700,
+            "difficulty": "challenging",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Race",
+                "last_name": "Tester",
+                "username": "racetester",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    original_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{
+                    "text": json.dumps({
+                        "headline": "AI Pick",
+                        "rationale": "Great course.",
+                        "match_tags": ["Scenic"],
+                    }),
+                }]},
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50,
+                "thoughtsTokenCount": 0,
+            },
+        })
+
+    monkeypatch.setattr(
+        "app.featured_courses.httpx.AsyncClient",
+        lambda **kwargs: original_async_client(**kwargs, transport=httpx.MockTransport(handler)),
+    )
+
+    # First request: generates row and incurs cost
+    res1 = client.get("/api/v1/me/featured-course", headers=RACE_USER)
+    assert res1.status_code == 200
+    first_id = res1.json()["id"]
+
+    with app.state.session_factory() as session:
+        row = session.get(DailyFeaturedCourse, first_id)
+        assert row is not None
+        initial_cost = row.estimated_cost_micros or 0
+        assert initial_cost > 0
+
+    # Clear in-memory generation lock so a new request can run
+    from app.featured_courses import _generation_locks
+    _generation_locks.clear()
+
+    orig_commit = SASession.commit
+    orig_scalar = SASession.scalar
+
+    intercept_count = 0
+
+    def mock_scalar(self: SASession, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal intercept_count
+        stmt_str = str(statement)
+        if "daily_featured_courses" in stmt_str and "dismissed" in stmt_str:
+            if intercept_count < 2:
+                intercept_count += 1
+                return None
+        return orig_scalar(self, statement, *args, **kwargs)
+
+    commit_failed = False
+
+    def mock_commit(self: SASession) -> None:
+        nonlocal commit_failed
+        if not commit_failed:
+            for obj in self.new:
+                if isinstance(obj, DailyFeaturedCourse):
+                    commit_failed = True
+                    raise IntegrityError("duplicate key", params=None, orig=Exception("unique constraint"))
+        orig_commit(self)
+
+    monkeypatch.setattr(SASession, "scalar", mock_scalar)
+    monkeypatch.setattr(SASession, "commit", mock_commit)
+
+    res2 = client.get("/api/v1/me/featured-course", headers=RACE_USER)
+    assert res2.status_code == 200
+    assert commit_failed is True
+
+    # Verify that the active row in DB now has initial_cost + second request cost preserved
+    with app.state.session_factory() as session:
+        updated_row = session.get(DailyFeaturedCourse, first_id)
+        assert updated_row is not None
+        assert updated_row.estimated_cost_micros == initial_cost * 2
+
 
 

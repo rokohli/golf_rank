@@ -35,6 +35,10 @@ jest.mock('../../src/api/client', () => ({
 
 jest.mock('../../src/auth/useAuthToken', () => ({ useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }) }))
 jest.mock('../../src/auth/AuthProvider', () => ({ useAuthGate: () => ({ profileImageUrl: null, profileInitials: 'RK' }) }))
+const mockResolveCoordinates = jest.fn().mockResolvedValue({ latitude: 36.5685, longitude: -121.949 })
+jest.mock('../../src/location/currentRegion', () => ({
+  resolveCoordinates: () => mockResolveCoordinates(),
+}))
 
 const mockFeatured = {
   id: 101,
@@ -170,6 +174,7 @@ describe('Home social feed', () => {
   it('renders daily featured course spotlight card with action buttons', async () => {
     render(<Home />)
     expect(await screen.findByText("THIS WEEK'S SPOTLIGHT")).toBeOnTheScreen()
+    expect(mockGetFeaturedCourse).toHaveBeenCalledWith(expect.anything(), { latitude: 36.5685, longitude: -121.949 })
     expect(screen.getByText('Pasatiempo Golf Club')).toBeOnTheScreen()
     expect(screen.getByText('Pasatiempo is a classic Alister MacKenzie layout great for walking.')).toBeOnTheScreen()
     expect(screen.getByText('~15 mi away')).toBeOnTheScreen()

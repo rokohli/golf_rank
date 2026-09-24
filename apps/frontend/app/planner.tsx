@@ -3,7 +3,7 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-rou
 import { useCallback, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
-import { ApiResponseError, createPlan, deletePlan, generateAIItinerary, getPlan, getPlans, getProfile, savePlan, updatePlan } from '../src/api/client'
+import { ApiResponseError, createPlan, deletePlan, generateAIItinerary, getCourse, getPlan, getPlans, getProfile, savePlan, updatePlan } from '../src/api/client'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { CourseVisual, ProductScreen, ScreenHeader, SectionTitle } from '../src/components/ProductUI'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
@@ -48,7 +48,7 @@ function transportationFromProfile(profile: OnboardingPreferences | null): 'walk
 
 export default function Planner() {
   const router = useRouter()
-  const params = useLocalSearchParams<{ id?: string }>()
+  const params = useLocalSearchParams<{ id?: string; courseId?: string }>()
   const { getAuthHeaders } = useAuthHeaders()
   const [input, setInput] = useState<PlanInput>(initialInput)
   const [startDateText, setStartDateText] = useState(() => usDate(initialInput.start_date))
@@ -71,36 +71,69 @@ export default function Planner() {
     setError(null)
     try {
       const headers = await getAuthHeaders()
-      const [summaries, profile] = await Promise.all([
+      const [summaries, profile, preselectedCourse] = await Promise.all([
         getPlans(headers),
         !params.id ? getProfile(headers).catch(() => null) : Promise.resolve(null),
+        params.courseId && !params.id ? getCourse(Number(params.courseId)).catch(() => null) : Promise.resolve(null),
       ])
       setTrips(summaries)
       if (params.id) {
         const loaded = await getPlan(Number(params.id), headers)
         showPlan(loaded)
-      } else if (profile) {
-        setHomeRegion(profile.home_region || '')
-        const prefs = profile.onboarding_data?.preferences ?? []
-        setProfilePreferences(prefs)
+      } else {
+        if (profile) {
+          setHomeRegion(profile.home_region || '')
+          const prefs = profile.onboarding_data?.preferences ?? []
+          setProfilePreferences(prefs)
+        }
         if (!formInitialized.current) {
           formInitialized.current = true
           const partySize = partySizeFromProfile(profile)
           const maxFee = feeFromProfile(profile)
           const transport = transportationFromProfile(profile)
-          const access = profile.access ?? 'any'
-          const difficulty = profile.difficulty ?? 'any'
-          setInput((prev) => ({
-            ...prev,
-            party_size: prev.party_size === initialInput.party_size ? partySize : prev.party_size,
-            max_green_fee: prev.max_green_fee === initialInput.max_green_fee ? maxFee : prev.max_green_fee,
-            access: prev.access === initialInput.access ? access : prev.access,
-            difficulty: prev.difficulty === initialInput.difficulty ? difficulty : prev.difficulty,
-            transportation: prev.transportation === initialInput.transportation ? transport : prev.transportation,
-            must_haves: prev.must_haves.length === 0 ? prefs : prev.must_haves,
-          }))
-          if (prefs.length > 0) {
-            setMustHaveText((prev) => (prev === '' ? prefs.join(', ') : prev))
+          const access = profile?.access ?? 'any'
+          const difficulty = profile?.difficulty ?? 'any'
+          const prefs = profile?.onboarding_data?.preferences ?? []
+
+          if (preselectedCourse) {
+            const courseTitle = `${preselectedCourse.name} Trip`
+            const courseRegion = preselectedCourse.region || preselectedCourse.city || ''
+            const courseFee = preselectedCourse.green_fee
+            const effectiveFee = courseFee && maxFee ? Math.max(courseFee, maxFee) : (courseFee ?? maxFee)
+            const effectiveAccess = preselectedCourse.is_public !== null && preselectedCourse.is_public !== undefined
+              ? (preselectedCourse.is_public ? 'public' : 'private')
+              : access
+            const effectiveDiff = (preselectedCourse.difficulty as 'beginner' | 'intermediate' | 'challenging' | 'any') || difficulty
+            const mustHaves = [preselectedCourse.name, ...prefs.filter((p) => p !== preselectedCourse.name)]
+
+            setInput((prev) => ({
+              ...prev,
+              title: courseTitle,
+              party_size: partySize,
+              max_green_fee: effectiveFee,
+              access: effectiveAccess,
+              difficulty: effectiveDiff,
+              transportation: transport,
+              regions: courseRegion ? [courseRegion] : prev.regions,
+              must_haves: mustHaves,
+            }))
+            if (courseRegion) {
+              setRegionText(courseRegion)
+            }
+            setMustHaveText(mustHaves.join(', '))
+          } else if (profile) {
+            setInput((prev) => ({
+              ...prev,
+              party_size: prev.party_size === initialInput.party_size ? partySize : prev.party_size,
+              max_green_fee: prev.max_green_fee === initialInput.max_green_fee ? maxFee : prev.max_green_fee,
+              access: prev.access === initialInput.access ? access : prev.access,
+              difficulty: prev.difficulty === initialInput.difficulty ? difficulty : prev.difficulty,
+              transportation: prev.transportation === initialInput.transportation ? transport : prev.transportation,
+              must_haves: prev.must_haves.length === 0 ? prefs : prev.must_haves,
+            }))
+            if (prefs.length > 0) {
+              setMustHaveText((prev) => (prev === '' ? prefs.join(', ') : prev))
+            }
           }
         }
       }
@@ -109,7 +142,7 @@ export default function Planner() {
     } finally {
       setLoading(false)
     }
-  }, [getAuthHeaders, params.id])
+  }, [getAuthHeaders, params.id, params.courseId])
 
   useFocusEffect(useCallback(() => { void load() }, [load]))
 

@@ -5,6 +5,7 @@ import { ApiResponseError } from '../../src/api/client'
 
 const mockCreatePlan = jest.fn()
 const mockDeletePlan = jest.fn()
+const mockGetCourse = jest.fn()
 const mockGetPlan = jest.fn()
 const mockGetPlans = jest.fn()
 const mockGetProfile = jest.fn()
@@ -13,7 +14,7 @@ const mockSavePlan = jest.fn()
 const mockUpdatePlan = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test' })
 const mockRouter = { back: jest.fn(), push: jest.fn() }
-const mockParams = {}
+let mockParams: Record<string, string> = {}
 
 jest.mock('@expo/vector-icons', () => {
   const { Text } = require('react-native')
@@ -44,6 +45,7 @@ jest.mock('../../src/api/client', () => {
     ApiResponseError,
     createPlan: (...args: unknown[]) => mockCreatePlan(...args),
     deletePlan: (...args: unknown[]) => mockDeletePlan(...args),
+    getCourse: (...args: unknown[]) => mockGetCourse(...args),
     getPlan: (...args: unknown[]) => mockGetPlan(...args),
     getPlans: (...args: unknown[]) => mockGetPlans(...args),
     getProfile: (...args: unknown[]) => mockGetProfile(...args),
@@ -76,6 +78,8 @@ const plan = {
 describe('trip planner', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockParams = {}
+    mockGetCourse.mockResolvedValue(null)
     mockGetPlans.mockResolvedValue([])
     mockGetProfile.mockResolvedValue(null)
     mockCreatePlan.mockResolvedValue(plan)
@@ -407,5 +411,54 @@ describe('trip planner', () => {
       }),
       expect.anything(),
     ))
+  })
+
+  it('pre-populates trip form with featured course when courseId is passed', async () => {
+    mockParams = { courseId: '10' }
+    mockGetProfile.mockResolvedValue({
+      id: 1,
+      home_region: 'Monterey, CA',
+      party_size: 2,
+      max_green_fee: 100,
+      transportation: 'walking',
+      access: 'public',
+      difficulty: 'intermediate',
+      onboarding_data: { preferences: ['Fast greens'] },
+    })
+    mockGetCourse.mockResolvedValue({
+      id: 10,
+      name: 'Pacific Grove Golf Links',
+      region: 'Pacific Grove, CA',
+      city: 'Pacific Grove',
+      state: 'CA',
+      green_fee: 95,
+      is_public: true,
+      difficulty: 'intermediate',
+    })
+
+    render(<Planner />)
+    await screen.findByText('Draft and saved trips will appear here.')
+
+    expect(mockGetCourse).toHaveBeenCalledWith(10)
+    expect(screen.getByLabelText('Trip name')).toHaveProp('value', 'Pacific Grove Golf Links Trip')
+    expect(screen.getByLabelText('Destination or regions')).toHaveProp('value', 'Pacific Grove, CA')
+    expect(screen.getByLabelText('Maximum green fee')).toHaveProp('value', '100')
+    expect(screen.getByLabelText('Must-haves')).toHaveProp('value', 'Pacific Grove Golf Links, Fast greens')
+
+    fireEvent.press(screen.getByRole('button', { name: 'Build trip' }))
+
+    await waitFor(() =>
+      expect(mockCreatePlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Pacific Grove Golf Links Trip',
+          regions: ['Pacific Grove, CA'],
+          max_green_fee: 100,
+          access: 'public',
+          difficulty: 'intermediate',
+          must_haves: ['Pacific Grove Golf Links', 'Fast greens'],
+        }),
+        expect.anything(),
+      ),
+    )
   })
 })

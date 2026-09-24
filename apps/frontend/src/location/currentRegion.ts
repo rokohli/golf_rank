@@ -46,6 +46,24 @@ export async function resolveCurrentLocation(): Promise<CurrentRegion | null> {
   } : null
 }
 
+export async function resolveCoordinates(): Promise<{ latitude: number; longitude: number } | null> {
+  try {
+    const permission = await Location.getForegroundPermissionsAsync()
+    if (permission.status !== Location.PermissionStatus.GRANTED) return null
+
+    const position = (await Location.getLastKnownPositionAsync().catch(() => null))
+      ?? (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null))
+    if (!position?.coords) return null
+
+    return {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function formatGeocodedRegion(address: Location.LocationGeocodedAddress): string | null {
   const locality = address.city ?? address.subregion ?? address.district
   const administrativeRegion = address.region === 'California' ? 'CA' : address.region

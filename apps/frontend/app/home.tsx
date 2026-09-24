@@ -10,6 +10,7 @@ import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitl
 import { FeaturedCourseCard } from '../src/components/FeaturedCourseCard'
 import { FeedActivitySkeleton, FeaturedCourseSkeleton } from '../src/components/Skeleton'
 import { openUserProfile } from '../src/navigation/openUserProfile'
+import { resolveCoordinates } from '../src/location/currentRegion'
 import { attributedCourseImage, CoursePresentation } from '../src/coursePresentation'
 import { scoreToPar } from '../src/scorePresentation'
 import { Activity, Course, CourseImage, FeaturedCourse } from '../src/types'
@@ -40,9 +41,13 @@ export default function Home() {
     else setLoading(true)
     setError(null)
     try {
+      const [headers, coords] = await Promise.all([
+        getAuthHeaders(),
+        resolveCoordinates(),
+      ])
       const [page, featured] = await Promise.all([
-        getFeed(await getAuthHeaders()),
-        getFeaturedCourse(await getAuthHeaders()).catch(() => null),
+        getFeed(headers),
+        getFeaturedCourse(headers, coords).catch(() => null),
       ])
       setActivities(page.items)
       setNextCursor(page.next_cursor)
