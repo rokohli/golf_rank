@@ -89,4 +89,14 @@ describe('UserProfileScreen', () => {
     fireEvent.press(homeCourseButton)
     expect(mockRouterPush).toHaveBeenCalledWith('/course/101')
   })
+
+  it('renders profile identity without gating on slow round summary', async () => {
+    mockGetUserRoundSummary.mockImplementationOnce(() => new Promise(() => {}))
+    render(<UserProfileScreen />)
+
+    expect(await screen.findByText('Alex Golfer')).toBeOnTheScreen()
+    expect(screen.getByText('@alexg')).toBeOnTheScreen()
+    expect(screen.getByText('Monterey, CA')).toBeOnTheScreen()
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull())
+  })
 })
