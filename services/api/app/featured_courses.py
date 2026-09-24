@@ -197,8 +197,18 @@ class FeaturedCourseBudgetTracker:
                 pass
 
     @contextmanager
-    def reserve(self, session: Session, settings: Settings) -> Iterator[bool]:
+    def reserve(
+        self,
+        session: Session,
+        settings: Settings,
+        subject: str | None = None,
+    ) -> Iterator[bool]:
         if not settings.ai_planner_enabled or not settings.gemini_api_key:
+            yield False
+            return
+
+        allowed_subjects = settings.ai_planner_allowed_subject_set
+        if allowed_subjects and (not subject or subject not in allowed_subjects):
             yield False
             return
 
@@ -219,9 +229,9 @@ class FeaturedCourseBudgetTracker:
                 reserved = bool(res == 1)
             except Exception as error:
                 logger.warning("featured_budget_redis_error op=reserve error=%s", error)
-                use_redis = False
-
-        if not use_redis:
+                yield False
+                return
+        else:
             with self._lock:
                 db_cost = monthly_ai_cost_micros(session, DailyFeaturedCourse, DailyFeaturedCourse.estimated_cost_micros)
                 if db_cost + self._in_flight_micros + max_cost <= cost_limit_micros:
@@ -235,14 +245,15 @@ class FeaturedCourseBudgetTracker:
         try:
             yield True
         finally:
-            if use_redis and redis_client is not None:
-                try:
-                    redis_client.eval(_BUDGET_RELEASE_LUA, 1, month_key, max_cost)
-                except Exception as error:
-                    logger.warning("featured_budget_redis_error op=release error=%s", error)
-            else:
-                with self._lock:
-                    self._in_flight_micros -= max_cost
+            if reserved:
+                if use_redis and redis_client is not None:
+                    try:
+                        redis_client.eval(_BUDGET_RELEASE_LUA, 1, month_key, max_cost)
+                    except Exception as error:
+                        logger.warning("featured_budget_redis_error op=release error=%s", error)
+                elif not use_redis:
+                    with self._lock:
+                        self._in_flight_micros -= max_cost
 
 
 budget_tracker = FeaturedCourseBudgetTracker()
@@ -547,6 +558,7 @@ async def generate_featured_narrative(
     settings: Settings,
     session: Session | None = None,
     can_use_ai: bool | None = None,
+    subject: str | None = None,
 ) -> tuple[str, str, list[str], str, int | None]:
     """Generates (headline, rationale, match_tags, generation_status, estimated_cost_micros).
     Uses Gemini if enabled and under monthly budget; otherwise returns high-quality deterministic copy."""
@@ -554,6 +566,10 @@ async def generate_featured_narrative(
     user_data = preferences.onboarding_data if preferences and preferences.onboarding_data else {}
     walking_pref = user_data.get("transportation")
     user_diff = preferences.difficulty if preferences else "any"
+
+    allowed_subjects = settings.ai_planner_allowed_subject_set
+    if allowed_subjects and (not subject or subject not in allowed_subjects):
+        can_use_ai = False
 
     # Admission check for AI generation
     if can_use_ai is None:
@@ -808,7 +824,7 @@ async def get_featured_course(
         ).all())
         saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
-        with budget_tracker.reserve(session, settings) as can_use_ai:
+        with budget_tracker.reserve(session, settings, subject=current.provider_subject) as can_use_ai:
             headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
                 course=course,
                 distance_miles=dist,
@@ -818,6 +834,7 @@ async def get_featured_course(
                 settings=settings,
                 session=session,
                 can_use_ai=can_use_ai,
+                subject=current.provider_subject,
             )
 
             featured = DailyFeaturedCourse(
@@ -920,7 +937,7 @@ async def dismiss_featured_course(
     ).all())
     saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
-    with budget_tracker.reserve(session, settings) as can_use_ai:
+    with budget_tracker.reserve(session, settings, subject=current.provider_subject) as can_use_ai:
         headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
             course=course,
             distance_miles=dist,
@@ -930,6 +947,7 @@ async def dismiss_featured_course(
             settings=settings,
             session=session,
             can_use_ai=can_use_ai,
+            subject=current.provider_subject,
         )
 
         next_featured = DailyFeaturedCourse(

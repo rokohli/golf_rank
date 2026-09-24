@@ -1187,7 +1187,7 @@ def test_featured_budget_tracker_redis_atomic() -> None:
     # Once all contexts exit, tracker in_flight_micros in redis is 0
     assert tracker.in_flight_micros == 0
 
-    # Verify fallback to in-memory lock if Redis connection fails
+    # Verify fail-closed behavior if Redis connection fails when configured
     broken_settings = Settings(
         ai_planner_enabled=True,
         gemini_api_key="mock-key",
@@ -1197,7 +1197,7 @@ def test_featured_budget_tracker_redis_atomic() -> None:
     broken_tracker = FeaturedCourseBudgetTracker()
     with factory() as session:
         with broken_tracker.reserve(session, broken_settings) as r_fallback:
-            assert r_fallback is True
+            assert r_fallback is False
         assert broken_tracker.in_flight_micros == 0
 
 
@@ -1396,8 +1396,149 @@ def test_malformed_ai_response_preserves_billed_cost(monkeypatch: pytest.MonkeyP
         assert featured.estimated_cost_micros > 0
 
 
+def test_ai_planner_allowed_subjects_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When ai_planner_allowed_subjects is set, non-allowlisted users receive fallback templates without Gemini calls."""
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-gemini-key",
+        ai_planner_data_tier="unpaid",
+        ai_planner_allowed_subjects="dev:allowed-subject",
+    ))
+    client = TestClient(app)
+    DISALLOWED = {"X-Development-Subject": "dev:disallowed-subject"}
+    ALLOWED = {"X-Development-Subject": "dev:allowed-subject"}
+
+    for headers, name in [(DISALLOWED, "Disallowed"), (ALLOWED, "Allowed")]:
+        client.put(
+            "/api/v1/me/onboarding-preferences",
+            headers=headers,
+            json={
+                "home_region": "Monterey, CA",
+                "max_green_fee": 700,
+                "difficulty": "challenging",
+                "access": "public",
+                "onboarding_data": {
+                    "first_name": name,
+                    "last_name": "Tester",
+                    "username": f"{name.lower()}tester",
+                    "travel_distance": "Up to 45 minutes",
+                    "transportation": "Walking",
+                    "group_size": "Foursome",
+                    "played_course_ids": [],
+                    "dream_course_ids": [],
+                },
+            },
+        )
+
+    gemini_called = False
+    original_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gemini_called
+        gemini_called = True
+        return httpx.Response(200, json={
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{
+                    "text": json.dumps({
+                        "headline": "Allowed AI Pick",
+                        "rationale": "Great course for you.",
+                        "match_tags": ["Scenic"],
+                    }),
+                }]},
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50,
+                "thoughtsTokenCount": 0,
+            },
+        })
+
+    monkeypatch.setattr(
+        "app.featured_courses.httpx.AsyncClient",
+        lambda **kwargs: original_async_client(
+            **kwargs, transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    # Disallowed user: Gemini is NEVER called
+    res_disallowed = client.get("/api/v1/me/featured-course", headers=DISALLOWED)
+    assert res_disallowed.status_code == 200
+    assert gemini_called is False
+    assert res_disallowed.json()["headline"] != "Allowed AI Pick"
+
+    # Allowed user: Gemini IS called
+    res_allowed = client.get("/api/v1/me/featured-course", headers=ALLOWED)
+    assert res_allowed.status_code == 200
+    assert gemini_called is True
+    assert res_allowed.json()["headline"] == "Allowed AI Pick"
 
 
+def test_redis_failure_fails_closed_without_calling_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When configured Redis fails, reserve fails closed and serves fallback template without calling Gemini."""
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-gemini-key",
+        redis_url="redis://fake-redis-host:6379/0",
+    ))
+    client = TestClient(app)
+    REDIS_FAIL_USER = {"X-Development-Subject": "dev:redis-fail-user"}
 
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=REDIS_FAIL_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 700,
+            "difficulty": "challenging",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "RedisFail",
+                "last_name": "Tester",
+                "username": "redisfailtester",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
 
+    class BrokenRedis:
+        def eval(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("Redis connection broken")
+
+    monkeypatch.setattr(budget_tracker, "_get_redis", lambda url: BrokenRedis())
+
+    gemini_called = False
+    original_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal gemini_called
+        gemini_called = True
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(
+        "app.featured_courses.httpx.AsyncClient",
+        lambda **kwargs: original_async_client(
+            **kwargs, transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=REDIS_FAIL_USER)
+    assert res.status_code == 200
+    assert gemini_called is False
+
+    with app.state.session_factory() as session:
+        user = session.scalar(select(User).where(User.provider_subject == "dev:redis-fail-user"))
+        assert user is not None
+        featured = session.scalar(
+            select(DailyFeaturedCourse).where(
+                DailyFeaturedCourse.user_id == user.id,
+                DailyFeaturedCourse.recommendation_date == current_week_anchor(),
+            )
+        )
+        assert featured is not None
+        assert featured.generation_status == "fallback_template"
 
