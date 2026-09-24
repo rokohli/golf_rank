@@ -256,7 +256,12 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             score += 5
             reasons.append("This would add a new course to your played list.")
         if payload.max_green_fee is not None and course.green_fee is not None:
-            reasons.append(f"The ${course.green_fee} green fee is within your budget.")
+            if course.green_fee <= payload.max_green_fee:
+                reasons.append(f"The ${course.green_fee} green fee is within your budget.")
+            else:
+                caveats.append(
+                    f"The ${course.green_fee} green fee exceeds your ${payload.max_green_fee} budget limit."
+                )
         elif course.green_fee is None:
             caveats.append("The current green fee is unknown and must be confirmed.")
         if distance is not None:
@@ -286,6 +291,10 @@ def _replace_plan_data(session: Session, user_id: int, plan: Plan, payload: Plan
     session.add(plan)
     session.flush()
     constraint_data = payload.model_dump(mode="json", exclude={"title", "start_date", "end_date"})
+    if payload.preferred_course_id is not None:
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        if pref_course is not None:
+            constraint_data["preferred_course_id"] = pref_course.id
     constraints = session.get(PlanConstraint, plan.id)
     if constraints is None:
         constraints = PlanConstraint(plan_id=plan.id, constraint_data=constraint_data)
@@ -400,13 +409,19 @@ def _narrative_request(
         "must_haves",
         "preferred_course_id",
     }
+    preferences = {
+        key: value for key, value in constraint_data.items() if key in preference_keys
+    }
+    raw_pref = preferences.get("preferred_course_id")
+    if raw_pref is not None:
+        pref_course = resolve_course_optional(session, raw_pref) or session.get(Course, raw_pref)
+        if pref_course is not None:
+            preferences["preferred_course_id"] = pref_course.id
     return PlannerNarrativeRequest(
         title=plan.title,
         start_date=plan.start_date,
         end_date=plan.end_date,
-        preferences={
-            key: value for key, value in constraint_data.items() if key in preference_keys
-        },
+        preferences=preferences,
         candidates=candidates,
         summary_options=summary_options,
     )
@@ -429,8 +444,11 @@ def _validated_items(
     if len(set(output.ordered_course_ids)) != len(output.ordered_course_ids):
         raise ValueError("duplicate course")
     preferred_id = request.preferences.get("preferred_course_id")
-    if preferred_id is not None and preferred_id in candidate_by_id and expected_count > 0:
-        if preferred_id not in output.ordered_course_ids:
+    if preferred_id is not None and expected_count > 0:
+        pref_candidate = candidate_by_id.get(preferred_id)
+        if pref_candidate is None:
+            pref_candidate = next((c for c in request.candidates if c.course_id == preferred_id), None)
+        if pref_candidate is not None and pref_candidate.course_id not in output.ordered_course_ids:
             raise ValueError("preferred course omitted from itinerary")
     itinerary_dates = [item.date for item in output.itinerary]
     if len(set(itinerary_dates)) != len(output.itinerary):

@@ -182,8 +182,17 @@ def extract_state_code(region_str: str | None) -> str | None:
     trailing = re.search(r"(?:^|,|\s)\s*([A-Za-z]{2})\s*$", region_str)
     if trailing and trailing.group(1).upper() in STATE_NAMES:
         return trailing.group(1).upper()
+    if "," in region_str:
+        segment = region_str.rsplit(",", 1)[-1].strip().casefold()
+        for code, name in STATE_NAMES.items():
+            if segment == name.casefold() or segment == code.casefold():
+                return code
     normalized = region_str.strip().casefold()
-    return next((code for code, name in STATE_NAMES.items() if normalized == name.casefold()), None)
+    for code, name in STATE_NAMES.items():
+        name_lower = name.casefold()
+        if normalized == name_lower or normalized.endswith(" " + name_lower):
+            return code
+    return None
 
 
 def _resolve_anchor_coordinates(
@@ -855,6 +864,11 @@ def save_featured_course(
     if active is None:
         raise HTTPException(404, "No active featured course to save.")
 
-    saved, is_new = save_course_to_default_list(session, user.id, active.course)
-    session.commit()
+    try:
+        saved, is_new = save_course_to_default_list(session, user.id, active.course)
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        saved, is_new = save_course_to_default_list(session, user.id, active.course)
+        session.commit()
     return {"status": "saved", "course_id": active.course_id, "is_new": is_new}

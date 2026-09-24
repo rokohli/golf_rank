@@ -317,9 +317,23 @@ def get_or_create_default_saved_list(session: Session, user_id: int) -> SavedLis
         visibility="private",
         is_default=not has_lists,
     )
-    session.add(default_list)
-    session.flush()
-    return default_list
+    try:
+        with session.begin_nested():
+            session.add(default_list)
+            session.flush()
+        return default_list
+    except IntegrityError:
+        existing = session.scalar(
+            select(SavedList).where(SavedList.user_id == user_id, SavedList.is_default.is_(True))
+        )
+        if existing is not None:
+            return existing
+        first_list = session.scalar(
+            select(SavedList).where(SavedList.user_id == user_id).order_by(SavedList.id).limit(1)
+        )
+        if first_list is not None:
+            return first_list
+        raise
 
 
 def save_course_to_default_list(session: Session, user_id: int, course: Course) -> tuple[SavedCourse, bool]:
@@ -337,19 +351,33 @@ def save_course_to_default_list(session: Session, user_id: int, course: Course) 
         return existing, False
 
     saved = SavedCourse(list_id=default_list.id, course_id=course.id)
-    session.add(saved)
-    session.flush()
-    session.add(
-        ActivityEvent(
-            actor_user_id=user_id,
-            event_type="course_saved",
-            subject_type="saved_course",
-            subject_id=saved.id,
-            visibility=default_list.visibility,
-            event_data={"list_id": default_list.id, "course_id": course.id},
+    try:
+        with session.begin_nested():
+            session.add(saved)
+            session.flush()
+            session.add(
+                ActivityEvent(
+                    actor_user_id=user_id,
+                    event_type="course_saved",
+                    subject_type="saved_course",
+                    subject_id=saved.id,
+                    visibility=default_list.visibility,
+                    event_data={"list_id": default_list.id, "course_id": course.id},
+                )
+            )
+            session.flush()
+        return saved, True
+    except IntegrityError:
+        default_list = get_or_create_default_saved_list(session, user_id)
+        existing = session.scalar(
+            select(SavedCourse).where(
+                SavedCourse.list_id == default_list.id,
+                SavedCourse.course_id.in_(identity_ids),
+            ).limit(1)
         )
-    )
-    return saved, True
+        if existing is not None:
+            return existing, False
+        raise
 
 
 def seed_onboarding_dream_courses(session: Session, user_id: int, dream_course_ids: list[str]) -> None:

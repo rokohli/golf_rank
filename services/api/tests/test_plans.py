@@ -492,3 +492,95 @@ def test_ai_itinerary_with_preferred_course_included_and_validated() -> None:
     assert any(item["course"]["id"] == 2 for item in body["itinerary"])
 
 
+def test_over_budget_preferred_course_emits_budget_caveat_not_affordable_reason() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2 (Spyglass Hill) has green_fee=495. Alice sets max_green_fee=100.
+    response = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Budget Monterey",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "max_green_fee": 100,
+            "preferred_course_id": 2,
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    pref_cand = next(c for c in data["candidates"] if c["course"]["id"] == 2)
+    # Must NOT claim within budget!
+    assert not any("is within your budget" in reason for reason in pref_cand["reasons"])
+    # Must explicitly emit caveat explaining the budget overrun
+    assert any("exceeds your $100 budget limit" in caveat for caveat in pref_cand["caveats"])
+
+
+def test_ai_itinerary_with_reconciled_alias_preferred_course_canonicalizes_and_validates() -> None:
+    from app.models import CourseReconciliation
+
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        if not session.get(Course, 703):
+            alias = Course(
+                id=703,
+                name="Spyglass (Alias 703)",
+                city="Pebble Beach",
+                region="Pebble Beach, CA",
+                admin1_code="CA",
+                source="legacy_import",
+                source_course_id="spyglass-703",
+                latitude=36.58,
+                longitude=-121.96,
+                is_public=True,
+                green_fee=495,
+                hole_count=18,
+                par=72,
+                status="active",
+            )
+            session.add(alias)
+            session.flush()
+            recon = CourseReconciliation(
+                source="legacy_import",
+                source_course_id="spyglass-703",
+                canonical_course_id=2,
+                match_status="confirmed",
+            )
+            session.add(recon)
+            session.commit()
+
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Alias Monterey Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 703,
+        },
+    ).json()
+
+    # Preferred course was canonicalized to Course 2
+    assert created["candidates"][0]["course"]["id"] == 2
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_status"] == "generated"
+    assert len(provider.requests) == 1
+    sent_req = provider.requests[0]
+    # Canonical ID 2 should be passed in preferences, matching the candidate ID in candidates
+    assert sent_req.preferences.get("preferred_course_id") == 2
+    assert any(item["course"]["id"] == 2 for item in body["itinerary"])
+
+
+

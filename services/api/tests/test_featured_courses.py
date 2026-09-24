@@ -1001,5 +1001,127 @@ def test_saved_course_status_with_reconciled_alias() -> None:
     assert "Saved List" in data["match_tags"]
 
 
+def test_extract_state_code_with_city_and_full_state_name() -> None:
+    from app.featured_courses import extract_state_code
+    assert extract_state_code("Dallas, Texas") == "TX"
+    assert extract_state_code("Austin, TX") == "TX"
+    assert extract_state_code("San Diego, California") == "CA"
+    assert extract_state_code("Dallas Texas") == "TX"
+    assert extract_state_code("Texas") == "TX"
+    assert extract_state_code(None) is None
+    assert extract_state_code("Nowhere, Moon") is None
+
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        if not session.get(Course, 901):
+            session.add(Course(
+                id=901,
+                name="Texas Hill Country Golf",
+                city="Fredericksburg",
+                region="Fredericksburg, TX",
+                admin1_code="TX",
+                latitude=30.27,
+                longitude=-98.87,
+                is_public=True,
+                green_fee=150,
+                hole_count=18,
+                par=72,
+                status="active",
+            ))
+            session.commit()
+
+    TX_USER = {"X-Development-Subject": "dev:texas-full-state-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=TX_USER,
+        json={
+            "home_region": "Amarillo, Texas",  # No local anchor courses in Amarillo
+            "max_green_fee": 300,
+            "difficulty": "any",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Lone",
+                "last_name": "Star",
+                "username": "lonestar",
+                "travel_distance": "Up to 30 minutes",
+                "transportation": "Cart",
+                "group_size": "Twosome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=TX_USER)
+    assert res.status_code == 200
+    data = res.json()
+    # Must pick Texas course 901, NOT California default!
+    assert data["course"]["id"] == 901
+    assert "TX" in data["course"]["region"]
+
+
+def test_concurrent_one_tap_save_is_idempotent() -> None:
+    from app.core.auth import CurrentUser
+    from app.domain import require_user
+    from app.saves import save_course_to_default_list
+
+    app = create_app()
+    client = TestClient(app)
+    SAVE_RACE_USER = {"X-Development-Subject": "dev:save-race-user"}
+
+    # Initialize preferences and fetch featured course
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=SAVE_RACE_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 1000,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Race",
+                "last_name": "Saver",
+                "username": "racesaver",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+    res = client.get("/api/v1/me/featured-course", headers=SAVE_RACE_USER)
+    assert res.status_code == 200
+    course_id = res.json()["course"]["id"]
+
+    # Concurrently save via helper from two distinct sessions
+    with app.state.session_factory() as s1, app.state.session_factory() as s2:
+        u1 = require_user(s1, CurrentUser(provider_subject="dev:save-race-user"))
+        u2 = require_user(s2, CurrentUser(provider_subject="dev:save-race-user"))
+        c1 = s1.get(Course, course_id)
+        c2 = s2.get(Course, course_id)
+        assert c1 is not None and c2 is not None
+
+        # First session saves and commits
+        saved1, is_new1 = save_course_to_default_list(s1, u1.id, c1)
+        s1.commit()
+        assert is_new1 is True
+
+        # Second session saves same course: should return existing row gracefully
+        saved2, is_new2 = save_course_to_default_list(s2, u2.id, c2)
+        s2.commit()
+        assert is_new2 is False
+        assert saved2.id == saved1.id
+
+    # Endpoint call should also be completely idempotent
+    save_res = client.post("/api/v1/me/featured-course/save", headers=SAVE_RACE_USER)
+    assert save_res.status_code == 200
+    assert save_res.json()["status"] == "saved"
+    assert save_res.json()["is_new"] is False
+
+
+
 
 
