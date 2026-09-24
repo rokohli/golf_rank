@@ -73,3 +73,22 @@ def test_openapi_contract_schema_includes_all_critical_models_and_routes() -> No
     course_image_properties = schemas.get("CourseImageOut", {}).get("properties", {})
     for moderator_only in ("moderation_reason", "moderated_by_username", "moderated_at"):
         assert moderator_only not in course_image_properties
+
+    # Featured course spotlight endpoints and schema
+    assert "/api/v1/me/featured-course" in paths
+    assert "get" in paths["/api/v1/me/featured-course"]
+    assert "/api/v1/me/featured-course/dismiss" in paths
+    assert "post" in paths["/api/v1/me/featured-course/dismiss"]
+    assert "/api/v1/me/featured-course/save" in paths
+    assert "post" in paths["/api/v1/me/featured-course/save"]
+
+    featured_properties = schemas.get("FeaturedCourseOut", {}).get("properties", {})
+    assert "recommendation_date" in featured_properties
+    assert "sequence" in featured_properties
+    assert "headline" in featured_properties
+    assert "rationale" in featured_properties
+    assert "match_tags" in featured_properties
+    assert "is_regional_fallback" in featured_properties
+    assert "can_dismiss" in featured_properties
+    assert "course" in featured_properties
+

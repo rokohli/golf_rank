@@ -46,6 +46,37 @@ export async function resolveCurrentLocation(): Promise<CurrentRegion | null> {
   } : null
 }
 
+export const MAX_CACHED_LOCATION_AGE_MS = 15 * 60 * 1000 // 15 minutes
+export const MAX_LOCATION_ACCURACY_METERS = 5000 // 5 km
+
+export async function resolveCoordinates(): Promise<{ latitude: number; longitude: number } | null> {
+  try {
+    const permission = await Location.getForegroundPermissionsAsync()
+    if (permission.status !== Location.PermissionStatus.GRANTED) return null
+
+    const lastKnown = await Location.getLastKnownPositionAsync().catch(() => null)
+    const isFresh = lastKnown?.timestamp != null && Date.now() - lastKnown.timestamp < MAX_CACHED_LOCATION_AGE_MS
+    const isAccurate = lastKnown?.coords?.accuracy == null || lastKnown.coords.accuracy <= MAX_LOCATION_ACCURACY_METERS
+
+    if (lastKnown?.coords && isFresh && isAccurate) {
+      return {
+        latitude: lastKnown.coords.latitude,
+        longitude: lastKnown.coords.longitude,
+      }
+    }
+
+    const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null)
+    if (!current?.coords) return null
+
+    return {
+      latitude: current.coords.latitude,
+      longitude: current.coords.longitude,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function formatGeocodedRegion(address: Location.LocationGeocodedAddress): string | null {
   const locality = address.city ?? address.subregion ?? address.district
   const administrativeRegion = address.region === 'California' ? 'CA' : address.region

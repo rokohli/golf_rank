@@ -30,6 +30,7 @@ from .course_images.service import CourseImageService
 from .course_photo_moderation import router as course_photo_moderation_router
 from .course_photo_uploads import router as course_photo_uploads_router
 from .course_ratings import router as course_ratings_router
+from .featured_courses import router as featured_courses_router
 from .db import get_session, make_engine, make_session_factory
 from .domain import (
     canonical_courses_only,
@@ -53,6 +54,7 @@ from .models import (
     AppNotification,
     Comparison,
     CourseCandidate,
+    DailyFeaturedCourse,
     DeletedIdentity,
     Follow,
     ItineraryItem,
@@ -173,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(course_photo_moderation_router, dependencies=[Depends(admin_rate_limit)])
     app.include_router(saves_router, dependencies=authenticated_dependencies)
     app.include_router(plans_router, dependencies=authenticated_dependencies)
+    app.include_router(featured_courses_router, dependencies=authenticated_dependencies)
 
     app.add_middleware(
         RequestBodyLimitMiddleware,
@@ -438,6 +441,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "plan_candidates": rows(PlanCandidate, PlanCandidate.plan_id.in_(plan_ids)) if plan_ids else [],
             "itinerary_items": rows(ItineraryItem, ItineraryItem.plan_id.in_(plan_ids)) if plan_ids else [],
             "plan_generations": rows(PlanGeneration, PlanGeneration.plan_id.in_(plan_ids)) if plan_ids else [],
+            "featured_courses": rows(DailyFeaturedCourse, DailyFeaturedCourse.user_id == stored_user.id),
         }
         return JSONResponse(
             content=jsonable_encoder(data),

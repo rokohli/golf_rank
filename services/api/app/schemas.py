@@ -389,3 +389,18 @@ class UserCourseVisitOut(BaseModel):
     has_played: bool
     rating: float | None = Field(default=None, ge=1, le=10)
     tier: RankingTier | None = None
+
+
+class FeaturedCourseOut(BaseModel):
+    id: int
+    recommendation_date: date
+    sequence: int
+    headline: str
+    rationale: str
+    match_tags: list[str] = Field(default_factory=list)
+    is_regional_fallback: bool = False
+    course: CourseOut
+    distance_miles: float | None = None
+    is_saved: bool = False
+    can_dismiss: bool = True
+

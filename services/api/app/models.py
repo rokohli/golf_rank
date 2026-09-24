@@ -717,3 +717,36 @@ class FailedObjectDeletion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class DailyFeaturedCourse(Base):
+    __tablename__ = "daily_featured_courses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "recommendation_date", "sequence", name="uq_daily_featured_user_date_seq"),
+        Index(
+            "uq_daily_featured_active_user_date",
+            "user_id",
+            "recommendation_date",
+            unique=True,
+            postgresql_where=text("dismissed = false"),
+            sqlite_where=text("dismissed = 0"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    recommendation_date: Mapped[date] = mapped_column(Date, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    headline: Mapped[str] = mapped_column(String(120))
+    rationale: Mapped[str] = mapped_column(String(500))
+    match_tags: Mapped[list] = mapped_column(JSON)
+    is_regional_fallback: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    generation_status: Mapped[str] = mapped_column(String(20), default="fallback_template", server_default="fallback_template")
+    estimated_cost_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    course: Mapped["Course"] = relationship()
+    user: Mapped["User"] = relationship()
+

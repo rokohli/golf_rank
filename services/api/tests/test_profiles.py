@@ -195,7 +195,75 @@ def test_data_export_contains_only_the_authenticated_users_application_data() ->
     assert {n["notification_type"] for n in exported["notifications"]} == {"followed_you", "mutual_follow"}
     assert all(n["recipient_user_id"] == alice_id and n["actor_user_id"] == bob_id for n in exported["notifications"])
     assert [t["token"] for t in exported["push_tokens"]] == ["ExponentPushToken[export-alice]"]
+    assert "featured_courses" in exported
+    assert exported["featured_courses"] == []
     assert "provider_subject" not in str(exported)
+
+
+def test_data_export_includes_featured_courses() -> None:
+    client = TestClient(create_app())
+    alice = {"X-Development-Subject": "dev:export-featured-alice"}
+    bob = {"X-Development-Subject": "dev:export-featured-bob"}
+
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=alice,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Export",
+                "last_name": "Alice",
+                "username": "exportfeaturedali",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+    # Alice gets a featured course
+    f_res = client.get("/api/v1/me/featured-course", headers=alice)
+    assert f_res.status_code == 200
+    featured_id = f_res.json()["id"]
+
+    # Alice exports data: featured course is present
+    alice_export = client.get("/api/v1/me/data-export", headers=alice)
+    assert alice_export.status_code == 200
+    alice_data = alice_export.json()
+    assert "featured_courses" in alice_data
+    assert len(alice_data["featured_courses"]) == 1
+    assert alice_data["featured_courses"][0]["id"] == featured_id
+    assert alice_data["featured_courses"][0]["headline"] is not None
+
+    # Bob sets up profile but has not received a featured course
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=bob,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 500,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Export",
+                "last_name": "Bob",
+                "username": "exportfeaturedbob",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+    bob_export = client.get("/api/v1/me/data-export", headers=bob)
+    assert bob_export.status_code == 200
+    bob_data = bob_export.json()
+    assert bob_data["featured_courses"] == []
 
 
 def test_onboarding_seeds_dream_courses_and_played_courses() -> None:

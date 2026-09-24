@@ -3,6 +3,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import Home, { greetingForHour } from '../home'
 
 const mockGetFeed = jest.fn()
+const mockGetFeaturedCourse = jest.fn()
+const mockSaveFeaturedCourse = jest.fn()
+const mockDismissFeaturedCourse = jest.fn()
 const mockSetReaction = jest.fn()
 const mockMuteUser = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test-token' })
@@ -25,12 +28,40 @@ jest.mock('expo-router', () => {
 
 jest.mock('../../src/api/client', () => ({
   getFeed: (...args: unknown[]) => mockGetFeed(...args),
+  getFeaturedCourse: (...args: unknown[]) => mockGetFeaturedCourse(...args),
+  saveFeaturedCourse: (...args: unknown[]) => mockSaveFeaturedCourse(...args),
+  dismissFeaturedCourse: (...args: unknown[]) => mockDismissFeaturedCourse(...args),
   setActivityReaction: (...args: unknown[]) => mockSetReaction(...args),
   muteUser: (...args: unknown[]) => mockMuteUser(...args),
 }))
 
 jest.mock('../../src/auth/useAuthToken', () => ({ useAuthHeaders: () => ({ getAuthHeaders: mockGetAuthHeaders }) }))
 jest.mock('../../src/auth/AuthProvider', () => ({ useAuthGate: () => ({ profileImageUrl: null, profileInitials: 'RK' }) }))
+const mockResolveCoordinates = jest.fn().mockResolvedValue({ latitude: 36.5685, longitude: -121.949 })
+jest.mock('../../src/location/currentRegion', () => ({
+  resolveCoordinates: () => mockResolveCoordinates(),
+}))
+
+const mockFeatured = {
+  id: 101,
+  recommendation_date: '2026-09-23',
+  sequence: 1,
+  headline: "Today's Course Spotlight",
+  rationale: 'Pasatiempo is a classic Alister MacKenzie layout great for walking.',
+  match_tags: ['~15 mi away', '$410 Fee', 'Challenging', 'Walking'],
+  is_regional_fallback: false,
+  course: {
+    id: 3,
+    name: 'Pasatiempo Golf Club',
+    region: 'Santa Cruz, CA',
+    green_fee: 410,
+    difficulty: 'challenging',
+    is_public: true,
+  },
+  distance_miles: 15.2,
+  is_saved: false,
+  can_dismiss: true,
+}
 
 const activity = {
   id: 8,
@@ -50,13 +81,39 @@ describe('Home social feed', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockGetFeed.mockResolvedValue({ items: [activity], next_cursor: null })
+    mockGetFeaturedCourse.mockResolvedValue(mockFeatured)
+    mockSaveFeaturedCourse.mockResolvedValue({ status: 'saved', course_id: 3, is_new: true })
+    mockDismissFeaturedCourse.mockResolvedValue({
+      ...mockFeatured,
+      id: 102,
+      sequence: 2,
+      course: { ...mockFeatured.course, id: 4, name: 'Spyglass Hill Golf Course' },
+    })
     mockSetReaction.mockResolvedValue({ reaction_count: 1, viewer_reacted: true })
   })
 
   it('renders skeleton loader while feed is loading', () => {
     mockGetFeed.mockReturnValue(new Promise(() => {}))
+    mockGetFeaturedCourse.mockReturnValue(new Promise(() => {}))
     render(<Home />)
     expect(screen.getByLabelText('Loading friends activity')).toBeOnTheScreen()
+  })
+
+  it('loads and renders feed without waiting for GPS resolution', async () => {
+    let resolveGPS: (coords: any) => void = () => {}
+    mockResolveCoordinates.mockReturnValue(new Promise((resolve) => { resolveGPS = resolve }))
+
+    render(<Home />)
+    // Feed renders immediately while GPS is still resolving
+    expect(await screen.findByText('Maya Golfer rated')).toBeOnTheScreen()
+    expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+
+    // Featured course is not yet rendered while GPS is pending
+    expect(screen.queryByText('Pasatiempo Golf Club')).toBeNull()
+
+    // Once GPS resolves, featured course renders
+    resolveGPS({ latitude: 36.5685, longitude: -121.949 })
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
   })
 
   it('renders real activity and activates the reaction control', async () => {
@@ -138,6 +195,61 @@ describe('Home social feed', () => {
     render(<Home />)
 
     expect(await screen.findAllByLabelText('Round photo')).toHaveLength(2)
+  })
+
+  it('renders daily featured course spotlight card with action buttons', async () => {
+    render(<Home />)
+    expect(await screen.findByText("THIS WEEK'S SPOTLIGHT")).toBeOnTheScreen()
+    expect(mockGetFeaturedCourse).toHaveBeenCalledWith(expect.anything(), { latitude: 36.5685, longitude: -121.949 })
+    expect(screen.getByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+    expect(screen.getByText('Pasatiempo is a classic Alister MacKenzie layout great for walking.')).toBeOnTheScreen()
+    expect(screen.getByText('~15 mi away')).toBeOnTheScreen()
+    expect(screen.getByText('View Course')).toBeOnTheScreen()
+    expect(screen.getByText('Plan Trip')).toBeOnTheScreen()
+
+    // Press View Course
+    fireEvent.press(screen.getByRole('button', { name: 'Explore Pasatiempo Golf Club' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/course/3')
+
+    // Press Plan Trip
+    fireEvent.press(screen.getByRole('button', { name: 'Plan a trip to Pasatiempo Golf Club' }))
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/planner', params: { courseId: '3' } })
+  })
+
+  it('allows 1-tap saving of the featured course', async () => {
+    render(<Home />)
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' }))
+    await waitFor(() => expect(mockSaveFeaturedCourse).toHaveBeenCalled())
+  })
+
+  it('allows dismissing the featured course to show the next recommendation', async () => {
+    render(<Home />)
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Show next recommendation' }))
+    await waitFor(() => expect(mockDismissFeaturedCourse).toHaveBeenCalled())
+    expect(await screen.findByText('Spyglass Hill Golf Course')).toBeOnTheScreen()
+  })
+
+  it('disables next pick while save is pending and preserves state on save completion', async () => {
+    let resolveSave: (val: any) => void = () => {}
+    mockSaveFeaturedCourse.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve }))
+
+    render(<Home />)
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+
+    // Save started for course 3 (Pasatiempo)
+    fireEvent.press(screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' }))
+    await waitFor(() => expect(mockSaveFeaturedCourse).toHaveBeenCalled())
+
+    // Next pick is disabled while save is pending to prevent collision
+    expect(screen.getByRole('button', { name: 'Show next recommendation' })).toHaveProp('accessibilityState', { disabled: true })
+
+    // When save finishes, Pasatiempo is marked saved
+    resolveSave({ saved: true, is_new: true })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pasatiempo Golf Club is saved' })).toBeOnTheScreen()
+    })
   })
 })
 

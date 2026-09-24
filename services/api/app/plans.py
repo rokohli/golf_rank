@@ -12,7 +12,16 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .core.rate_limit import ai_planner_rate_limit
 from .db import get_session
-from .domain import canonical_courses_only, course_data, require_course, require_user, stored_user
+from .domain import (
+    canonical_courses_only,
+    course_data,
+    course_identity_ids,
+    require_course,
+    require_user,
+    resolve_course_ids,
+    resolve_course_optional,
+    stored_user,
+)
 from .models import (
     Course,
     ItineraryItem,
@@ -21,6 +30,7 @@ from .models import (
     PlanConstraint,
     PlanGeneration,
     RankingSnapshot,
+    Round,
     SavedCourse,
     SavedList,
     UserCourseState,
@@ -56,6 +66,7 @@ class PlanIn(BaseModel):
     tee_time_window: str | None = Field(default=None, max_length=80)
     must_haves: list[str] = Field(default_factory=list, max_length=20)
     max_candidates: int = Field(default=5, ge=1, le=10)
+    preferred_course_id: int | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_constraints(self) -> "PlanIn":
@@ -163,6 +174,15 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     if payload.difficulty != "any":
         statement = statement.where(Course.difficulty == payload.difficulty)
     courses = list(session.scalars(statement).all())
+    pref_course = None
+    pref_identities: set[int] = set()
+    if payload.preferred_course_id is not None:
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        if pref_course and pref_course.status == "active":
+            pref_identities = course_identity_ids(session, pref_course)
+            if not any(c.id == pref_course.id for c in courses):
+                courses.insert(0, pref_course)
+
     origin_latitude = payload.origin_latitude
     origin_longitude = payload.origin_longitude
     if origin_latitude is None and region_filter is not None:
@@ -172,41 +192,59 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             origin_longitude = sum(course.longitude for course in destination_courses) / len(destination_courses)
 
     ranking = _ranking_signal(session, user_id)
-    saved_ids = set(
+    raw_saved = set(
         session.scalars(
             select(SavedCourse.course_id)
             .join(SavedList, SavedList.id == SavedCourse.list_id)
             .where(SavedList.user_id == user_id)
         ).all()
     )
-    played_ids = set(
-        session.scalars(
-            select(UserCourseState.course_id).where(
-                UserCourseState.user_id == user_id,
-                UserCourseState.has_played.is_(True),
-            )
-        ).all()
+    saved_ids = resolve_course_ids(session, raw_saved) | raw_saved
+
+    played_from_rounds = select(Round.course_id).where(Round.user_id == user_id)
+    played_from_states = select(UserCourseState.course_id).where(
+        UserCourseState.user_id == user_id,
+        UserCourseState.has_played.is_(True),
     )
+    raw_played = set(session.scalars(played_from_rounds.union(played_from_states)).all())
+    played_ids = resolve_course_ids(session, raw_played) | raw_played
+
     checked_at = datetime.now(UTC)
     candidates: list[dict] = []
     for course in courses:
+        is_preferred = bool(
+            payload.preferred_course_id is not None
+            and (
+                course.id == payload.preferred_course_id
+                or course.id in pref_identities
+            )
+        )
         distance = None
-        if origin_latitude is not None and origin_longitude is not None:
+        if (
+            origin_latitude is not None
+            and origin_longitude is not None
+            and course.latitude is not None
+            and course.longitude is not None
+        ):
             distance = _distance_miles(
                 origin_latitude,
                 origin_longitude,
                 course.latitude,
                 course.longitude,
             )
-            if payload.radius_miles is not None and distance > payload.radius_miles:
+            if payload.radius_miles is not None and distance > payload.radius_miles and not is_preferred:
                 continue
         personal_rating, confidence = ranking.get(course.id, (5.0, 0.0))
         budget_fit = 0.0
         if payload.max_green_fee and course.green_fee is not None:
             budget_fit = max(0.0, 10 * (1 - course.green_fee / payload.max_green_fee))
         score = personal_rating * 6 + confidence * 10 + budget_fit
+        if is_preferred:
+            score += 1000.0
         reasons: list[str] = []
         caveats = ["Tee-time availability has not been verified."]
+        if is_preferred:
+            reasons.append("Selected as the featured focus for this trip.")
         if course.id in ranking:
             reasons.append(f"Your comparison-based rating is {personal_rating:.1f}/10.")
         else:
@@ -218,7 +256,12 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             score += 5
             reasons.append("This would add a new course to your played list.")
         if payload.max_green_fee is not None and course.green_fee is not None:
-            reasons.append(f"The ${course.green_fee} green fee is within your budget.")
+            if course.green_fee <= payload.max_green_fee:
+                reasons.append(f"The ${course.green_fee} green fee is within your budget.")
+            else:
+                caveats.append(
+                    f"The ${course.green_fee} green fee exceeds your ${payload.max_green_fee} budget limit."
+                )
         elif course.green_fee is None:
             caveats.append("The current green fee is unknown and must be confirmed.")
         if distance is not None:
@@ -248,6 +291,10 @@ def _replace_plan_data(session: Session, user_id: int, plan: Plan, payload: Plan
     session.add(plan)
     session.flush()
     constraint_data = payload.model_dump(mode="json", exclude={"title", "start_date", "end_date"})
+    if payload.preferred_course_id is not None:
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        if pref_course is not None:
+            constraint_data["preferred_course_id"] = pref_course.id
     constraints = session.get(PlanConstraint, plan.id)
     if constraints is None:
         constraints = PlanConstraint(plan_id=plan.id, constraint_data=constraint_data)
@@ -360,14 +407,21 @@ def _narrative_request(
         "transportation",
         "tee_time_window",
         "must_haves",
+        "preferred_course_id",
     }
+    preferences = {
+        key: value for key, value in constraint_data.items() if key in preference_keys
+    }
+    raw_pref = preferences.get("preferred_course_id")
+    if raw_pref is not None:
+        pref_course = resolve_course_optional(session, raw_pref) or session.get(Course, raw_pref)
+        if pref_course is not None:
+            preferences["preferred_course_id"] = pref_course.id
     return PlannerNarrativeRequest(
         title=plan.title,
         start_date=plan.start_date,
         end_date=plan.end_date,
-        preferences={
-            key: value for key, value in constraint_data.items() if key in preference_keys
-        },
+        preferences=preferences,
         candidates=candidates,
         summary_options=summary_options,
     )
@@ -389,6 +443,13 @@ def _validated_items(
         raise ValueError("course order does not match itinerary")
     if len(set(output.ordered_course_ids)) != len(output.ordered_course_ids):
         raise ValueError("duplicate course")
+    preferred_id = request.preferences.get("preferred_course_id")
+    if preferred_id is not None and expected_count > 0:
+        pref_candidate = candidate_by_id.get(preferred_id)
+        if pref_candidate is None:
+            pref_candidate = next((c for c in request.candidates if c.course_id == preferred_id), None)
+        if pref_candidate is not None and pref_candidate.course_id not in output.ordered_course_ids:
+            raise ValueError("preferred course omitted from itinerary")
     itinerary_dates = [item.date for item in output.itinerary]
     if len(set(itinerary_dates)) != len(output.itinerary):
         raise ValueError("duplicate date")

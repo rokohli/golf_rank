@@ -11,6 +11,7 @@ import {
   CourseSearchFilters,
   CourseRatingInput,
   CourseRatingState,
+  FeaturedCourse,
   FriendSummary,
   FriendsCourseThoughts,
   FeedPage,
@@ -696,3 +697,49 @@ export async function deletePlan(planId: number, headers: ApiHeaders): Promise<v
   const response = await fetch(`${baseUrl}/api/v1/me/plans/${planId}`, { method: 'DELETE', headers })
   if (!response.ok) throw await responseError(response, 'Unable to delete this trip. Please try again.')
 }
+
+export async function getFeaturedCourse(
+  headers: ApiHeaders,
+  coords?: { latitude: number; longitude: number } | null,
+): Promise<FeaturedCourse | null> {
+  const params = new URLSearchParams()
+  if (coords?.latitude !== undefined && coords?.longitude !== undefined) {
+    params.set('lat', coords.latitude.toString())
+    params.set('lng', coords.longitude.toString())
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${baseUrl}/api/v1/me/featured-course${query}`, { headers })
+  if (!response.ok) {
+    if (response.status === 404) return null
+    throw await responseError(response, 'Unable to load your featured course.')
+  }
+  return response.json()
+}
+
+export async function dismissFeaturedCourse(
+  headers: ApiHeaders,
+  coords?: { latitude: number; longitude: number } | null,
+): Promise<FeaturedCourse> {
+  const params = new URLSearchParams()
+  if (coords?.latitude !== undefined && coords?.longitude !== undefined) {
+    params.set('lat', coords.latitude.toString())
+    params.set('lng', coords.longitude.toString())
+  }
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${baseUrl}/api/v1/me/featured-course/dismiss${query}`, {
+    method: 'POST',
+    headers,
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to refresh featured course.')
+  return response.json()
+}
+
+export async function saveFeaturedCourse(headers: ApiHeaders): Promise<{ status: string; course_id: number; is_new: boolean }> {
+  const response = await fetch(`${baseUrl}/api/v1/me/featured-course/save`, {
+    method: 'POST',
+    headers,
+  })
+  if (!response.ok) throw await responseError(response, 'Unable to save featured course.')
+  return response.json()
+}
+

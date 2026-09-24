@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Plan, PlanGeneration
+from app.models import Course, Plan, PlanGeneration
 from app.planner_narrative import (
     PlannerNarrativeOutput,
     PlannerNarrativeRequest,
@@ -409,3 +409,178 @@ def test_plan_destination_accepts_a_city_and_derives_its_origin() -> None:
     assert response.status_code == 201
     assert {item["course"]["id"] for item in response.json()["candidates"]} == {1, 2}
     assert all(item["distance_miles"] is not None for item in response.json()["candidates"])
+
+
+def test_preferred_course_id_guarantees_position_1_in_dense_region() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        for i in range(1, 7):
+            cid = 800 + i
+            if not session.get(Course, cid):
+                c = Course(
+                    id=cid,
+                    name=f"Scottsdale Course {i}",
+                    city="Scottsdale",
+                    region="Scottsdale, AZ",
+                    admin1_code="AZ",
+                    latitude=33.5 + (i * 0.01),
+                    longitude=-111.9 - (i * 0.01),
+                    green_fee=100,
+                    difficulty="intermediate",
+                    is_public=True,
+                    hole_count=18,
+                    par=72,
+                    status="active",
+                )
+                session.add(c)
+        session.commit()
+
+    response = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Scottsdale Focus",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Scottsdale"],
+            "max_candidates": 5,
+            "preferred_course_id": 806,
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    candidates = data["candidates"]
+    assert len(candidates) == 5
+    assert candidates[0]["course"]["id"] == 806
+    assert candidates[0]["position"] == 1
+    assert any("Selected as the featured focus" in reason for reason in candidates[0]["reasons"])
+    assert data["itinerary"][0]["course"]["id"] == 806
+    assert "Play Scottsdale Course 6" in data["itinerary"][0]["title"]
+
+
+def test_ai_itinerary_with_preferred_course_included_and_validated() -> None:
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+
+    # Alice creates a plan with preferred_course_id=2 (Spyglass Hill)
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Monterey Preferred",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 2,
+        },
+    ).json()
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_status"] == "generated"
+    assert len(provider.requests) == 1
+    sent_req = provider.requests[0]
+    assert sent_req.preferences.get("preferred_course_id") == 2
+    # Spyglass Hill (ID 2) is in the itinerary
+    assert any(item["course"]["id"] == 2 for item in body["itinerary"])
+
+
+def test_over_budget_preferred_course_emits_budget_caveat_not_affordable_reason() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2 (Spyglass Hill) has green_fee=495. Alice sets max_green_fee=100.
+    response = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Budget Monterey",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "max_green_fee": 100,
+            "preferred_course_id": 2,
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    pref_cand = next(c for c in data["candidates"] if c["course"]["id"] == 2)
+    # Must NOT claim within budget!
+    assert not any("is within your budget" in reason for reason in pref_cand["reasons"])
+    # Must explicitly emit caveat explaining the budget overrun
+    assert any("exceeds your $100 budget limit" in caveat for caveat in pref_cand["caveats"])
+
+
+def test_ai_itinerary_with_reconciled_alias_preferred_course_canonicalizes_and_validates() -> None:
+    from app.models import CourseReconciliation
+
+    provider = RecordingNarrativeProvider()
+    app = _ai_app(provider)
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        if not session.get(Course, 703):
+            alias = Course(
+                id=703,
+                name="Spyglass (Alias 703)",
+                city="Pebble Beach",
+                region="Pebble Beach, CA",
+                admin1_code="CA",
+                source="legacy_import",
+                source_course_id="spyglass-703",
+                latitude=36.58,
+                longitude=-121.96,
+                is_public=True,
+                green_fee=495,
+                hole_count=18,
+                par=72,
+                status="active",
+            )
+            session.add(alias)
+            session.flush()
+            recon = CourseReconciliation(
+                source="legacy_import",
+                source_course_id="spyglass-703",
+                canonical_course_id=2,
+                match_status="confirmed",
+            )
+            session.add(recon)
+            session.commit()
+
+    created = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Alias Monterey Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 703,
+        },
+    ).json()
+
+    # Preferred course was canonicalized to Course 2
+    assert created["candidates"][0]["course"]["id"] == 2
+
+    response = client.post(
+        f"/api/v1/me/plans/{created['id']}/ai-itinerary",
+        headers=ALICE,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_status"] == "generated"
+    assert len(provider.requests) == 1
+    sent_req = provider.requests[0]
+    # Canonical ID 2 should be passed in preferences, matching the candidate ID in candidates
+    assert sent_req.preferences.get("preferred_course_id") == 2
+    assert any(item["course"]["id"] == 2 for item in body["itinerary"])
+
+
+
