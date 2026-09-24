@@ -18,6 +18,7 @@ const initialInput: PlanInput = {
   max_green_fee: null, access: 'any', difficulty: 'any', regions: [],
   origin_latitude: null, origin_longitude: null, radius_miles: null,
   transportation: 'either', tee_time_window: null, must_haves: [], max_candidates: 5,
+  preferred_course_id: null,
 }
 
 function partySizeFromProfile(profile: OnboardingPreferences | null): number {
@@ -109,6 +110,7 @@ export default function Planner() {
             setInput((prev) => ({
               ...prev,
               title: courseTitle,
+              preferred_course_id: preselectedCourse.id,
               party_size: partySize,
               max_green_fee: effectiveFee,
               access: effectiveAccess,
@@ -162,6 +164,7 @@ export default function Planner() {
     return {
       ...input,
       title: input.title.trim(),
+      preferred_course_id: input.preferred_course_id ?? null,
       start_date: isoFromUsDate(startDateText),
       end_date: isoFromUsDate(endDateText),
       regions: regionText.split(';').map((value) => value.trim()).filter(Boolean),

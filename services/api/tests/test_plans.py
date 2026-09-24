@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import Plan, PlanGeneration
+from app.models import Course, Plan, PlanGeneration
 from app.planner_narrative import (
     PlannerNarrativeOutput,
     PlannerNarrativeRequest,
@@ -409,3 +409,53 @@ def test_plan_destination_accepts_a_city_and_derives_its_origin() -> None:
     assert response.status_code == 201
     assert {item["course"]["id"] for item in response.json()["candidates"]} == {1, 2}
     assert all(item["distance_miles"] is not None for item in response.json()["candidates"])
+
+
+def test_preferred_course_id_guarantees_position_1_in_dense_region() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        for i in range(1, 7):
+            cid = 800 + i
+            if not session.get(Course, cid):
+                c = Course(
+                    id=cid,
+                    name=f"Scottsdale Course {i}",
+                    city="Scottsdale",
+                    region="Scottsdale, AZ",
+                    admin1_code="AZ",
+                    latitude=33.5 + (i * 0.01),
+                    longitude=-111.9 - (i * 0.01),
+                    green_fee=100,
+                    difficulty="intermediate",
+                    is_public=True,
+                    hole_count=18,
+                    par=72,
+                    status="active",
+                )
+                session.add(c)
+        session.commit()
+
+    response = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Scottsdale Focus",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Scottsdale"],
+            "max_candidates": 5,
+            "preferred_course_id": 806,
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    candidates = data["candidates"]
+    assert len(candidates) == 5
+    assert candidates[0]["course"]["id"] == 806
+    assert candidates[0]["position"] == 1
+    assert any("Selected as the featured focus" in reason for reason in candidates[0]["reasons"])
+    assert data["itinerary"][0]["course"]["id"] == 806
+    assert "Play Scottsdale Course 6" in data["itinerary"][0]["title"]
+

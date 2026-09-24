@@ -19,6 +19,7 @@ from app.featured_courses import budget_tracker, current_week_anchor, monthly_ai
 from app.main import create_app
 from app.models import (
     Course,
+    CourseReconciliation,
     DailyFeaturedCourse,
     Round,
     SavedCourse,
@@ -848,6 +849,157 @@ def test_race_condition_preserves_billed_cost(monkeypatch: pytest.MonkeyPatch) -
         updated_row = session.get(DailyFeaturedCourse, first_id)
         assert updated_row is not None
         assert updated_row.estimated_cost_micros == initial_cost * 2
+
+
+def test_played_course_exclusion_with_reconciled_alias() -> None:
+    """If a user played a reconciled source alias, the canonical course is excluded."""
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        # Alias for Course 2 (Spyglass Hill)
+        if not session.get(Course, 702):
+            alias = Course(
+                id=702,
+                name="Spyglass (Old Import)",
+                city="Pebble Beach",
+                region="Pebble Beach, CA",
+                admin1_code="CA",
+                source="legacy_import",
+                source_course_id="spyglass-702",
+                latitude=36.58,
+                longitude=-121.96,
+                is_public=True,
+                green_fee=495,
+                hole_count=18,
+                par=72,
+                status="active",
+            )
+            session.add(alias)
+            session.flush()
+            recon = CourseReconciliation(
+                source="legacy_import",
+                source_course_id="spyglass-702",
+                canonical_course_id=2,
+                match_status="confirmed",
+            )
+            session.add(recon)
+            session.commit()
+
+    RECON_USER = {"X-Development-Subject": "dev:recon-played-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=RECON_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 500,
+            "difficulty": "challenging",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Recon",
+                "last_name": "Player",
+                "username": "reconplayer",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    # Simulate historical round logged directly against alias 702 (before reconciliation)
+    from app.core.auth import CurrentUser
+    from app.domain import require_user
+    with app.state.session_factory() as session:
+        user = require_user(session, CurrentUser(provider_subject="dev:recon-played-user"))
+        session.add(Round(user_id=user.id, course_id=702, played_on=date.today(), score=82))
+        session.commit()
+
+    res = client.get("/api/v1/me/featured-course", headers=RECON_USER)
+    assert res.status_code == 200
+    data = res.json()
+    # Canonical Course 2 must be excluded because its alias 702 was played!
+    # Course 3 (Pasatiempo) should be recommended instead
+    assert data["course"]["id"] == 3
+
+
+def test_saved_course_status_with_reconciled_alias() -> None:
+    """If a user saved a reconciled source alias, the canonical card shows is_saved=True."""
+    from app.core.auth import CurrentUser
+    from app.domain import require_user
+    from app.saves import save_course_to_default_list
+
+    app = create_app()
+    client = TestClient(app)
+
+    with app.state.session_factory() as session:
+        # Alias for Course 1 (Pebble Beach)
+        if not session.get(Course, 701):
+            alias = Course(
+                id=701,
+                name="Pebble Beach (Old Import)",
+                city="Pebble Beach",
+                region="Pebble Beach, CA",
+                admin1_code="CA",
+                source="legacy_import",
+                source_course_id="pebble-701",
+                latitude=36.57,
+                longitude=-121.95,
+                is_public=True,
+                green_fee=675,
+                hole_count=18,
+                par=72,
+                status="active",
+            )
+            session.add(alias)
+            session.flush()
+            recon = CourseReconciliation(
+                source="legacy_import",
+                source_course_id="pebble-701",
+                canonical_course_id=1,
+                match_status="confirmed",
+            )
+            session.add(recon)
+            session.commit()
+
+    SAVED_ALIAS_USER = {"X-Development-Subject": "dev:saved-alias-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=SAVED_ALIAS_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 700,
+            "difficulty": "challenging",
+            "access": "public",
+            "onboarding_data": {
+                "first_name": "Saved",
+                "last_name": "Alias",
+                "username": "savedalias",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    with app.state.session_factory() as session:
+        user = require_user(session, CurrentUser(provider_subject="dev:saved-alias-user"))
+        alias_course = session.get(Course, 701)
+        assert alias_course is not None
+        save_course_to_default_list(session, user.id, alias_course)
+        session.commit()
+
+    res = client.get("/api/v1/me/featured-course", headers=SAVED_ALIAS_USER)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["course"]["id"] == 1
+    assert data["is_saved"] is True
+    assert data["headline"] == "From Your Saved List"
+    assert "Saved List" in data["match_tags"]
+
 
 
 

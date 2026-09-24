@@ -456,6 +456,7 @@ describe('trip planner', () => {
           access: 'public',
           difficulty: 'intermediate',
           must_haves: ['Pacific Grove Golf Links', 'Fast greens'],
+          preferred_course_id: 10,
         }),
         expect.anything(),
       ),

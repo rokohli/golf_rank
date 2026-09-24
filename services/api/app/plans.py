@@ -12,7 +12,15 @@ from sqlalchemy.orm import Session
 from .core.auth import CurrentUser, current_user
 from .core.rate_limit import ai_planner_rate_limit
 from .db import get_session
-from .domain import canonical_courses_only, course_data, require_course, require_user, stored_user
+from .domain import (
+    canonical_courses_only,
+    course_data,
+    course_identity_ids,
+    require_course,
+    require_user,
+    resolve_course_optional,
+    stored_user,
+)
 from .models import (
     Course,
     ItineraryItem,
@@ -56,6 +64,7 @@ class PlanIn(BaseModel):
     tee_time_window: str | None = Field(default=None, max_length=80)
     must_haves: list[str] = Field(default_factory=list, max_length=20)
     max_candidates: int = Field(default=5, ge=1, le=10)
+    preferred_course_id: int | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_constraints(self) -> "PlanIn":
@@ -163,6 +172,15 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     if payload.difficulty != "any":
         statement = statement.where(Course.difficulty == payload.difficulty)
     courses = list(session.scalars(statement).all())
+    pref_course = None
+    pref_identities: set[int] = set()
+    if payload.preferred_course_id is not None:
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        if pref_course and pref_course.status == "active":
+            pref_identities = course_identity_ids(session, pref_course)
+            if not any(c.id == pref_course.id for c in courses):
+                courses.insert(0, pref_course)
+
     origin_latitude = payload.origin_latitude
     origin_longitude = payload.origin_longitude
     if origin_latitude is None and region_filter is not None:
@@ -190,6 +208,13 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     checked_at = datetime.now(UTC)
     candidates: list[dict] = []
     for course in courses:
+        is_preferred = bool(
+            payload.preferred_course_id is not None
+            and (
+                course.id == payload.preferred_course_id
+                or course.id in pref_identities
+            )
+        )
         distance = None
         if origin_latitude is not None and origin_longitude is not None:
             distance = _distance_miles(
@@ -198,15 +223,19 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 course.latitude,
                 course.longitude,
             )
-            if payload.radius_miles is not None and distance > payload.radius_miles:
+            if payload.radius_miles is not None and distance > payload.radius_miles and not is_preferred:
                 continue
         personal_rating, confidence = ranking.get(course.id, (5.0, 0.0))
         budget_fit = 0.0
         if payload.max_green_fee and course.green_fee is not None:
             budget_fit = max(0.0, 10 * (1 - course.green_fee / payload.max_green_fee))
         score = personal_rating * 6 + confidence * 10 + budget_fit
+        if is_preferred:
+            score += 1000.0
         reasons: list[str] = []
         caveats = ["Tee-time availability has not been verified."]
+        if is_preferred:
+            reasons.append("Selected as the featured focus for this trip.")
         if course.id in ranking:
             reasons.append(f"Your comparison-based rating is {personal_rating:.1f}/10.")
         else:

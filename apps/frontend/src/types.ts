@@ -411,6 +411,7 @@ export type PlanInput = {
   tee_time_window: string | null
   must_haves: string[]
   max_candidates: number
+  preferred_course_id?: number | null
 }
 
 export type PlanCandidate = {

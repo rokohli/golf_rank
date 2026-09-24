@@ -23,7 +23,13 @@ from .core.auth import CurrentUser, current_user, get_settings
 from .core.config import Settings
 from .core.rate_limit import authenticated_rate_limit
 from .db import get_session
-from .domain import canonical_courses_only, course_data, require_user
+from .domain import (
+    canonical_courses_only,
+    course_data,
+    course_identity_ids,
+    require_user,
+    resolve_course_ids,
+)
 from .models import (
     Course,
     CourseImage,
@@ -214,23 +220,26 @@ def _get_user_exclusions(session: Session, user_id: int, today: date) -> tuple[s
         UserCourseState.user_id == user_id,
         UserCourseState.has_played.is_(True),
     )
-    played_ids = set(session.scalars(played_from_rounds.union(played_from_states)).all())
+    raw_played = set(session.scalars(played_from_rounds.union(played_from_states)).all())
+    played_ids = resolve_course_ids(session, raw_played) | raw_played
 
     # 60-day (~8.5 weeks) cooldown to prevent repeating courses across weekly picks
     past_cutoff = today - timedelta(days=60)
-    past_featured = set(session.scalars(
+    raw_past = set(session.scalars(
         select(DailyFeaturedCourse.course_id).where(
             DailyFeaturedCourse.user_id == user_id,
             DailyFeaturedCourse.recommendation_date >= past_cutoff,
         )
     ).all())
+    past_featured = resolve_course_ids(session, raw_past) | raw_past
 
-    dismissed_today = set(session.scalars(
+    raw_dismissed = set(session.scalars(
         select(DailyFeaturedCourse.course_id).where(
             DailyFeaturedCourse.user_id == user_id,
             DailyFeaturedCourse.recommendation_date == today,
         )
     ).all())
+    dismissed_today = resolve_course_ids(session, raw_dismissed) | raw_dismissed
 
     return played_ids, past_featured, dismissed_today
 
@@ -304,11 +313,12 @@ def resolve_featured_candidate(
 
     # Exclusions
     played_ids, past_featured_ids, dismissed_today_ids = _get_user_exclusions(session, user.id, today)
-    saved_course_ids = set(session.scalars(
+    raw_saved = set(session.scalars(
         select(SavedCourse.course_id)
         .join(SavedList, SavedList.id == SavedCourse.list_id)
         .where(SavedList.user_id == user.id)
     ).all())
+    saved_course_ids = resolve_course_ids(session, raw_saved) | raw_saved
 
     # Constraints
     max_green_fee = preferences.max_green_fee if preferences else None
@@ -580,11 +590,12 @@ def _build_featured_response(
     if lat is not None and lng is not None:
         live_dist = round(miles_between(lat, lng, course), 1)
 
-    # Check is_saved
+    # Check is_saved across canonical course and all reconciled aliases
+    identities = course_identity_ids(session, course)
     is_saved = session.scalar(
         select(SavedCourse.id)
         .join(SavedList, SavedList.id == SavedCourse.list_id)
-        .where(SavedList.user_id == user_id, SavedCourse.course_id == course.id)
+        .where(SavedList.user_id == user_id, SavedCourse.course_id.in_(identities))
         .limit(1)
     ) is not None
 
@@ -663,11 +674,12 @@ async def get_featured_course(
         start_time = time.perf_counter()
         course, dist, is_regional = resolve_featured_candidate(session, user, target_date, lat, lng)
         prefs = session.get(OnboardingPreference, user.id)
-        saved_ids = set(session.scalars(
+        raw_saved_ids = set(session.scalars(
             select(SavedCourse.course_id)
             .join(SavedList, SavedList.id == SavedCourse.list_id)
             .where(SavedList.user_id == user.id)
         ).all())
+        saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
         with budget_tracker.reserve(session, settings) as can_use_ai:
             headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
@@ -764,11 +776,12 @@ async def dismiss_featured_course(
     # Generate runner-up candidate
     course, dist, is_regional = resolve_featured_candidate(session, user, target_date, lat, lng)
     prefs = session.get(OnboardingPreference, user.id)
-    saved_ids = set(session.scalars(
+    raw_saved_ids = set(session.scalars(
         select(SavedCourse.course_id)
         .join(SavedList, SavedList.id == SavedCourse.list_id)
         .where(SavedList.user_id == user.id)
     ).all())
+    saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
     with budget_tracker.reserve(session, settings) as can_use_ai:
         headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
