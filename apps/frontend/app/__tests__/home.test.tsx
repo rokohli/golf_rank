@@ -94,8 +94,26 @@ describe('Home social feed', () => {
 
   it('renders skeleton loader while feed is loading', () => {
     mockGetFeed.mockReturnValue(new Promise(() => {}))
+    mockGetFeaturedCourse.mockReturnValue(new Promise(() => {}))
     render(<Home />)
     expect(screen.getByLabelText('Loading friends activity')).toBeOnTheScreen()
+  })
+
+  it('loads and renders feed without waiting for GPS resolution', async () => {
+    let resolveGPS: (coords: any) => void = () => {}
+    mockResolveCoordinates.mockReturnValue(new Promise((resolve) => { resolveGPS = resolve }))
+
+    render(<Home />)
+    // Feed renders immediately while GPS is still resolving
+    expect(await screen.findByText('Maya Golfer rated')).toBeOnTheScreen()
+    expect(screen.getByText('Pebble Beach Golf Links')).toBeOnTheScreen()
+
+    // Featured course is not yet rendered while GPS is pending
+    expect(screen.queryByText('Pasatiempo Golf Club')).toBeNull()
+
+    // Once GPS resolves, featured course renders
+    resolveGPS({ latitude: 36.5685, longitude: -121.949 })
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
   })
 
   it('renders real activity and activates the reaction control', async () => {

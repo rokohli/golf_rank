@@ -15,7 +15,7 @@ from typing import Any, Iterator
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -300,14 +300,26 @@ def _resolve_anchor_coordinates(
         return lat, lng
     if not home_region:
         return None, None
+
+    conditions = [
+        Course.region.ilike(f"%{home_region}%"),
+        Course.city.ilike(f"%{home_region}%"),
+    ]
+    if "," in home_region:
+        city_part = home_region.rsplit(",", 1)[0].strip()
+        state_raw = home_region.rsplit(",", 1)[1].strip()
+        state_code = extract_state_code(state_raw)
+        if city_part and state_code:
+            conditions.extend([
+                Course.region.ilike(f"%{city_part}, {state_code}%"),
+                and_(Course.city.ilike(city_part), Course.region.ilike(f"%{state_code}%")),
+            ])
+
     anchor = session.scalars(
         select(Course).where(
             Course.status == "active",
             canonical_courses_only(),
-            or_(
-                Course.region.ilike(f"%{home_region}%"),
-                Course.city.ilike(f"%{home_region}%"),
-            ),
+            or_(*conditions),
             Course.latitude.is_not(None),
             Course.longitude.is_not(None),
         ).limit(1)

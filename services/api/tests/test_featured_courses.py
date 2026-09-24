@@ -1542,3 +1542,27 @@ def test_redis_failure_fails_closed_without_calling_gemini(monkeypatch: pytest.M
         assert featured is not None
         assert featured.generation_status == "fallback_template"
 
+
+def test_resolve_anchor_coordinates_normalizes_full_state_name() -> None:
+    """When home_region uses full state name like Dallas, Texas, anchor resolves to Dallas, TX course."""
+    from app.featured_courses import _resolve_anchor_coordinates
+    app = create_app()
+    with app.state.session_factory() as session:
+        if not session.get(Course, 902):
+            session.add(Course(
+                id=902,
+                name="Dallas National Golf Club",
+                city="Dallas",
+                region="Dallas, TX",
+                admin1_code="TX",
+                latitude=32.7767,
+                longitude=-96.7970,
+                is_public=True,
+                status="active",
+            ))
+            session.commit()
+        lat, lng = _resolve_anchor_coordinates(session, None, None, "Dallas, Texas")
+        assert lat == 32.7767
+        assert lng == -96.7970
+
+

@@ -38,26 +38,41 @@ export default function Home() {
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true)
-    else setLoading(true)
+    else {
+      setLoading(true)
+      setFeaturedLoading(true)
+    }
     setError(null)
+
+    const headersPromise = getAuthHeaders()
+
+    const feedPromise = headersPromise
+      .then((headers) => getFeed(headers))
+      .then((page) => {
+        setActivities(page.items)
+        setNextCursor(page.next_cursor)
+      })
+      .catch((reason) => {
+        setActivities([])
+        setError(message(reason, 'Unable to load friends activity.'))
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+
+    const featuredPromise = Promise.all([headersPromise, resolveCoordinates()])
+      .then(([headers, coords]) => getFeaturedCourse(headers, coords))
+      .then((featured) => {
+        setFeaturedCourse(featured)
+      })
+      .catch(() => null)
+      .finally(() => {
+        setFeaturedLoading(false)
+      })
+
     try {
-      const [headers, coords] = await Promise.all([
-        getAuthHeaders(),
-        resolveCoordinates(),
-      ])
-      const [page, featured] = await Promise.all([
-        getFeed(headers),
-        getFeaturedCourse(headers, coords).catch(() => null),
-      ])
-      setActivities(page.items)
-      setNextCursor(page.next_cursor)
-      setFeaturedCourse(featured)
-    } catch (reason) {
-      setActivities([])
-      setError(message(reason, 'Unable to load friends activity.'))
+      await Promise.all([feedPromise, featuredPromise])
     } finally {
-      setLoading(false)
-      setFeaturedLoading(false)
       setRefreshing(false)
     }
   }, [getAuthHeaders])
