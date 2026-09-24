@@ -212,6 +212,27 @@ describe('Home social feed', () => {
     await waitFor(() => expect(mockDismissFeaturedCourse).toHaveBeenCalled())
     expect(await screen.findByText('Spyglass Hill Golf Course')).toBeOnTheScreen()
   })
+
+  it('disables next pick while save is pending and preserves state on save completion', async () => {
+    let resolveSave: (val: any) => void = () => {}
+    mockSaveFeaturedCourse.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve }))
+
+    render(<Home />)
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+
+    // Save started for course 3 (Pasatiempo)
+    fireEvent.press(screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' }))
+    await waitFor(() => expect(mockSaveFeaturedCourse).toHaveBeenCalled())
+
+    // Next pick is disabled while save is pending to prevent collision
+    expect(screen.getByRole('button', { name: 'Show next recommendation' })).toHaveProp('accessibilityState', { disabled: true })
+
+    // When save finishes, Pasatiempo is marked saved
+    resolveSave({ saved: true, is_new: true })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pasatiempo Golf Club is saved' })).toBeOnTheScreen()
+    })
+  })
 })
 
 describe('home greeting', () => {

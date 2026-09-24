@@ -15,7 +15,7 @@ from typing import Any, Iterator
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -838,7 +838,23 @@ async def get_featured_course(
                 session.commit()
             except IntegrityError:
                 session.rollback()
-                # If a race occurred and another request generated the active row first, preserve spent cost and return it
+                # If a race occurred and another request generated the active row first, preserve spent cost atomically
+                if cost_micros and cost_micros > 0:
+                    try:
+                        session.execute(
+                            update(DailyFeaturedCourse)
+                            .where(
+                                DailyFeaturedCourse.user_id == user.id,
+                                DailyFeaturedCourse.recommendation_date == target_date,
+                                DailyFeaturedCourse.dismissed.is_(False),
+                            )
+                            .values(
+                                estimated_cost_micros=func.coalesce(DailyFeaturedCourse.estimated_cost_micros, 0) + cost_micros
+                            )
+                        )
+                        session.commit()
+                    except Exception:
+                        session.rollback()
                 active = session.scalar(
                     select(DailyFeaturedCourse).where(
                         DailyFeaturedCourse.user_id == user.id,
@@ -847,12 +863,6 @@ async def get_featured_course(
                     )
                 )
                 if active is not None:
-                    if cost_micros and cost_micros > 0:
-                        try:
-                            active.estimated_cost_micros = (active.estimated_cost_micros or 0) + cost_micros
-                            session.commit()
-                        except Exception:
-                            session.rollback()
                     return _build_featured_response(session, active, user.id, lat, lng)
                 raise
 
@@ -943,16 +953,18 @@ async def dismiss_featured_course(
             session.rollback()
             if cost_micros and cost_micros > 0:
                 try:
-                    active_row = session.scalar(
-                        select(DailyFeaturedCourse).where(
+                    session.execute(
+                        update(DailyFeaturedCourse)
+                        .where(
                             DailyFeaturedCourse.user_id == user.id,
                             DailyFeaturedCourse.recommendation_date == target_date,
                             DailyFeaturedCourse.dismissed.is_(False),
                         )
+                        .values(
+                            estimated_cost_micros=func.coalesce(DailyFeaturedCourse.estimated_cost_micros, 0) + cost_micros
+                        )
                     )
-                    if active_row:
-                        active_row.estimated_cost_micros = (active_row.estimated_cost_micros or 0) + cost_micros
-                        session.commit()
+                    session.commit()
                 except Exception:
                     session.rollback()
             raise HTTPException(409, "A concurrent recommendation refresh is in progress. Please retry.")

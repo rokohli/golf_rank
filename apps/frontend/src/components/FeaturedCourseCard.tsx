@@ -39,7 +39,7 @@ export function FeaturedCourseCard({
   }
 
   const handleSave = async () => {
-    if (saving || featured.is_saved) return
+    if (saving || dismissing || featured.is_saved) return
     setSaving(true)
     try {
       await onSave()
@@ -49,7 +49,7 @@ export function FeaturedCourseCard({
   }
 
   const handleDismiss = async () => {
-    if (dismissing || !onDismiss || !featured.can_dismiss) return
+    if (dismissing || saving || !onDismiss || !featured.can_dismiss) return
     setDismissing(true)
     try {
       await onDismiss()
@@ -77,7 +77,7 @@ export function FeaturedCourseCard({
             accessibilityRole="button"
             accessibilityLabel="Show next recommendation"
             onPress={handleDismiss}
-            disabled={dismissing}
+            disabled={dismissing || saving}
             style={({ pressed }) => [styles.dismissButton, pressed && styles.pressed]}
           >
             {dismissing ? (
@@ -157,7 +157,7 @@ export function FeaturedCourseCard({
           accessibilityRole="button"
           accessibilityLabel={featured.is_saved ? `${course.name} is saved` : `Save ${course.name}`}
           onPress={handleSave}
-          disabled={saving || featured.is_saved}
+          disabled={saving || dismissing || featured.is_saved}
           style={({ pressed }) => [
             styles.saveButton,
             featured.is_saved && styles.saveButtonActive,

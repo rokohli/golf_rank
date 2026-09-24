@@ -814,26 +814,23 @@ def test_race_condition_preserves_billed_cost(monkeypatch: pytest.MonkeyPatch) -
 
     orig_commit = SASession.commit
     orig_scalar = SASession.scalar
-
-    intercept_count = 0
+    simulate_race = True
 
     def mock_scalar(self: SASession, statement: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal intercept_count
         stmt_str = str(statement)
-        if "daily_featured_courses" in stmt_str and "dismissed" in stmt_str:
-            if intercept_count < 2:
-                intercept_count += 1
-                return None
+        if simulate_race and "daily_featured_courses" in stmt_str and "dismissed" in stmt_str:
+            return None
         return orig_scalar(self, statement, *args, **kwargs)
 
     commit_failed = False
 
     def mock_commit(self: SASession) -> None:
-        nonlocal commit_failed
+        nonlocal commit_failed, simulate_race
         if not commit_failed:
             for obj in self.new:
                 if isinstance(obj, DailyFeaturedCourse):
                     commit_failed = True
+                    simulate_race = False
                     raise IntegrityError("duplicate key", params=None, orig=Exception("unique constraint"))
         orig_commit(self)
 
@@ -844,11 +841,31 @@ def test_race_condition_preserves_billed_cost(monkeypatch: pytest.MonkeyPatch) -
     assert res2.status_code == 200
     assert commit_failed is True
 
-    # Verify that the active row in DB now has initial_cost + second request cost preserved
+    # Third request also loses insert race: atomic increment accumulates without overwriting
+    _generation_locks.clear()
+    simulate_race = True
+    commit_failed_3 = False
+
+    def mock_commit_3(self: SASession) -> None:
+        nonlocal commit_failed_3, simulate_race
+        if not commit_failed_3:
+            for obj in self.new:
+                if isinstance(obj, DailyFeaturedCourse):
+                    commit_failed_3 = True
+                    simulate_race = False
+                    raise IntegrityError("duplicate key", params=None, orig=Exception("unique constraint"))
+        orig_commit(self)
+
+    monkeypatch.setattr(SASession, "commit", mock_commit_3)
+    res3 = client.get("/api/v1/me/featured-course", headers=RACE_USER)
+    assert res3.status_code == 200
+    assert commit_failed_3 is True
+
+    # Verify that the active row in DB now has initial_cost + second + third request costs preserved
     with app.state.session_factory() as session:
         updated_row = session.get(DailyFeaturedCourse, first_id)
         assert updated_row is not None
-        assert updated_row.estimated_cost_micros == initial_cost * 2
+        assert updated_row.estimated_cost_micros == initial_cost * 3
 
 
 def test_played_course_exclusion_with_reconciled_alias() -> None:

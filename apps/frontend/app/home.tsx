@@ -101,9 +101,12 @@ export default function Home() {
 
   async function handleSaveFeaturedCourse() {
     if (!featuredCourse) return
+    const targetCourseId = featuredCourse.course.id
     try {
       await saveFeaturedCourse(await getAuthHeaders())
-      setFeaturedCourse((current) => current ? { ...current, is_saved: true } : null)
+      setFeaturedCourse((current) =>
+        current && current.course.id === targetCourseId ? { ...current, is_saved: true } : current
+      )
     } catch (reason) {
       setError(message(reason, 'Unable to save featured course.'))
     }

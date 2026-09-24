@@ -133,4 +133,59 @@ describe('FeaturedCourseCard', () => {
 
     expect(screen.queryByRole('button', { name: 'Show next recommendation' })).toBeNull()
   })
+
+  it('disables next pick while save is pending', async () => {
+    let resolveSave: () => void = () => {}
+    const slowSave = jest.fn(() => new Promise<void>((resolve) => { resolveSave = resolve }))
+
+    render(
+      <FeaturedCourseCard
+        featured={{ ...baseCourse, can_dismiss: true }}
+        onOpenCourse={jest.fn()}
+        onPlanTrip={jest.fn()}
+        onSave={slowSave}
+        onDismiss={jest.fn()}
+      />
+    )
+
+    const saveBtn = screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' })
+    const dismissBtn = screen.getByRole('button', { name: 'Show next recommendation' })
+
+    fireEvent.press(saveBtn)
+    expect(slowSave).toHaveBeenCalledTimes(1)
+    expect(dismissBtn).toHaveProp('accessibilityState', { disabled: true })
+
+    resolveSave()
+    await waitFor(() => {
+      expect(dismissBtn).toHaveProp('accessibilityState', { disabled: false })
+    })
+  })
+
+  it('disables save while dismiss is pending', async () => {
+    let resolveDismiss: () => void = () => {}
+    const slowDismiss = jest.fn(() => new Promise<void>((resolve) => { resolveDismiss = resolve }))
+
+    render(
+      <FeaturedCourseCard
+        featured={{ ...baseCourse, can_dismiss: true }}
+        onOpenCourse={jest.fn()}
+        onPlanTrip={jest.fn()}
+        onSave={jest.fn()}
+        onDismiss={slowDismiss}
+      />
+    )
+
+    const saveBtn = screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' })
+    const dismissBtn = screen.getByRole('button', { name: 'Show next recommendation' })
+
+    fireEvent.press(dismissBtn)
+    expect(slowDismiss).toHaveBeenCalledTimes(1)
+    expect(saveBtn).toHaveProp('accessibilityState', { disabled: true })
+
+    resolveDismiss()
+    await waitFor(() => {
+      expect(saveBtn).toHaveProp('accessibilityState', { disabled: false })
+    })
+  })
 })
+
