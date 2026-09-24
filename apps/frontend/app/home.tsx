@@ -3,7 +3,7 @@ import { Stack, useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 
-import { getFeed, getFeaturedCourse, muteUser, saveFeaturedCourse, setActivityReaction } from '../src/api/client'
+import { dismissFeaturedCourse, getFeed, getFeaturedCourse, muteUser, saveFeaturedCourse, setActivityReaction } from '../src/api/client'
 import { useAuthGate } from '../src/auth/AuthProvider'
 import { useAuthHeaders } from '../src/auth/useAuthToken'
 import { Avatar, BottomNav, CourseVisual, IconButton, ProductScreen, SectionTitle } from '../src/components/ProductUI'
@@ -109,6 +109,19 @@ export default function Home() {
     }
   }
 
+  async function handleDismissFeaturedCourse() {
+    try {
+      const [headers, coords] = await Promise.all([
+        getAuthHeaders(),
+        resolveCoordinates(),
+      ])
+      const nextFeatured = await dismissFeaturedCourse(headers, coords)
+      setFeaturedCourse(nextFeatured)
+    } catch (reason) {
+      setError(message(reason, 'Unable to refresh featured course.'))
+    }
+  }
+
   const featured = activities.find((activity) => activity.course) ?? null
   const recent = activities.filter((activity) => activity.id !== featured?.id)
   return <>
@@ -125,6 +138,7 @@ export default function Home() {
           onOpenCourse={(id) => router.push(`/course/${id}` as never)}
           onPlanTrip={(id) => router.push({ pathname: '/planner', params: { courseId: String(id) } } as never)}
           onSave={handleSaveFeaturedCourse}
+          onDismiss={handleDismissFeaturedCourse}
         />
       ) : null}
 

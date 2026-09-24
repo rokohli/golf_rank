@@ -567,6 +567,7 @@ async def generate_featured_narrative(
             db_cost = monthly_ai_cost_micros(session, DailyFeaturedCourse, DailyFeaturedCourse.estimated_cost_micros)
             can_use_ai = (db_cost + max_cost) <= cost_limit_micros
 
+    incurred_cost_micros: int | None = None
     if can_use_ai:
         candidate_facts = {
             "course_name": course.name,
@@ -628,20 +629,24 @@ async def generate_featured_narrative(
                 )
                 res.raise_for_status()
                 data = res.json()
-                text_part = data["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = NarrativeSchema.model_validate_json(text_part)
 
+                # A 2xx response from Gemini means the request was billed.
+                # Compute usage cost immediately before attempting to parse narrative structure.
                 usage = data.get("usageMetadata", {})
                 in_tok = usage.get("promptTokenCount", 0)
                 out_tok = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
-                cost_micros = (
+                calc_cost = (
                     in_tok * settings.ai_planner_input_cost_micros_per_million_tokens
                     + out_tok * settings.ai_planner_output_cost_micros_per_million_tokens
                 ) // 1_000_000
+                incurred_cost_micros = calc_cost if calc_cost > 0 else estimate_max_request_cost_micros(settings)
 
-                return parsed.headline, parsed.rationale, parsed.match_tags, "ai_generated", cost_micros
+                text_part = data["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = NarrativeSchema.model_validate_json(text_part)
+
+                return parsed.headline, parsed.rationale, parsed.match_tags, "ai_generated", incurred_cost_micros
         except Exception as error:
-            logger.warning("featured_course_ai_fallback reason=%s", type(error).__name__)
+            logger.warning("featured_course_ai_fallback reason=%s incurred_cost=%s", type(error).__name__, incurred_cost_micros)
 
     # Deterministic fallback template grounded in real facts
     if is_regional_fallback:
@@ -684,7 +689,7 @@ async def generate_featured_narrative(
     elif not tags:
         tags.append("Featured")
 
-    return headline, rationale, tags[:4], "fallback_template", 0
+    return headline, rationale, tags[:4], "fallback_template", incurred_cost_micros
 
 
 def _build_featured_response(

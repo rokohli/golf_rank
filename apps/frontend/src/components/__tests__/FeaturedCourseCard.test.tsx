@@ -97,4 +97,40 @@ describe('FeaturedCourseCard', () => {
       expect(onSave).toHaveBeenCalled()
     })
   })
+
+  it('renders dismiss button when can_dismiss is true and onDismiss is passed', async () => {
+    const onDismiss = jest.fn()
+    render(
+      <FeaturedCourseCard
+        featured={{ ...baseCourse, can_dismiss: true }}
+        onOpenCourse={jest.fn()}
+        onPlanTrip={jest.fn()}
+        onSave={jest.fn()}
+        onDismiss={onDismiss}
+      />
+    )
+
+    const dismissBtn = screen.getByRole('button', { name: 'Show next recommendation' })
+    expect(dismissBtn).toBeOnTheScreen()
+    expect(screen.getByText('Next pick')).toBeOnTheScreen()
+
+    fireEvent.press(dismissBtn)
+    await waitFor(() => {
+      expect(onDismiss).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('does not render dismiss button when can_dismiss is false', () => {
+    render(
+      <FeaturedCourseCard
+        featured={{ ...baseCourse, can_dismiss: false }}
+        onOpenCourse={jest.fn()}
+        onPlanTrip={jest.fn()}
+        onSave={jest.fn()}
+        onDismiss={jest.fn()}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: 'Show next recommendation' })).toBeNull()
+  })
 })

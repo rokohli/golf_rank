@@ -1306,6 +1306,80 @@ def test_featured_distance_tags_update_with_live_coordinates() -> None:
     assert not any("mi away" in tag or " mi" in tag for tag in d3["match_tags"])
 
 
+def test_malformed_ai_response_preserves_billed_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="mock-gemini-key",
+        ai_featured_course_monthly_cost_limit_cents=100,
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    MALFORMED_USER = {"X-Development-Subject": "dev:malformed-user"}
+
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=MALFORMED_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 1000,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Malformed",
+                "last_name": "Tester",
+                "username": "malformedtester",
+                "travel_distance": "Up to 45 minutes",
+                "transportation": "Walking",
+                "group_size": "Foursome",
+                "played_course_ids": [],
+                "dream_course_ids": [],
+            },
+        },
+    )
+
+    original_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{
+                    "text": "Raw unstructured prose that definitely fails NarrativeSchema JSON parsing",
+                }]},
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 500,
+                "candidatesTokenCount": 100,
+                "thoughtsTokenCount": 0,
+            },
+        })
+
+    monkeypatch.setattr(
+        "app.featured_courses.httpx.AsyncClient",
+        lambda **kwargs: original_async_client(
+            **kwargs, transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=MALFORMED_USER)
+    assert res.status_code == 200
+
+    with app.state.session_factory() as session:
+        user = session.scalar(select(User).where(User.provider_subject == "dev:malformed-user"))
+        assert user is not None
+        featured = session.scalar(
+            select(DailyFeaturedCourse).where(
+                DailyFeaturedCourse.user_id == user.id,
+                DailyFeaturedCourse.recommendation_date == current_week_anchor(),
+            )
+        )
+        assert featured is not None
+        assert featured.generation_status == "fallback_template"
+        assert featured.estimated_cost_micros is not None
+        assert featured.estimated_cost_micros > 0
+
+
+
 
 
 

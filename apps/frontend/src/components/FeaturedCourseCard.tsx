@@ -12,6 +12,7 @@ export type FeaturedCourseCardProps = {
   onOpenCourse: (courseId: number) => void
   onPlanTrip: (courseId: number) => void
   onSave: () => Promise<void> | void
+  onDismiss?: () => Promise<void> | void
 }
 
 export function FeaturedCourseCard({
@@ -19,8 +20,10 @@ export function FeaturedCourseCard({
   onOpenCourse,
   onPlanTrip,
   onSave,
+  onDismiss,
 }: FeaturedCourseCardProps) {
   const [saving, setSaving] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
   const course = featured.course
 
   const displayCourse: CoursePresentation = {
@@ -45,6 +48,16 @@ export function FeaturedCourseCard({
     }
   }
 
+  const handleDismiss = async () => {
+    if (dismissing || !onDismiss || !featured.can_dismiss) return
+    setDismissing(true)
+    try {
+      await onDismiss()
+    } finally {
+      setDismissing(false)
+    }
+  }
+
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
@@ -58,6 +71,25 @@ export function FeaturedCourseCard({
             {featured.is_regional_fallback ? 'REGIONAL SPOTLIGHT' : "THIS WEEK'S SPOTLIGHT"}
           </Text>
         </View>
+
+        {featured.can_dismiss && onDismiss ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show next recommendation"
+            onPress={handleDismiss}
+            disabled={dismissing}
+            style={({ pressed }) => [styles.dismissButton, pressed && styles.pressed]}
+          >
+            {dismissing ? (
+              <ActivityIndicator size="small" color={colors.muted} />
+            ) : (
+              <>
+                <Feather name="refresh-cw" size={11} color={colors.muted} />
+                <Text style={styles.dismissText}>Next pick</Text>
+              </>
+            )}
+          </Pressable>
+        ) : null}
       </View>
 
       <Pressable
@@ -178,6 +210,18 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.6,
+  },
+  dismissButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  dismissText: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '600',
   },
   visualWrapper: {
     borderRadius: 12,

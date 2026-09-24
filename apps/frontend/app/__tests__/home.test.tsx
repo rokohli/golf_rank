@@ -5,6 +5,7 @@ import Home, { greetingForHour } from '../home'
 const mockGetFeed = jest.fn()
 const mockGetFeaturedCourse = jest.fn()
 const mockSaveFeaturedCourse = jest.fn()
+const mockDismissFeaturedCourse = jest.fn()
 const mockSetReaction = jest.fn()
 const mockMuteUser = jest.fn()
 const mockGetAuthHeaders = jest.fn().mockResolvedValue({ Authorization: 'Bearer test-token' })
@@ -29,6 +30,7 @@ jest.mock('../../src/api/client', () => ({
   getFeed: (...args: unknown[]) => mockGetFeed(...args),
   getFeaturedCourse: (...args: unknown[]) => mockGetFeaturedCourse(...args),
   saveFeaturedCourse: (...args: unknown[]) => mockSaveFeaturedCourse(...args),
+  dismissFeaturedCourse: (...args: unknown[]) => mockDismissFeaturedCourse(...args),
   setActivityReaction: (...args: unknown[]) => mockSetReaction(...args),
   muteUser: (...args: unknown[]) => mockMuteUser(...args),
 }))
@@ -81,6 +83,12 @@ describe('Home social feed', () => {
     mockGetFeed.mockResolvedValue({ items: [activity], next_cursor: null })
     mockGetFeaturedCourse.mockResolvedValue(mockFeatured)
     mockSaveFeaturedCourse.mockResolvedValue({ status: 'saved', course_id: 3, is_new: true })
+    mockDismissFeaturedCourse.mockResolvedValue({
+      ...mockFeatured,
+      id: 102,
+      sequence: 2,
+      course: { ...mockFeatured.course, id: 4, name: 'Spyglass Hill Golf Course' },
+    })
     mockSetReaction.mockResolvedValue({ reaction_count: 1, viewer_reacted: true })
   })
 
@@ -195,6 +203,14 @@ describe('Home social feed', () => {
     expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
     fireEvent.press(screen.getByRole('button', { name: 'Save Pasatiempo Golf Club' }))
     await waitFor(() => expect(mockSaveFeaturedCourse).toHaveBeenCalled())
+  })
+
+  it('allows dismissing the featured course to show the next recommendation', async () => {
+    render(<Home />)
+    expect(await screen.findByText('Pasatiempo Golf Club')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Show next recommendation' }))
+    await waitFor(() => expect(mockDismissFeaturedCourse).toHaveBeenCalled())
+    expect(await screen.findByText('Spyglass Hill Golf Course')).toBeOnTheScreen()
   })
 })
 
