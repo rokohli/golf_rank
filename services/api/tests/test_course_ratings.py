@@ -524,6 +524,7 @@ def test_rating_details_tags_lifecycle_and_contract() -> None:
     )
     assert cleared.status_code == 200
     assert cleared.json()["round"]["tags"] == []
+    assert cleared.json()["round"]["note"] == "Updated note without tags"
 
     # 7. Explicit null tags rejected with 422 (never silently clears existing tags)
     client.patch(
@@ -542,3 +543,64 @@ def test_rating_details_tags_lifecycle_and_contract() -> None:
     state = client.get("/api/v1/me/course-ratings/1", headers=ALICE).json()
     assert state["round"]["tags"] == ["cart"]
 
+
+def test_rating_details_patch_preserves_unrelated_round_fields() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    bob_id = _create_profile(client, BOB, "Bob")
+    client.put(f"/api/v1/me/follows/{bob_id}", headers=ALICE)
+    client.put("/api/v1/me/course-ratings/1", headers=ALICE, json=_rating(tier="green"))
+
+    # Set up a rating round with note, favorite_hole, companions, visibility, and tags
+    setup_res = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={
+            "note": "Loved the back nine",
+            "favorite_hole": 14,
+            "friend_user_ids": [bob_id],
+            "guest_names": ["Guest Golfer"],
+            "visibility": "friends",
+            "tags": ["walked", "fast_greens"],
+        },
+    )
+    assert setup_res.status_code == 200
+    round_data = setup_res.json()["round"]
+    assert round_data["note"] == "Loved the back nine"
+    assert round_data["favorite_hole"] == 14
+    assert round_data["visibility"] == "friends"
+    assert round_data["tags"] == ["walked", "fast_greens"]
+    assert len(setup_res.json()["companions"]) == 2
+
+    # Patch only tags -> all unrelated fields must be preserved
+    tag_only_patch = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": ["cart"]},
+    )
+    assert tag_only_patch.status_code == 200
+    patched_round = tag_only_patch.json()["round"]
+    assert patched_round["tags"] == ["cart"]
+    assert patched_round["note"] == "Loved the back nine"
+    assert patched_round["favorite_hole"] == 14
+    assert patched_round["visibility"] == "friends"
+    companions = tag_only_patch.json()["companions"]
+    assert companions == [
+        {"friend_user_id": bob_id, "guest_name": None},
+        {"friend_user_id": None, "guest_name": "Guest Golfer"},
+    ]
+
+    # Patch tags: [] -> clears tags, all unrelated fields still preserved
+    clear_tags_patch = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": []},
+    )
+    assert clear_tags_patch.status_code == 200
+    cleared_round = clear_tags_patch.json()["round"]
+    assert cleared_round["tags"] == []
+    assert cleared_round["note"] == "Loved the back nine"
+    assert cleared_round["favorite_hole"] == 14
+    assert cleared_round["visibility"] == "friends"
+    assert clear_tags_patch.json()["companions"] == companions

@@ -14,6 +14,8 @@ const BASELINE_ADVISORY_IDS = new Set([
   1138813, // nanoid
   1138808, // image-size
   1138809, // image-size
+  1239765, // image-size
+  1239766, // image-size
 ])
 
 function fail(message) {
