@@ -800,3 +800,139 @@ def test_deleting_rating_round_locks_before_removing_ranking_evidence(monkeypatc
     assert response.status_code == 204
     # _stage_snapshot deliberately reacquires the same row lock before versioning.
     assert calls == ["lock", "event_delete", "delete", "lock"]
+
+
+def test_round_tags_validation_and_lifecycle() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # 1. Invalid tag rejected
+    invalid_resp = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "tags": ["invalid_tag_name"],
+        },
+    )
+    assert invalid_resp.status_code == 422
+    assert "Invalid tags" in invalid_resp.text
+
+    # 2. Mutually exclusive locomotion tags rejected (walked + cart)
+    mutex_resp = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "tags": ["walked", "cart", "ocean_views"],
+        },
+    )
+    assert mutex_resp.status_code == 422
+    assert "cannot contain both 'walked' and 'cart'" in mutex_resp.text
+
+    # 3. Valid creation with normalization & deduplication
+    created = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "score": 85,
+            "tags": ["walked", "caddie", "ocean_views", "WALKED", "fast_greens"],
+        },
+    )
+    assert created.status_code == 201
+    created_json = created.json()
+    round_id = created_json["id"]
+    assert created_json["tags"] == ["walked", "caddie", "ocean_views", "fast_greens"]
+
+    # Verify event_data carries tags
+    with app.state.session_factory() as session:
+        event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_id == round_id,
+            )
+        )
+        assert event is not None
+        assert event.event_data["tags"] == ["walked", "caddie", "ocean_views", "fast_greens"]
+
+    # 4. Patching without tags preserves existing tags
+    patched_score = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"score": 83},
+    )
+    assert patched_score.status_code == 200
+    assert patched_score.json()["tags"] == ["walked", "caddie", "ocean_views", "fast_greens"]
+
+    # 5. Patching tags updates them and the activity event
+    patched_tags = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"tags": ["cart", "scenic_views"]},
+    )
+    assert patched_tags.status_code == 200
+    assert patched_tags.json()["tags"] == ["cart", "scenic_views"]
+
+    with app.state.session_factory() as session:
+        event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_id == round_id,
+            )
+        )
+        assert event is not None
+        assert event.event_data["tags"] == ["cart", "scenic_views"]
+
+    # 6. Patching tags to empty list clears them
+    cleared = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"tags": []},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["tags"] == []
+
+    with app.state.session_factory() as session:
+        event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.subject_type == "round",
+                ActivityEvent.subject_id == round_id,
+            )
+        )
+        assert event is not None
+        assert "tags" not in event.event_data
+
+    # 7. Explicit null tags rejected with 422 on create and patch (never silently clears)
+    null_create = client.post(
+        "/api/v1/me/rounds",
+        headers=ALICE,
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "tags": None,
+        },
+    )
+    assert null_create.status_code == 422
+    assert "Input should be a valid list" in null_create.text
+
+    # Re-add a tag to verify patch with null fails and preserves tag
+    client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"tags": ["walked"]},
+    )
+    null_patch = client.patch(
+        f"/api/v1/me/rounds/{round_id}",
+        headers=ALICE,
+        json={"tags": None},
+    )
+    assert null_patch.status_code == 422
+    assert "tags cannot be null" in null_patch.text
+    # Tag still preserved
+    current_round = client.get(f"/api/v1/me/rounds/{round_id}", headers=ALICE).json()
+    assert current_round["tags"] == ["walked"]
+

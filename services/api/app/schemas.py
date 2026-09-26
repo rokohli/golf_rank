@@ -259,6 +259,41 @@ class CourseRatingIn(BaseModel):
         return self
 
 
+LOCOMOTION_TAGS: frozenset[str] = frozenset({"walked", "cart"})
+ASSISTANCE_TAGS: frozenset[str] = frozenset({"push_cart", "caddie"})
+COURSE_HIGHLIGHT_TAGS: frozenset[str] = frozenset({
+    "ocean_views",
+    "mountain_views",
+    "scenic_views",
+    "links_style",
+    "tree_lined",
+    "fast_greens",
+    "challenging_greens",
+    "pristine_fairways",
+    "punishing_rough",
+    "great_practice_facility",
+    "welcoming_staff",
+    "great_food_drink",
+    "beginner_friendly",
+})
+ALLOWED_ROUND_TAGS: frozenset[str] = LOCOMOTION_TAGS | ASSISTANCE_TAGS | COURSE_HIGHLIGHT_TAGS
+
+
+def validate_round_tags(values: list[str] | None) -> list[str]:
+    if values is None:
+        raise ValueError("tags cannot be null; pass an empty list [] to clear tags")
+    normalized = list(dict.fromkeys(v.strip().lower() for v in values))
+    if len(normalized) > 8:
+        raise ValueError("A round cannot have more than 8 tags")
+    invalid = [tag for tag in normalized if tag not in ALLOWED_ROUND_TAGS]
+    if invalid:
+        raise ValueError(f"Invalid tags: {', '.join(invalid)}")
+    tag_set = set(normalized)
+    if "walked" in tag_set and "cart" in tag_set:
+        raise ValueError("A round cannot contain both 'walked' and 'cart'")
+    return normalized
+
+
 class RatingDetailsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     note: str | None = Field(default=None, max_length=5000)
@@ -266,6 +301,7 @@ class RatingDetailsPatch(BaseModel):
     friend_user_ids: list[int] = Field(default_factory=list, max_length=40)
     guest_names: list[str] = Field(default_factory=list, max_length=20)
     visibility: Literal["private", "friends", "public"] = "private"
+    tags: list[str] | None = Field(default=None, max_length=8)
 
     @field_validator("guest_names")
     @classmethod
@@ -277,6 +313,11 @@ class RatingDetailsPatch(BaseModel):
                 raise ValueError("guest names cannot exceed 120 characters")
         return values
 
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str] | None) -> list[str]:
+        return validate_round_tags(values)
+
 
 class RatingRoundOut(BaseModel):
     id: int
@@ -285,6 +326,7 @@ class RatingRoundOut(BaseModel):
     note: str | None
     favorite_hole: int | None
     visibility: Literal["private", "friends", "public"]
+    tags: list[str] = Field(default_factory=list)
     photos: list[CourseImageOut] = Field(default_factory=list)
 
 

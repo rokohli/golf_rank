@@ -392,6 +392,9 @@ class Round(Base):
         Boolean, default=False, server_default=false(), nullable=False
     )
     visibility: Mapped[str] = mapped_column(String(20), default="friends", index=True)
+    tags: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -37,7 +37,7 @@ from .models import (
     UserBlock,
     UserCourseState,
 )
-from .schemas import CourseOut
+from .schemas import CourseOut, validate_round_tags
 
 
 router = APIRouter(prefix="/api/v1/me/rounds", tags=["rounds"])
@@ -57,6 +57,7 @@ class RoundIn(BaseModel):
     guest_names: list[str] = Field(default_factory=list, max_length=20)
     visibility: Visibility = "friends"
     is_favorite: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("played_on")
     @classmethod
@@ -73,6 +74,11 @@ class RoundIn(BaseModel):
             raise ValueError("guest names must be between 1 and 120 characters")
         return names
 
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str] | None) -> list[str]:
+        return validate_round_tags(values)
+
 
 class RoundPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -85,6 +91,7 @@ class RoundPatch(BaseModel):
     guest_names: list[str] | None = Field(default=None, max_length=20)
     visibility: Visibility | None = None
     is_favorite: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=8)
 
     @field_validator("played_on")
     @classmethod
@@ -102,6 +109,11 @@ class RoundPatch(BaseModel):
         if any(not name or len(name) > 120 for name in names):
             raise ValueError("guest names must be between 1 and 120 characters")
         return names
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str] | None) -> list[str]:
+        return validate_round_tags(values)
 
     @model_validator(mode="after")
     def companion_lists_are_updated_together(self) -> "RoundPatch":
@@ -128,6 +140,7 @@ class RoundOut(BaseModel):
     visibility: Visibility
     is_favorite: bool
     is_rating_round: bool
+    tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -203,6 +216,7 @@ def _round_out(session: Session, round_: Round, *, owner_blocked_ids: set[int] |
         visibility=round_.visibility,
         is_favorite=round_.is_favorite,
         is_rating_round=round_.is_rating_round,
+        tags=round_.tags or [],
         created_at=round_.created_at,
         updated_at=round_.updated_at,
     )
@@ -326,6 +340,8 @@ def _event_data(session: Session, round_: Round) -> dict:
         "played_on": round_.played_on.isoformat(),
         "score": round_.score,
     }
+    if round_.tags:
+        data["tags"] = round_.tags
     if note and note.body:
         data["note"] = note.body
     if round_.favorite_hole is not None:
@@ -387,6 +403,7 @@ def create_round(
         favorite_hole=payload.favorite_hole,
         is_favorite=payload.is_favorite,
         visibility=payload.visibility,
+        tags=payload.tags,
     )
     session.add(round_)
     session.flush()
@@ -525,6 +542,9 @@ def update_round(
         round_.is_favorite = payload.is_favorite
     if payload.visibility is not None:
         round_.visibility = payload.visibility
+    if "tags" in payload.model_fields_set:
+        assert payload.tags is not None
+        round_.tags = payload.tags
     if "note" in payload.model_fields_set:
         note = session.get(RoundNote, round_.id)
         if payload.note:

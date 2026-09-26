@@ -101,6 +101,7 @@ def _state(
                 "note": note.body if note else None,
                 "favorite_hole": round_.favorite_hole,
                 "visibility": round_.visibility,
+                "tags": round_.tags or [],
                 "photos": round_image_data(session, round_.id),
             }
             if round_ is not None
@@ -459,44 +460,74 @@ def patch_rating_details(
     if round_ is None:
         raise HTTPException(404, "Rating round not found")
 
-    friend_ids = list(dict.fromkeys(payload.friend_user_ids))
-    if friend_ids:
-        user_ids = set(session.scalars(select(User.id).where(User.id.in_(friend_ids))).all())
-        followed_ids = set(
-            session.scalars(
-                select(Follow.followed_id).where(
-                    Follow.follower_id == user.id, Follow.followed_id.in_(friend_ids)
-                )
-            ).all()
-        )
-        blocked_ids = _companion_blocked_ids(session, user.id, set(friend_ids))
-        if user_ids != set(friend_ids) or followed_ids != set(friend_ids) or blocked_ids:
-            raise HTTPException(422, "All friend_user_ids must be followed users")
+    created: list[AppNotification] = []
+    if "friend_user_ids" in payload.model_fields_set:
+        friend_ids = list(dict.fromkeys(payload.friend_user_ids))
+        if friend_ids:
+            user_ids = set(session.scalars(select(User.id).where(User.id.in_(friend_ids))).all())
+            followed_ids = set(
+                session.scalars(
+                    select(Follow.followed_id).where(
+                        Follow.follower_id == user.id, Follow.followed_id.in_(friend_ids)
+                    )
+                ).all()
+            )
+            blocked_ids = _companion_blocked_ids(session, user.id, set(friend_ids))
+            if user_ids != set(friend_ids) or followed_ids != set(friend_ids) or blocked_ids:
+                raise HTTPException(422, "All friend_user_ids must be followed users")
 
-    guest_names = list(dict.fromkeys(name.strip() for name in payload.guest_names))
-    round_.favorite_hole = payload.favorite_hole
-    round_.visibility = payload.visibility
-    note = session.get(RoundNote, round_.id)
-    if payload.note is None:
-        if note is not None:
-            session.delete(note)
-    elif note is None:
-        session.add(RoundNote(round_id=round_.id, body=payload.note))
-    else:
-        note.body = payload.note
-    previously_tagged_ids = set(session.scalars(
-        select(RoundCompanion.friend_user_id).where(
-            RoundCompanion.round_id == round_.id,
-            RoundCompanion.friend_user_id.is_not(None),
+        previously_tagged_ids = set(session.scalars(
+            select(RoundCompanion.friend_user_id).where(
+                RoundCompanion.round_id == round_.id,
+                RoundCompanion.friend_user_id.is_not(None),
+            )
+        ).all())
+        session.execute(
+            delete(RoundCompanion).where(
+                RoundCompanion.round_id == round_.id,
+                RoundCompanion.friend_user_id.is_not(None),
+            )
         )
-    ).all())
-    session.execute(delete(RoundCompanion).where(RoundCompanion.round_id == round_.id))
-    session.flush()
-    session.add_all(
-        [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
-        + [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
-    )
-    created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
+        session.flush()
+        session.add_all(
+            [RoundCompanion(round_id=round_.id, friend_user_id=friend_id) for friend_id in friend_ids]
+        )
+        created = _notify_tagged_companions(session, user.id, round_.id, friend_ids, previously_tagged_ids)
+
+    if "guest_names" in payload.model_fields_set:
+        guest_names = list(dict.fromkeys(name.strip() for name in payload.guest_names))
+        session.execute(
+            delete(RoundCompanion).where(
+                RoundCompanion.round_id == round_.id,
+                RoundCompanion.guest_name.is_not(None),
+            )
+        )
+        session.flush()
+        session.add_all(
+            [RoundCompanion(round_id=round_.id, guest_name=name) for name in guest_names]
+        )
+
+    if "favorite_hole" in payload.model_fields_set:
+        round_.favorite_hole = payload.favorite_hole
+
+    if "visibility" in payload.model_fields_set and payload.visibility is not None:
+        round_.visibility = payload.visibility
+
+    if "tags" in payload.model_fields_set:
+        assert payload.tags is not None
+        round_.tags = payload.tags
+
+    if "note" in payload.model_fields_set:
+        note = session.get(RoundNote, round_.id)
+        if payload.note:
+            if note is None:
+                note = RoundNote(round_id=round_.id, body=payload.note)
+            else:
+                note.body = payload.note
+            session.add(note)
+        elif note is not None:
+            session.delete(note)
+
     _record_rating_event(session, user.id, round_, rating, create=False)
     session.flush()
     result = _state(session, course, user.id)
