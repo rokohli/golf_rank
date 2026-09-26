@@ -101,6 +101,7 @@ def _state(
                 "note": note.body if note else None,
                 "favorite_hole": round_.favorite_hole,
                 "visibility": round_.visibility,
+                "tags": round_.tags or [],
                 "photos": round_image_data(session, round_.id),
             }
             if round_ is not None
@@ -476,6 +477,9 @@ def patch_rating_details(
     guest_names = list(dict.fromkeys(name.strip() for name in payload.guest_names))
     round_.favorite_hole = payload.favorite_hole
     round_.visibility = payload.visibility
+    if "tags" in payload.model_fields_set:
+        assert payload.tags is not None
+        round_.tags = payload.tags
     note = session.get(RoundNote, round_.id)
     if payload.note is None:
         if note is not None:

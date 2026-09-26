@@ -444,3 +444,101 @@ def test_rating_revision_preserves_same_tier_order_until_decisive_comparison() -
     assert decisive.status_code == 200
     ranking = client.get("/api/v1/me/rankings", headers=ALICE).json()
     assert [entry["course"]["id"] for entry in ranking["entries"]] == [2, 1, 3]
+
+
+def test_rating_details_tags_lifecycle_and_contract() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # 1. Initial rating creation has tags: [] in round
+    initial = client.put(
+        "/api/v1/me/course-ratings/1",
+        headers=ALICE,
+        json=_rating(tier="green"),
+    )
+    assert initial.status_code == 200
+    assert initial.json()["round"]["tags"] == []
+
+    # GET also returns tags: []
+    fetched = client.get("/api/v1/me/course-ratings/1", headers=ALICE).json()
+    assert fetched["round"]["tags"] == []
+
+    # 2. Patching details with invalid tags rejected
+    invalid_tags = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": ["non_existent_tag"]},
+    )
+    assert invalid_tags.status_code == 422
+    assert "Invalid tags" in invalid_tags.text
+
+    # 3. Patching details with mutually exclusive tags rejected
+    mutex_tags = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": ["walked", "cart"]},
+    )
+    assert mutex_tags.status_code == 422
+    assert "cannot contain both 'walked' and 'cart'" in mutex_tags.text
+
+    # 4. Patching details with valid tags updates round.tags and activity event
+    updated = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={
+            "note": "Beautiful coastal round",
+            "tags": ["walked", "ocean_views", "fast_greens"],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["round"]["tags"] == ["walked", "ocean_views", "fast_greens"]
+    assert updated.json()["round"]["note"] == "Beautiful coastal round"
+
+    round_id = updated.json()["round"]["id"]
+    with app.state.session_factory() as session:
+        event = session.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.subject_type == "rating_round",
+                ActivityEvent.subject_id == round_id,
+            )
+        )
+        assert event is not None
+        assert event.event_data["tags"] == ["walked", "ocean_views", "fast_greens"]
+        assert event.event_data["note"] == "Beautiful coastal round"
+
+    # 5. Patching details omitting tags preserves existing tags (safe patch contract)
+    patch_note_only = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"note": "Updated note without tags"},
+    )
+    assert patch_note_only.status_code == 200
+    assert patch_note_only.json()["round"]["tags"] == ["walked", "ocean_views", "fast_greens"]
+    assert patch_note_only.json()["round"]["note"] == "Updated note without tags"
+
+    # 6. Patching details with tags: [] explicitly clears tags
+    cleared = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": []},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["round"]["tags"] == []
+
+    # 7. Explicit null tags rejected with 422 (never silently clears existing tags)
+    client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": ["cart"]},
+    )
+    null_patch = client.patch(
+        "/api/v1/me/course-ratings/1/details",
+        headers=ALICE,
+        json={"tags": None},
+    )
+    assert null_patch.status_code == 422
+    assert "tags cannot be null" in null_patch.text
+    # Existing tags preserved
+    state = client.get("/api/v1/me/course-ratings/1", headers=ALICE).json()
+    assert state["round"]["tags"] == ["cart"]
+
