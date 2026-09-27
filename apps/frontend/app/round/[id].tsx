@@ -7,7 +7,7 @@ import { deleteRound, getRound } from '../../src/api/client'
 import { useAuthHeaders } from '../../src/auth/useAuthToken'
 import { ProductScreen } from '../../src/components/ProductUI'
 import { scoreAccessibilityLabel, scoreToPar } from '../../src/scorePresentation'
-import { GolfRound } from '../../src/types'
+import { GolfRound, ROUND_TAG_LABELS } from '../../src/types'
 import { colors } from '../../src/ui/theme'
 
 export default function RoundDetail() {
@@ -80,6 +80,18 @@ export default function RoundDetail() {
           <View style={[styles.detail, styles.detailMiddle]}><CompanionInitials round={round} /><Text numberOfLines={1} style={styles.companionValue}>{companionText(round)}</Text><Text style={styles.detailLabel}>Played with</Text></View>
           <View style={styles.detail}><Feather accessibilityLabel={round.is_favorite ? 'Favorite round' : 'Not a favorite round'} name="star" size={35} color={round.is_favorite ? colors.gold : colors.muted} /><Text style={styles.detailLabel}>Favorite</Text></View>
         </View>
+        {round.tags && round.tags.length > 0 ? (
+          <View accessibilityLabel="Round tags" style={styles.tagsContainer}>
+            <Text style={styles.tagsLabel}>Course tags</Text>
+            <View style={styles.tagChips}>
+              {round.tags.map((tag) => (
+                <View key={tag} style={styles.tagChip}>
+                  <Text style={styles.tagChipText}>{ROUND_TAG_LABELS[tag] ?? tag}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
         <View style={styles.note}><Text style={styles.noteLabel}>Round notes</Text><Text style={round.note ? styles.body : styles.emptyNote}>{round.note ?? 'No notes added.'}</Text></View>
         <Pressable accessibilityRole="button" onPress={() => router.push(`/round/edit/${round.id}` as never)} style={({ pressed }) => [styles.editButton, pressed && styles.editPressed]}><Feather name="edit-3" size={17} color="#FFF" /><Text style={styles.editText}>Edit round</Text></Pressable>
         {round.is_rating_round ? <Pressable accessibilityRole="button" onPress={() => router.push(`/rate/${round.course.id}` as never)} style={styles.ratingButton}><Feather name="bar-chart-2" size={15} color={colors.pine} /><Text style={styles.ratingButtonText}>Edit course rating</Text></Pressable> : null}
@@ -102,6 +114,7 @@ const styles = StyleSheet.create({
   courseBlock: { flex: 1, justifyContent: 'center' }, course: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 21, lineHeight: 27 }, region: { color: '#CFD9D3', fontSize: 11, marginTop: 6 }, courseRule: { backgroundColor: 'rgba(255,255,255,0.2)', height: StyleSheet.hairlineWidth, marginVertical: 15, width: '72%' }, date: { color: '#CFD9D3', fontSize: 10 },
   featureDivider: { backgroundColor: 'rgba(255,255,255,0.25)', marginHorizontal: 18, width: StyleSheet.hairlineWidth }, scoreBlock: { alignItems: 'center', justifyContent: 'center', minWidth: 86 }, scoreValue: { alignItems: 'center', flexDirection: 'row', gap: 9 }, score: { color: '#F8F7F3', fontFamily: 'Georgia', fontSize: 60, letterSpacing: -2 }, toParBadge: { alignItems: 'center', borderColor: '#CFD9D3', borderRadius: 20, borderWidth: 1, height: 40, justifyContent: 'center', minWidth: 40, paddingHorizontal: 5 }, toPar: { color: '#CFD9D3', fontSize: 12, fontWeight: '700' }, scoreLabel: { color: '#F8F7F3', fontSize: 8, fontWeight: '800', letterSpacing: 1.3, textTransform: 'uppercase' },
   details: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', paddingVertical: 22 }, detail: { alignItems: 'center', flex: 1, gap: 7, justifyContent: 'center', minHeight: 74, paddingHorizontal: 8 }, detailMiddle: { borderLeftColor: colors.line, borderLeftWidth: StyleSheet.hairlineWidth, borderRightColor: colors.line, borderRightWidth: StyleSheet.hairlineWidth }, detailPrimary: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 30 }, detailLabel: { color: colors.muted, fontSize: 8, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center', textTransform: 'uppercase' }, companionValue: { color: colors.ink, fontFamily: 'Georgia', fontSize: 12, maxWidth: 104, textAlign: 'center' },
+  tagsContainer: { borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, paddingVertical: 18 }, tagsLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, tagChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, tagChip: { backgroundColor: colors.card, borderColor: colors.line, borderRadius: 12, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4 }, tagChipText: { color: colors.pineDark, fontSize: 11, fontWeight: '600' },
   initials: { flexDirection: 'row' }, initial: { alignItems: 'center', backgroundColor: colors.background, borderColor: colors.pineDark, borderRadius: 15, borderWidth: 1, height: 30, justifyContent: 'center', width: 30 }, initialOverlap: { marginLeft: -5 }, initialText: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 10 },
   note: { backgroundColor: '#F1EEE5', borderLeftColor: colors.pine, borderLeftWidth: 3, gap: 12, marginHorizontal: -18, paddingHorizontal: 32, paddingVertical: 22 }, noteLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' }, body: { color: colors.ink, fontFamily: 'Georgia', fontSize: 15, lineHeight: 23 }, emptyNote: { color: colors.muted, fontSize: 12 },
   editButton: { alignItems: 'center', backgroundColor: colors.pine, borderRadius: 12, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 50 }, editPressed: { opacity: 0.82 }, editText: { color: '#FFF', fontSize: 14, fontWeight: '800' },

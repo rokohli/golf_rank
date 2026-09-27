@@ -251,6 +251,22 @@ describe('Home social feed', () => {
       expect(screen.getByRole('button', { name: 'Pasatiempo Golf Club is saved' })).toBeOnTheScreen()
     })
   })
+
+  it('renders tag chips in activity feed when tags are present', async () => {
+    const taggedActivity = {
+      ...activity,
+      id: 99,
+      data: {
+        ...activity.data,
+        tags: ['walked', 'fast_greens'],
+      },
+    }
+    mockGetFeed.mockResolvedValue({ items: [taggedActivity], next_cursor: null })
+    render(<Home />)
+
+    expect(await screen.findByText('Walked')).toBeOnTheScreen()
+    expect(screen.getByText('Fast Greens')).toBeOnTheScreen()
+  })
 })
 
 describe('home greeting', () => {
