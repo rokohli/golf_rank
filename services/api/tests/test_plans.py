@@ -583,4 +583,261 @@ def test_ai_itinerary_with_reconciled_alias_preferred_course_canonicalizes_and_v
     assert any(item["course"]["id"] == 2 for item in body["itinerary"])
 
 
+def test_plan_must_haves_and_walking_grounded_in_golfer_reports() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    user1 = {"X-Development-Subject": "dev:user-1"}
+    user2 = {"X-Development-Subject": "dev:user-2"}
+    user3 = {"X-Development-Subject": "dev:user-3"}
+
+    # 3 golfers log public rounds on Course 1 with walked and ocean_views
+    for u in (user1, user2, user3):
+        res = client.post(
+            "/api/v1/me/rounds",
+            headers=u,
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "ocean_views"],
+                "visibility": "public",
+            },
+        )
+        assert res.status_code == 201
+
+    # Alice creates a plan asking for walking, ocean views, and caddie
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Grounded Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "walking",
+            "must_haves": ["walkable", "ocean views", "caddie"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan_body = plan_res.json()
+    candidates = plan_body["candidates"]
+    assert len(candidates) > 0
+
+    c1 = next(c for c in candidates if c["course"]["id"] == 1)
+    # Walking observation reason present
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Ocean views highlight reason present
+    assert any("Ocean Views" in r for r in c1["reasons"])
+    # Policy caveat MUST be retained even when walked is observed
+    assert "Walking policy and cart requirements must be confirmed directly with the course." in c1["caveats"]
+    # Confirmed must-have receives verification caveat
+    assert "Requested must-have 'ocean views' is supported by recent golfer reports but requires confirmation with the course." in c1["caveats"]
+    # Unconfirmed must-have receives caveat
+    assert "Requested must-have 'caddie' is unconfirmed and requires verification with the course." in c1["caveats"]
+    # Course object carries golfer_reports
+    assert c1["course"]["golfer_reports"] is not None
+    assert c1["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+    assert c1["source_checked_at"] is not None
+
+    # Course without walking reports (Course 2)
+    c2 = next((c for c in candidates if c["course"]["id"] == 2), None)
+    if c2:
+        assert "Walking policy is unconfirmed; verify walking and cart rules directly with the course." in c2["caveats"]
+        assert "Requested must-have 'ocean views' is unconfirmed and requires verification with the course." in c2["caveats"]
+
+
+def test_plan_walking_requires_representative_evidence_and_preserves_snapshot_as_of() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2: 1 walker and 3 cart users (25% walked, cart majority)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user1"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user2"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user3"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user4"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+
+    # Course 1: 3 walkers (100% walked)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user1"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user2"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user3"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Walking Preference Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "walking",
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+    plan_id = plan["id"]
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    c2 = next(c for c in plan["candidates"] if c["course"]["id"] == 2)
+
+    # Course 1 (100% walked, >= 3 walkers) received walking observation and boost
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Course 2 (25% walked, cart-dominated) did NOT receive walking observation reason
+    assert not any("reporting golfers walked" in r for r in c2["reasons"])
+    assert "Walking policy is unconfirmed; verify walking and cart rules directly with the course." in c2["caveats"]
+
+    # Add a new backdated round after plan creation
+    client.post(
+        "/api/v1/me/rounds",
+        headers={"X-Development-Subject": "dev:c1-user4"},
+        json={"course_id": 1, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"},
+    )
+
+    # When retrieving the plan later, candidate reports remain the persisted snapshot
+    retrieved = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE).json()
+    r_c1 = next(c for c in retrieved["candidates"] if c["course"]["id"] == 1)
+    assert r_c1["course"]["golfer_reports"] is not None
+    assert r_c1["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+
+    # An explicitly empty snapshot (Course 3 had 0 reports at plan creation)
+    c3 = next((c for c in plan["candidates"] if c["course"]["id"] == 3), None)
+    if c3:
+        assert c3["course"]["golfer_reports"] is None
+        # Add 3 rounds to Course 3 after plan creation
+        for u in ("dev:c3-u1", "dev:c3-u2", "dev:c3-u3"):
+            client.post(
+                "/api/v1/me/rounds",
+                headers={"X-Development-Subject": u},
+                json={"course_id": 3, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"},
+            )
+        # Empty snapshot remains None (not populated by later backdated rounds)
+        retrieved2 = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE).json()
+        r_c3 = next((c for c in retrieved2["candidates"] if c["course"]["id"] == 3), None)
+        assert r_c3["course"]["golfer_reports"] is None
+
+
+def test_plan_cart_preference_and_must_haves_grounded_in_locomotion() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2: 3 cart users, 1 walker (75% cart)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u1"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u2"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u3"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u4"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    # Course 1: 3 walkers (0% cart)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u1"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u2"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u3"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    # Plan with must_haves: ["riding cart"] and transportation: "cart"
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Cart Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "cart",
+            "must_haves": ["riding cart"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c2 = next(c for c in plan["candidates"] if c["course"]["id"] == 2)
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+
+    # Course 2 (75% cart, >= 3 cart users) received cart observation reason and policy caveat
+    assert any("reporting golfers used a cart" in r for r in c2["reasons"])
+    assert "Walking policy and cart requirements must be confirmed directly with the course." in c2["caveats"]
+    # Cart must-have was handled through locomotion, so no conflicting generic unconfirmed caveat
+    assert not any("Requested must-have 'riding cart' is unconfirmed" in c for c in c2["caveats"])
+
+    # Course 1 (0% cart) did not receive cart observation reason
+    assert not any("reporting golfers used a cart" in r for r in c1["reasons"])
+    assert "Cart policy is unconfirmed; verify walking and cart rules directly with the course." in c1["caveats"]
+
+
+def test_plan_preselected_course_in_must_haves_does_not_emit_unconfirmed_caveat() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # When opening the planner from a course, the frontend sends the course name
+    # in must_haves together with preferred_course_id (e.g. Course 1: Pebble Beach Golf Links)
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Pebble Beach Trip",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 1,
+            "must_haves": ["Pebble Beach Golf Links", "ocean views"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    # The preselected course name must NOT be treated as an unconfirmed amenity
+    assert not any("Pebble Beach Golf Links" in c for c in c1["caveats"])
+    # Preferred course reasons are retained
+    assert "Selected as the featured focus for this trip." in c1["reasons"]
+
+    # Other candidates also do not receive an unconfirmed caveat for the preselected course
+    for c in plan["candidates"]:
+        assert not any("Requested must-have 'Pebble Beach Golf Links' is unconfirmed" in cav for cav in c["caveats"])
+
+
+def test_plan_must_haves_plural_food_and_walking_friendly_preferences() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # 3 golfers log public rounds with great_food_drink and walked on Course 1
+    for u in ("dev:fd-u1", "dev:fd-u2", "dev:fd-u3"):
+        client.post(
+            "/api/v1/me/rounds",
+            headers={"X-Development-Subject": u},
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "great_food_drink"],
+                "visibility": "public",
+            },
+        )
+
+    # Alice passes profile preferences 'Food & drinks' and 'Walking friendly'
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Food and Walking Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "must_haves": ["Food & drinks", "Walking friendly"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    # Highlight reason for food & drink present
+    assert any("Great Food & Drink" in r for r in c1["reasons"])
+    # Walking reason present
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Supported verification caveat
+    assert "Requested must-have 'Food & drinks' is supported by recent golfer reports but requires confirmation with the course." in c1["caveats"]
+    # Not unconfirmed
+    assert not any("Requested must-have 'Food & drinks' is unconfirmed" in cav for cav in c1["caveats"])
+    assert not any("Requested must-have 'Walking friendly' is unconfirmed" in cav for cav in c1["caveats"])
+
+
+
+
+
+
 

@@ -22,6 +22,7 @@ from .domain import (
     resolve_course_optional,
     stored_user,
 )
+from .course_reports import get_course_golfer_reports
 from .models import (
     Course,
     ItineraryItem,
@@ -48,6 +49,46 @@ from .schemas import CourseOut
 
 router = APIRouter(prefix="/api/v1/me/plans", tags=["plans"])
 logger = logging.getLogger("fairway.planner")
+
+MUST_HAVE_TAG_MAP: dict[str, str] = {
+    "walk": "walked",
+    "walking": "walked",
+    "walkable": "walked",
+    "walking friendly": "walked",
+    "cart": "cart",
+    "riding cart": "cart",
+    "golf cart": "cart",
+    "push cart": "push_cart",
+    "push_cart": "push_cart",
+    "caddie": "caddie",
+    "ocean": "ocean_views",
+    "ocean views": "ocean_views",
+    "mountain": "mountain_views",
+    "mountain views": "mountain_views",
+    "scenic": "scenic_views",
+    "scenic views": "scenic_views",
+    "links": "links_style",
+    "links style": "links_style",
+    "tree lined": "tree_lined",
+    "fast greens": "fast_greens",
+    "challenging greens": "challenging_greens",
+    "tricky greens": "challenging_greens",
+    "pristine fairways": "pristine_fairways",
+    "great fairways": "pristine_fairways",
+    "punishing rough": "punishing_rough",
+    "practice facility": "great_practice_facility",
+    "practice range": "great_practice_facility",
+    "range": "great_practice_facility",
+    "food": "great_food_drink",
+    "drinks": "great_food_drink",
+    "food & drink": "great_food_drink",
+    "food & drinks": "great_food_drink",
+    "food and drink": "great_food_drink",
+    "food and drinks": "great_food_drink",
+    "friendly staff": "welcoming_staff",
+    "welcoming staff": "welcoming_staff",
+    "beginner friendly": "beginner_friendly",
+}
 
 
 class PlanIn(BaseModel):
@@ -176,10 +217,19 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     courses = list(session.scalars(statement).all())
     pref_course = None
     pref_identities: set[int] = set()
+    preferred_course_names: set[str] = set()
     if payload.preferred_course_id is not None:
-        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        raw_pref = session.get(Course, payload.preferred_course_id)
+        if raw_pref:
+            preferred_course_names.add(raw_pref.name.strip().lower())
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or raw_pref
         if pref_course and pref_course.status == "active":
             pref_identities = course_identity_ids(session, pref_course)
+            preferred_course_names.add(pref_course.name.strip().lower())
+            for cid in pref_identities:
+                c = session.get(Course, cid)
+                if c:
+                    preferred_course_names.add(c.name.strip().lower())
             if not any(c.id == pref_course.id for c in courses):
                 courses.insert(0, pref_course)
 
@@ -266,8 +316,87 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             caveats.append("The current green fee is unknown and must be confirmed.")
         if distance is not None:
             reasons.append(f"Approximately {distance:.0f} miles from the destination center.")
-        if payload.must_haves:
-            caveats.append("Requested must-haves require confirmation from a current course source.")
+
+        reports = get_course_golfer_reports(session, course)
+        highlights_by_tag = {h.tag: h for h in reports.highlights} if reports else {}
+
+        # Transportation and Locomotion (Walking / Cart)
+        wants_walking = (
+            payload.transportation == "walking"
+            or any(
+                MUST_HAVE_TAG_MAP.get(mh.strip().lower()) == "walked"
+                for mh in payload.must_haves
+            )
+        )
+        if wants_walking:
+            if (
+                reports
+                and reports.locomotion
+                and reports.locomotion.walk_count >= 3
+                and reports.locomotion.walk_percentage >= 50
+            ):
+                score += 10.0
+                reasons.append(f"Recent golfer reports: {reports.locomotion.label}.")
+                caveats.append(
+                    "Walking policy and cart requirements must be confirmed directly with the course."
+                )
+            else:
+                caveats.append(
+                    "Walking policy is unconfirmed; verify walking and cart rules directly with the course."
+                )
+
+        wants_cart = (
+            payload.transportation == "cart"
+            or any(
+                MUST_HAVE_TAG_MAP.get(mh.strip().lower()) == "cart"
+                for mh in payload.must_haves
+            )
+        )
+        if wants_cart:
+            cart_count = reports.locomotion.cart_count if (reports and reports.locomotion) else 0
+            total_reporters = reports.locomotion.total_reporters if (reports and reports.locomotion) else 0
+            cart_percentage = (
+                round((cart_count / total_reporters) * 100) if total_reporters > 0 else 0
+            )
+            if (
+                reports
+                and reports.locomotion
+                and cart_count >= 3
+                and cart_percentage >= 50
+            ):
+                score += 10.0
+                reasons.append(
+                    f"Recent golfer reports: {cart_count} of {total_reporters} reporting golfers used a cart."
+                )
+                caveats.append(
+                    "Walking policy and cart requirements must be confirmed directly with the course."
+                )
+            else:
+                caveats.append(
+                    "Cart policy is unconfirmed; verify walking and cart rules directly with the course."
+                )
+
+        # Must-Haves
+        for must_have in payload.must_haves:
+            clean_mh = must_have.strip().lower()
+            if clean_mh in preferred_course_names or clean_mh == course.name.strip().lower():
+                continue
+            mapped_tag = MUST_HAVE_TAG_MAP.get(clean_mh)
+            if mapped_tag in ("walked", "cart"):
+                continue
+            if mapped_tag and mapped_tag in highlights_by_tag:
+                highlight = highlights_by_tag[mapped_tag]
+                score += 8.0
+                reasons.append(
+                    f"Recent golfer reports highlight {highlight.label} ({highlight.count} reports)."
+                )
+                caveats.append(
+                    f"Requested must-have '{must_have}' is supported by recent golfer reports but requires confirmation with the course."
+                )
+            else:
+                caveats.append(
+                    f"Requested must-have '{must_have}' is unconfirmed and requires verification with the course."
+                )
         candidates.append(
             {
                 "course": course,
@@ -276,6 +405,7 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 "reasons": reasons,
                 "caveats": caveats,
                 "checked_at": checked_at,
+                "golfer_reports": reports.model_dump() if reports else {},
             }
         )
     return sorted(candidates, key=lambda item: (-item["score"], item["course"].name))[
@@ -319,6 +449,7 @@ def _replace_plan_data(session: Session, user_id: int, plan: Plan, payload: Plan
                 reasons=candidate["reasons"],
                 caveats=candidate["caveats"],
                 source_checked_at=candidate["checked_at"],
+                golfer_reports=candidate.get("golfer_reports"),
             )
         )
         if index <= day_count:
@@ -534,10 +665,17 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
         except HTTPException:
             course = None
         if course is not None:
+            c_dict = course_data(course)
+            if candidate.golfer_reports is not None:
+                c_dict["golfer_reports"] = candidate.golfer_reports if candidate.golfer_reports else None
+            else:
+                as_of_date = candidate.source_checked_at.date() if candidate.source_checked_at else None
+                reports = get_course_golfer_reports(session, course, as_of=as_of_date)
+                c_dict["golfer_reports"] = reports.model_dump() if reports else None
             candidates.append(
                 PlanCandidateOut(
                     position=candidate.position,
-                    course=course_data(course),
+                    course=c_dict,
                     score=candidate.score,
                     distance_miles=candidate.distance_miles,
                     reasons=candidate.reasons,
