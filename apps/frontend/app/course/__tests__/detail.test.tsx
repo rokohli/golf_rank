@@ -733,6 +733,54 @@ describe('course detail ratings', () => {
     await waitFor(() => expect(mockGetCourse).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('Test Links')).toBeOnTheScreen()
   })
+
+  it('renders golfer reports section when golfer_reports is present', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      golfer_reports: {
+        total_reporting_golfers: 5,
+        locomotion: {
+          walk_count: 4,
+          cart_count: 1,
+          total_reporters: 5,
+          walk_percentage: 80,
+          label: '4 of 5 reporting golfers walked',
+        },
+        highlights: [
+          { tag: 'ocean_views', label: 'Ocean Views', count: 4 },
+          { tag: 'fast_greens', label: 'Fast Greens', count: 3 },
+        ],
+      },
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('Test Links')).toBeOnTheScreen()
+    expect(screen.getByTestId('golfer-reports-section')).toBeOnTheScreen()
+    expect(screen.getByText('Golfer reports (5 players)')).toBeOnTheScreen()
+    expect(screen.getByText('4 of 5 reporting golfers walked')).toBeOnTheScreen()
+    expect(screen.getByText(/Ocean Views/)).toBeOnTheScreen()
+    expect(screen.getByText(/Fast Greens/)).toBeOnTheScreen()
+    expect(
+      screen.getByText(
+        'Course policies vary by season and time of day; verify walking and cart rules directly with the course.'
+      )
+    ).toBeOnTheScreen()
+  })
+
+  it('hides golfer reports section when golfer_reports is null', async () => {
+    mockGetCourse.mockResolvedValue({
+      ...course,
+      golfer_reports: null,
+    })
+
+    render(<CourseDetail />)
+
+    expect(await screen.findByText('Test Links')).toBeOnTheScreen()
+    expect(screen.queryByTestId('golfer-reports-section')).toBeNull()
+    expect(screen.queryByText(/Golfer reports/)).toBeNull()
+    expect(screen.queryByText(/Course policies vary by season/)).toBeNull()
+  })
 })
 
 function deferred<T>() {

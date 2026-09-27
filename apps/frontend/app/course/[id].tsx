@@ -12,8 +12,8 @@ import { CourseDetailSkeleton } from '../../src/components/Skeleton'
 import { PhotoViewer } from '../../src/components/PhotoViewer'
 import { openUserProfile } from '../../src/navigation/openUserProfile'
 import { attributedCourseImage, attributedCourseImages, CoursePresentation } from '../../src/coursePresentation'
-import { Course, CourseImage, CourseRatingState, FriendsCourseThoughts, HeroImage, RoundPatch, SavedList } from '../../src/types'
-import { colors } from '../../src/ui/theme'
+import { Course, CourseGolferReports, CourseImage, CourseRatingState, FriendsCourseThoughts, HeroImage, RoundPatch, SavedList } from '../../src/types'
+import { colors, radii } from '../../src/ui/theme'
 
 const PHOTO_INLINE_PREVIEW_COUNT = 6
 
@@ -403,6 +403,7 @@ export default function CourseDetail() {
       {saveError ? <Text accessibilityRole="alert" style={styles.saveError}>{saveError}</Text> : null}
       <Pressable accessibilityRole="button" onPress={() => void viewTeeTimes()} style={({ pressed }) => [styles.teeTimes, pressed && styles.pressed]}><Feather name="calendar" size={18} color={colors.pineDark} /><Text style={styles.teeTimesText}>View tee times</Text></Pressable>
       {utilityError ? <Text accessibilityRole="alert" style={styles.saveError}>{utilityError}</Text> : null}
+      {publicCourse?.golfer_reports ? <GolferReportsSection reports={publicCourse.golfer_reports} /> : null}
       <View style={styles.photoSection}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Course photos</Text>
@@ -438,6 +439,44 @@ export default function CourseDetail() {
         could leave it partly or fully off-screen. */}
     {viewerIndex !== null ? <PhotoViewer courseName={course.name} onClose={() => setViewerIndex(null)} photos={photos} startIndex={viewerIndex} /> : null}
   </>
+}
+
+export function GolferReportsSection({ reports }: { reports: CourseGolferReports }) {
+  const { total_reporting_golfers, locomotion, highlights } = reports
+  if (!locomotion && highlights.length === 0) return null
+
+  return (
+    <View accessibilityLabel="Golfer reports" style={styles.golferReportsSection} testID="golfer-reports-section">
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>
+          Golfer reports ({total_reporting_golfers} {total_reporting_golfers === 1 ? 'player' : 'players'})
+        </Text>
+      </View>
+
+      {locomotion ? (
+        <View accessibilityLabel={locomotion.label} style={styles.locomotionPill}>
+          <Feather name="navigation" size={13} color={colors.pineDark} />
+          <Text style={styles.locomotionText}>{locomotion.label}</Text>
+        </View>
+      ) : null}
+
+      {highlights.length > 0 ? (
+        <View style={styles.highlightsContainer}>
+          {highlights.map((h) => (
+            <View key={h.tag} accessibilityLabel={`${h.label}, reported by ${h.count} golfers`} style={styles.highlightChip}>
+              <Text style={styles.highlightChipText}>
+                {h.label} <Text style={styles.highlightChipCount}>({h.count})</Text>
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <Text style={styles.reportsDisclaimer}>
+        Course policies vary by season and time of day; verify walking and cart rules directly with the course.
+      </Text>
+    </View>
+  )
 }
 
 // Shared between the course-detail preview strip and the "view all" gallery
@@ -660,6 +699,14 @@ const styles = StyleSheet.create({
   disclosures: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth }, disclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 58, paddingHorizontal: 2 }, disclosureLabel: { color: colors.pineDark, flex: 1, fontFamily: 'Georgia', fontSize: 14 }, disclosureBody: { backgroundColor: '#F1EEE5', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, padding: 14 }, personalDetails: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, detailDisclosureRow: { alignItems: 'center', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 52, paddingHorizontal: 14 }, detailRowLabel: { color: colors.ink, flex: 1, fontSize: 12, fontWeight: '700' }, detailRowValue: { color: colors.pineDark, fontSize: 10, fontWeight: '700' }, detailDropdown: { backgroundColor: '#EFECE3', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, paddingHorizontal: 14, paddingVertical: 13 }, detailHelp: { color: colors.muted, fontSize: 10, lineHeight: 15 }, detailInput: { backgroundColor: '#FFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, color: colors.ink, fontSize: 12, minHeight: 42, paddingHorizontal: 11 }, notesInput: { minHeight: 82, paddingTop: 10, textAlignVertical: 'top' }, detailSave: { alignItems: 'center', alignSelf: 'flex-end', backgroundColor: colors.pine, borderRadius: 17, minWidth: 104, paddingHorizontal: 14, paddingVertical: 9 }, detailSaveText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, detailError: { color: colors.error, fontSize: 10, paddingHorizontal: 14, paddingVertical: 10 }, roundPhotoStrip: { gap: 8, paddingHorizontal: 14, paddingVertical: 12 }, roundPhotoThumb: { borderRadius: 7, height: 64, width: 64 },
   friendsThoughts: { backgroundColor: '#F7F5EF', borderBottomColor: colors.line, borderBottomWidth: StyleSheet.hairlineWidth }, friendAggregate: { alignItems: 'center', backgroundColor: '#F1EEE5', paddingVertical: 16 }, friendAggregateValue: { color: colors.pineDark, fontFamily: 'Georgia', fontSize: 28 }, friendAggregateLabel: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.7, marginTop: 5, textTransform: 'uppercase' }, friendThought: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth, gap: 6, paddingHorizontal: 14, paddingVertical: 13 }, friendThoughtHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 8, justifyContent: 'space-between' }, friendName: { color: colors.ink, flex: 1, fontFamily: 'Georgia', fontSize: 15 }, friendRating: { color: colors.pineDark, fontSize: 10, fontWeight: '800' }, friendNote: { color: colors.ink, fontSize: 12, lineHeight: 18 }, friendHole: { color: colors.muted, fontSize: 10, fontWeight: '700' },
   loadingText: { color: colors.muted, fontSize: 14, paddingVertical: 16, textAlign: 'center' }, retryButton: { alignItems: 'center', alignSelf: 'center', borderColor: colors.pine, borderRadius: 20, borderWidth: 1, minWidth: 92, paddingHorizontal: 16, paddingVertical: 10 }, retryText: { color: colors.pine, fontSize: 11, fontWeight: '800' },
+  golferReportsSection: { backgroundColor: '#F7F5EF', borderColor: colors.line, borderRadius: 12, borderWidth: 1, gap: 12, padding: 16 },
+  locomotionPill: { alignItems: 'center', alignSelf: 'flex-start', backgroundColor: colors.pineSoft, borderColor: colors.pine, borderRadius: radii.pill, borderWidth: 1, flexDirection: 'row', gap: 7, paddingHorizontal: 12, paddingVertical: 7 },
+  locomotionText: { color: colors.pineDark, fontSize: 12, fontWeight: '700' },
+  highlightsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  highlightChip: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.line, borderRadius: 8, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6 },
+  highlightChipText: { color: colors.ink, fontSize: 11, fontWeight: '600' },
+  highlightChipCount: { color: colors.muted, fontSize: 10, fontWeight: '700' },
+  reportsDisclaimer: { color: colors.muted, fontSize: 10, fontStyle: 'italic', lineHeight: 14 },
   attribution: { color: colors.muted, fontSize: 8, marginTop: 14, textAlign: 'center' },
 })
 

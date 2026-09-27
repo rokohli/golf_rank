@@ -201,6 +201,26 @@ class CourseHeroImageOut(BaseModel):
     height: int | None = None
 
 
+class LocomotionReportOut(BaseModel):
+    walk_count: int = Field(ge=0)
+    cart_count: int = Field(ge=0)
+    total_reporters: int = Field(ge=0)
+    walk_percentage: int = Field(ge=0, le=100)
+    label: str
+
+
+class HighlightReportOut(BaseModel):
+    tag: str
+    label: str
+    count: int = Field(ge=1)
+
+
+class CourseGolferReportsOut(BaseModel):
+    total_reporting_golfers: int = Field(ge=0)
+    locomotion: LocomotionReportOut | None = None
+    highlights: list[HighlightReportOut] = Field(default_factory=list)
+
+
 class CourseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -229,6 +249,7 @@ class CourseOut(BaseModel):
     community_rating: float | None = None
     rating_count: int = 0
     distance_miles: float | None = None
+    golfer_reports: CourseGolferReportsOut | None = None
 
 
 RankingTier = Literal["green", "fairway", "rough", "bunker"]

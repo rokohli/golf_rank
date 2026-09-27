@@ -86,8 +86,10 @@ from .planner_narrative import build_planner_narrative_provider
 from .ranking import router as ranking_router
 from .rounds import course_state_router, router as rounds_router
 from .saves import router as saves_router
+from .course_reports import get_course_golfer_reports
 from .schemas import (
     AdminAccessOut,
+    CourseGolferReportsOut,
     CourseOut,
     OnboardingPreferencesIn,
     ProfileOut,
@@ -647,6 +649,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # session-cached instance won't reflect that (expire_on_commit=False),
         # so refresh it before serializing.
         session.refresh(stored_course, attribute_names=["images", "negative_caches"])
+        reports = get_course_golfer_reports(session, stored_course)
         return {
             **course_data(stored_course),
             "hero_image": hero_image.to_dict(),
@@ -656,7 +659,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else None
             ),
             "rating_count": int(rating_count),
+            "golfer_reports": reports.model_dump() if reports else None,
         }
+
+    @app.get("/api/v1/courses/{course_id}/golfer-reports", response_model=CourseGolferReportsOut | None)
+    def course_golfer_reports(
+        course_id: int,
+        _rate_limit: None = Depends(public_rate_limit),
+        session: Session = Depends(get_session),
+    ) -> CourseGolferReportsOut | None:
+        stored_course = require_course(session, course_id)
+        return get_course_golfer_reports(session, stored_course)
 
     return app
 
