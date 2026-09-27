@@ -82,7 +82,10 @@ def get_course_golfer_reports(
                 order_by=(Round.played_on.desc(), Round.id.desc()),
             ).label("rn"),
         )
-        .where(Round.course_id.in_(identity_ids))
+        .where(
+            Round.course_id.in_(identity_ids),
+            Round.played_on >= cutoff_date,
+        )
         .subquery()
     )
 
