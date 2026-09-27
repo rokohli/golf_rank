@@ -666,6 +666,7 @@ class PlanCandidate(Base):
     reasons: Mapped[list] = mapped_column(JSON)
     caveats: Mapped[list] = mapped_column(JSON)
     source_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    golfer_reports: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ItineraryItem(Base):

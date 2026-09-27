@@ -435,3 +435,28 @@ def test_0032_adds_daily_featured_courses_and_partial_index(monkeypatch: pytest.
         assert "daily_featured_courses" in set(inspect(engine).get_table_names())
         engine.dispose()
 
+
+def test_0034_adds_golfer_reports_to_plan_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    with NamedTemporaryFile(suffix=".db") as tmp:
+        db_url = f"sqlite:///{tmp.name}"
+        config = _alembic_config(monkeypatch, db_url)
+        command.upgrade(config, "head")
+
+        engine = make_engine(db_url)
+        columns = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" in columns
+        engine.dispose()
+
+        command.downgrade(config, "0033_round_tags")
+        engine = make_engine(db_url)
+        columns_after = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" not in columns_after
+        engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = make_engine(db_url)
+        columns_reup = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" in columns_reup
+        engine.dispose()
+
+

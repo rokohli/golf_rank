@@ -342,6 +342,9 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 reasons.append(
                     f"Recent golfer reports highlight {highlight.label} ({highlight.count} reports)."
                 )
+                caveats.append(
+                    f"Requested must-have '{must_have}' is supported by recent golfer reports but requires confirmation with the course."
+                )
             else:
                 caveats.append(
                     f"Requested must-have '{must_have}' is unconfirmed and requires verification with the course."
@@ -354,6 +357,7 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 "reasons": reasons,
                 "caveats": caveats,
                 "checked_at": checked_at,
+                "golfer_reports": reports.model_dump() if reports else None,
             }
         )
     return sorted(candidates, key=lambda item: (-item["score"], item["course"].name))[
@@ -397,6 +401,7 @@ def _replace_plan_data(session: Session, user_id: int, plan: Plan, payload: Plan
                 reasons=candidate["reasons"],
                 caveats=candidate["caveats"],
                 source_checked_at=candidate["checked_at"],
+                golfer_reports=candidate.get("golfer_reports"),
             )
         )
         if index <= day_count:
@@ -613,9 +618,12 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
             course = None
         if course is not None:
             c_dict = course_data(course)
-            as_of_date = candidate.source_checked_at.date() if candidate.source_checked_at else None
-            reports = get_course_golfer_reports(session, course, as_of=as_of_date)
-            c_dict["golfer_reports"] = reports.model_dump() if reports else None
+            if candidate.golfer_reports is not None:
+                c_dict["golfer_reports"] = candidate.golfer_reports
+            else:
+                as_of_date = candidate.source_checked_at.date() if candidate.source_checked_at else None
+                reports = get_course_golfer_reports(session, course, as_of=as_of_date)
+                c_dict["golfer_reports"] = reports.model_dump() if reports else None
             candidates.append(
                 PlanCandidateOut(
                     position=candidate.position,

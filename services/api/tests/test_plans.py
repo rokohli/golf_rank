@@ -630,6 +630,8 @@ def test_plan_must_haves_and_walking_grounded_in_golfer_reports() -> None:
     assert any("Ocean Views" in r for r in c1["reasons"])
     # Policy caveat MUST be retained even when walked is observed
     assert "Walking policy and cart requirements must be confirmed directly with the course." in c1["caveats"]
+    # Confirmed must-have receives verification caveat
+    assert "Requested must-have 'ocean views' is supported by recent golfer reports but requires confirmation with the course." in c1["caveats"]
     # Unconfirmed must-have receives caveat
     assert "Requested must-have 'caddie' is unconfirmed and requires verification with the course." in c1["caveats"]
     # Course object carries golfer_reports
@@ -683,7 +685,14 @@ def test_plan_walking_requires_representative_evidence_and_preserves_snapshot_as
     assert not any("reporting golfers walked" in r for r in c2["reasons"])
     assert "Walking policy is unconfirmed; verify walking and cart rules directly with the course." in c2["caveats"]
 
-    # When retrieving the plan later, candidate reports are reconstructed as of candidate.source_checked_at
+    # Add a new backdated round after plan creation
+    client.post(
+        "/api/v1/me/rounds",
+        headers={"X-Development-Subject": "dev:c1-user4"},
+        json={"course_id": 1, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"},
+    )
+
+    # When retrieving the plan later, candidate reports remain the persisted snapshot
     retrieved = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE).json()
     r_c1 = next(c for c in retrieved["candidates"] if c["course"]["id"] == 1)
     assert r_c1["course"]["golfer_reports"] is not None
