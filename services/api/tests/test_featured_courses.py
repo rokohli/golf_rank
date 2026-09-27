@@ -1813,5 +1813,66 @@ def test_featured_course_gemini_gates_walking_on_representative_evidence(
         assert "walking_ratio" not in facts["community_observations"]
 
 
+def test_featured_narrative_respects_explicit_none_reports(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import json
+    from app.featured_courses import generate_featured_narrative
+    from app.domain import require_course
+
+    app = create_app()
+    captured_payload: dict[str, Any] = {}
+
+    class MockAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+        async def __aenter__(self) -> "MockAsyncClient":
+            return self
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+        async def post(self, url: str, json: Any = None, **kwargs: Any) -> Any:
+            nonlocal captured_payload
+            captured_payload = json
+            class MockResponse:
+                status_code = 200
+                def raise_for_status(self) -> None:
+                    pass
+                def json(self) -> dict[str, Any]:
+                    return {
+                        "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 20, "thoughtsTokenCount": 0},
+                        "candidates": [{"content": {"parts": [{"text": '{"headline": "H", "rationale": "R", "match_tags": ["T"]}'}]}}],
+                    }
+            return MockResponse()
+
+    monkeypatch.setattr("app.featured_courses.httpx.AsyncClient", MockAsyncClient)
+
+    # Mock get_course_golfer_reports to fail if called
+    def fail_if_called(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("get_course_golfer_reports should not be called when reports=None is explicitly provided")
+
+    monkeypatch.setattr("app.featured_courses.get_course_golfer_reports", fail_if_called)
+
+    with app.state.session_factory() as session:
+        course = require_course(session, 1)
+        headline, rationale, tags, status, cost = asyncio.run(
+            generate_featured_narrative(
+                course=course,
+                distance_miles=5.0,
+                is_regional_fallback=False,
+                preferences=None,
+                saved_course_ids=set(),
+                settings=app.state.settings,
+                session=session,
+                can_use_ai=True,
+                subject="dev:gemini-user",
+                reports=None,  # explicitly supplied as empty/no reports
+            )
+        )
+
+    assert status == "ai_generated"
+    facts = json.loads(captured_payload["contents"][0]["parts"][0]["text"])
+    assert "community_observations" not in facts
+
+
+
 
 

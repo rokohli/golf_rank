@@ -562,6 +562,9 @@ def resolve_featured_candidate(
     return best_course, best_distance, is_regional_fallback
 
 
+_UNSET: Any = object()
+
+
 async def generate_featured_narrative(
     course: Course,
     distance_miles: float | None,
@@ -572,7 +575,7 @@ async def generate_featured_narrative(
     session: Session | None = None,
     can_use_ai: bool | None = None,
     subject: str | None = None,
-    reports: CourseGolferReportsOut | None = None,
+    reports: CourseGolferReportsOut | None = _UNSET,  # type: ignore[assignment]
 ) -> tuple[str, str, list[str], str, int | None]:
     """Generates (headline, rationale, match_tags, generation_status, estimated_cost_micros).
     Uses Gemini if enabled and under monthly budget; otherwise returns high-quality deterministic copy."""
@@ -598,8 +601,8 @@ async def generate_featured_narrative(
             can_use_ai = (db_cost + max_cost) <= cost_limit_micros
 
     incurred_cost_micros: int | None = None
-    if reports is None and session is not None:
-        reports = get_course_golfer_reports(session, course)
+    if reports is _UNSET:
+        reports = get_course_golfer_reports(session, course) if session is not None else None
     if can_use_ai:
         candidate_facts: dict[str, Any] = {
             "course_name": course.name,
