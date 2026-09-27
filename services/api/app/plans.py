@@ -213,10 +213,19 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
     courses = list(session.scalars(statement).all())
     pref_course = None
     pref_identities: set[int] = set()
+    preferred_course_names: set[str] = set()
     if payload.preferred_course_id is not None:
-        pref_course = resolve_course_optional(session, payload.preferred_course_id) or session.get(Course, payload.preferred_course_id)
+        raw_pref = session.get(Course, payload.preferred_course_id)
+        if raw_pref:
+            preferred_course_names.add(raw_pref.name.strip().lower())
+        pref_course = resolve_course_optional(session, payload.preferred_course_id) or raw_pref
         if pref_course and pref_course.status == "active":
             pref_identities = course_identity_ids(session, pref_course)
+            preferred_course_names.add(pref_course.name.strip().lower())
+            for cid in pref_identities:
+                c = session.get(Course, cid)
+                if c:
+                    preferred_course_names.add(c.name.strip().lower())
             if not any(c.id == pref_course.id for c in courses):
                 courses.insert(0, pref_course)
 
@@ -366,6 +375,8 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
         # Must-Haves
         for must_have in payload.must_haves:
             clean_mh = must_have.strip().lower()
+            if clean_mh in preferred_course_names or clean_mh == course.name.strip().lower():
+                continue
             mapped_tag = MUST_HAVE_TAG_MAP.get(clean_mh)
             if mapped_tag in ("walked", "cart"):
                 continue

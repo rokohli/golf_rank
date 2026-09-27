@@ -760,6 +760,39 @@ def test_plan_cart_preference_and_must_haves_grounded_in_locomotion() -> None:
     assert "Cart policy is unconfirmed; verify walking and cart rules directly with the course." in c1["caveats"]
 
 
+def test_plan_preselected_course_in_must_haves_does_not_emit_unconfirmed_caveat() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # When opening the planner from a course, the frontend sends the course name
+    # in must_haves together with preferred_course_id (e.g. Course 1: Pebble Beach Golf Links)
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Pebble Beach Trip",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "preferred_course_id": 1,
+            "must_haves": ["Pebble Beach Golf Links", "ocean views"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    # The preselected course name must NOT be treated as an unconfirmed amenity
+    assert not any("Pebble Beach Golf Links" in c for c in c1["caveats"])
+    # Preferred course reasons are retained
+    assert "Selected as the featured focus for this trip." in c1["reasons"]
+
+    # Other candidates also do not receive an unconfirmed caveat for the preselected course
+    for c in plan["candidates"]:
+        assert not any("Requested must-have 'Pebble Beach Golf Links' is unconfirmed" in cav for cav in c["caveats"])
+
+
+
 
 
 
