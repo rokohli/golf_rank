@@ -792,6 +792,51 @@ def test_plan_preselected_course_in_must_haves_does_not_emit_unconfirmed_caveat(
         assert not any("Requested must-have 'Pebble Beach Golf Links' is unconfirmed" in cav for cav in c["caveats"])
 
 
+def test_plan_must_haves_plural_food_and_walking_friendly_preferences() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # 3 golfers log public rounds with great_food_drink and walked on Course 1
+    for u in ("dev:fd-u1", "dev:fd-u2", "dev:fd-u3"):
+        client.post(
+            "/api/v1/me/rounds",
+            headers={"X-Development-Subject": u},
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "great_food_drink"],
+                "visibility": "public",
+            },
+        )
+
+    # Alice passes profile preferences 'Food & drinks' and 'Walking friendly'
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Food and Walking Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "must_haves": ["Food & drinks", "Walking friendly"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    # Highlight reason for food & drink present
+    assert any("Great Food & Drink" in r for r in c1["reasons"])
+    # Walking reason present
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Supported verification caveat
+    assert "Requested must-have 'Food & drinks' is supported by recent golfer reports but requires confirmation with the course." in c1["caveats"]
+    # Not unconfirmed
+    assert not any("Requested must-have 'Food & drinks' is unconfirmed" in cav for cav in c1["caveats"])
+    assert not any("Requested must-have 'Walking friendly' is unconfirmed" in cav for cav in c1["caveats"])
+
+
+
 
 
 
