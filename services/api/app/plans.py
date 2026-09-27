@@ -314,7 +314,12 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
             )
         )
         if wants_walking:
-            if reports and reports.locomotion and reports.locomotion.walk_count > 0:
+            if (
+                reports
+                and reports.locomotion
+                and reports.locomotion.walk_count >= 3
+                and reports.locomotion.walk_percentage >= 50
+            ):
                 score += 10.0
                 reasons.append(f"Recent golfer reports: {reports.locomotion.label}.")
                 caveats.append(
@@ -608,7 +613,8 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
             course = None
         if course is not None:
             c_dict = course_data(course)
-            reports = get_course_golfer_reports(session, course)
+            as_of_date = candidate.source_checked_at.date() if candidate.source_checked_at else None
+            reports = get_course_golfer_reports(session, course, as_of=as_of_date)
             c_dict["golfer_reports"] = reports.model_dump() if reports else None
             candidates.append(
                 PlanCandidateOut(

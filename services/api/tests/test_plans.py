@@ -644,4 +644,51 @@ def test_plan_must_haves_and_walking_grounded_in_golfer_reports() -> None:
         assert "Requested must-have 'ocean views' is unconfirmed and requires verification with the course." in c2["caveats"]
 
 
+def test_plan_walking_requires_representative_evidence_and_preserves_snapshot_as_of() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2: 1 walker and 3 cart users (25% walked, cart majority)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user1"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user2"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user3"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c2-user4"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+
+    # Course 1: 3 walkers (100% walked)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user1"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user2"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:c1-user3"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Walking Preference Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "walking",
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+    plan_id = plan["id"]
+
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+    c2 = next(c for c in plan["candidates"] if c["course"]["id"] == 2)
+
+    # Course 1 (100% walked, >= 3 walkers) received walking observation and boost
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Course 2 (25% walked, cart-dominated) did NOT receive walking observation reason
+    assert not any("reporting golfers walked" in r for r in c2["reasons"])
+    assert "Walking policy is unconfirmed; verify walking and cart rules directly with the course." in c2["caveats"]
+
+    # When retrieving the plan later, candidate reports are reconstructed as of candidate.source_checked_at
+    retrieved = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE).json()
+    r_c1 = next(c for c in retrieved["candidates"] if c["course"]["id"] == 1)
+    assert r_c1["course"]["golfer_reports"] is not None
+    assert r_c1["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+
+
+
 

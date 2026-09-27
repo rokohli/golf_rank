@@ -85,6 +85,7 @@ def get_course_golfer_reports(
         .where(
             Round.course_id.in_(identity_ids),
             Round.played_on >= cutoff_date,
+            Round.played_on <= reference_date,
         )
         .subquery()
     )
