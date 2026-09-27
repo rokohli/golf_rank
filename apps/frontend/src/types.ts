@@ -112,6 +112,27 @@ export type Course = {
   community_rating?: number | null
   rating_count?: number
   distance_miles?: number | null
+  golfer_reports?: CourseGolferReports | null
+}
+
+export type LocomotionReport = {
+  walk_count: number
+  cart_count: number
+  total_reporters: number
+  walk_percentage: number
+  label: string
+}
+
+export type HighlightReport = {
+  tag: string
+  label: string
+  count: number
+}
+
+export type CourseGolferReports = {
+  total_reporting_golfers: number
+  locomotion: LocomotionReport | null
+  highlights: HighlightReport[]
 }
 
 export type GreenFeeSuggestion = {
@@ -326,6 +347,7 @@ export type GolfRound = {
   visibility: RoundVisibility
   is_favorite: boolean
   is_rating_round: boolean
+  tags?: string[]
   created_at: string
   updated_at: string
 }
@@ -340,6 +362,7 @@ export type RoundInput = {
   guest_names: string[]
   visibility: RoundVisibility
   is_favorite: boolean
+  tags?: string[]
 }
 
 export type RoundPatch = Partial<Omit<RoundInput, 'course_id'>>
