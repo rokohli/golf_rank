@@ -55,6 +55,8 @@ MUST_HAVE_TAG_MAP: dict[str, str] = {
     "walking": "walked",
     "walkable": "walked",
     "cart": "cart",
+    "riding cart": "cart",
+    "golf cart": "cart",
     "push cart": "push_cart",
     "push_cart": "push_cart",
     "caddie": "caddie",
@@ -305,7 +307,7 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
         reports = get_course_golfer_reports(session, course)
         highlights_by_tag = {h.tag: h for h in reports.highlights} if reports else {}
 
-        # Transportation and Walking
+        # Transportation and Locomotion (Walking / Cart)
         wants_walking = (
             payload.transportation == "walking"
             or any(
@@ -330,11 +332,42 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                     "Walking policy is unconfirmed; verify walking and cart rules directly with the course."
                 )
 
+        wants_cart = (
+            payload.transportation == "cart"
+            or any(
+                MUST_HAVE_TAG_MAP.get(mh.strip().lower()) == "cart"
+                for mh in payload.must_haves
+            )
+        )
+        if wants_cart:
+            cart_count = reports.locomotion.cart_count if (reports and reports.locomotion) else 0
+            total_reporters = reports.locomotion.total_reporters if (reports and reports.locomotion) else 0
+            cart_percentage = (
+                round((cart_count / total_reporters) * 100) if total_reporters > 0 else 0
+            )
+            if (
+                reports
+                and reports.locomotion
+                and cart_count >= 3
+                and cart_percentage >= 50
+            ):
+                score += 10.0
+                reasons.append(
+                    f"Recent golfer reports: {cart_count} of {total_reporters} reporting golfers used a cart."
+                )
+                caveats.append(
+                    "Walking policy and cart requirements must be confirmed directly with the course."
+                )
+            else:
+                caveats.append(
+                    "Cart policy is unconfirmed; verify walking and cart rules directly with the course."
+                )
+
         # Must-Haves
         for must_have in payload.must_haves:
             clean_mh = must_have.strip().lower()
             mapped_tag = MUST_HAVE_TAG_MAP.get(clean_mh)
-            if mapped_tag == "walked":
+            if mapped_tag in ("walked", "cart"):
                 continue
             if mapped_tag and mapped_tag in highlights_by_tag:
                 highlight = highlights_by_tag[mapped_tag]

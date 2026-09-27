@@ -715,5 +715,51 @@ def test_plan_walking_requires_representative_evidence_and_preserves_snapshot_as
         assert r_c3["course"]["golfer_reports"] is None
 
 
+def test_plan_cart_preference_and_must_haves_grounded_in_locomotion() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2: 3 cart users, 1 walker (75% cart)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u1"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u2"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u3"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:cart-u4"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    # Course 1: 3 walkers (0% cart)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u1"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u2"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:walk-u3"}, json={"course_id": 1, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+
+    # Plan with must_haves: ["riding cart"] and transportation: "cart"
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Cart Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "cart",
+            "must_haves": ["riding cart"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan = plan_res.json()
+
+    c2 = next(c for c in plan["candidates"] if c["course"]["id"] == 2)
+    c1 = next(c for c in plan["candidates"] if c["course"]["id"] == 1)
+
+    # Course 2 (75% cart, >= 3 cart users) received cart observation reason and policy caveat
+    assert any("reporting golfers used a cart" in r for r in c2["reasons"])
+    assert "Walking policy and cart requirements must be confirmed directly with the course." in c2["caveats"]
+    # Cart must-have was handled through locomotion, so no conflicting generic unconfirmed caveat
+    assert not any("Requested must-have 'riding cart' is unconfirmed" in c for c in c2["caveats"])
+
+    # Course 1 (0% cart) did not receive cart observation reason
+    assert not any("reporting golfers used a cart" in r for r in c1["reasons"])
+    assert "Cart policy is unconfirmed; verify walking and cart rules directly with the course." in c1["caveats"]
+
+
+
 
 
