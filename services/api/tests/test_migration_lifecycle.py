@@ -436,27 +436,31 @@ def test_0032_adds_daily_featured_courses_and_partial_index(monkeypatch: pytest.
         engine.dispose()
 
 
-def test_0034_adds_golfer_reports_to_plan_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_0034_adds_golfer_reports_to_plan_candidates_and_daily_featured(monkeypatch: pytest.MonkeyPatch) -> None:
     with NamedTemporaryFile(suffix=".db") as tmp:
         db_url = f"sqlite:///{tmp.name}"
         config = _alembic_config(monkeypatch, db_url)
         command.upgrade(config, "head")
 
         engine = make_engine(db_url)
-        columns = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
-        assert "golfer_reports" in columns
+        cand_columns = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" in cand_columns
+        featured_columns = {col["name"] for col in inspect(engine).get_columns("daily_featured_courses")}
+        assert "golfer_reports" in featured_columns
         engine.dispose()
 
         command.downgrade(config, "0033_round_tags")
         engine = make_engine(db_url)
-        columns_after = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
-        assert "golfer_reports" not in columns_after
+        cand_cols_after = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" not in cand_cols_after
+        feat_cols_after = {col["name"] for col in inspect(engine).get_columns("daily_featured_courses")}
+        assert "golfer_reports" not in feat_cols_after
         engine.dispose()
 
         command.upgrade(config, "head")
         engine = make_engine(db_url)
-        columns_reup = {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
-        assert "golfer_reports" in columns_reup
+        assert "golfer_reports" in {col["name"] for col in inspect(engine).get_columns("plan_candidates")}
+        assert "golfer_reports" in {col["name"] for col in inspect(engine).get_columns("daily_featured_courses")}
         engine.dispose()
 
 

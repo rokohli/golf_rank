@@ -357,7 +357,7 @@ def _candidate_rows(session: Session, user_id: int, payload: PlanIn) -> list[dic
                 "reasons": reasons,
                 "caveats": caveats,
                 "checked_at": checked_at,
-                "golfer_reports": reports.model_dump() if reports else None,
+                "golfer_reports": reports.model_dump() if reports else {},
             }
         )
     return sorted(candidates, key=lambda item: (-item["score"], item["course"].name))[
@@ -619,7 +619,7 @@ def _plan_out(session: Session, plan: Plan) -> PlanOut:
         if course is not None:
             c_dict = course_data(course)
             if candidate.golfer_reports is not None:
-                c_dict["golfer_reports"] = candidate.golfer_reports
+                c_dict["golfer_reports"] = candidate.golfer_reports if candidate.golfer_reports else None
             else:
                 as_of_date = candidate.source_checked_at.date() if candidate.source_checked_at else None
                 reports = get_course_golfer_reports(session, course, as_of=as_of_date)

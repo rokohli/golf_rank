@@ -777,8 +777,11 @@ def _build_featured_response(
     c_data["community_rating"] = comm_rating
     c_data["rating_count"] = rating_count
     c_data["distance_miles"] = live_dist
-    reports = get_course_golfer_reports(session, course)
-    c_data["golfer_reports"] = reports.model_dump() if reports else None
+    if featured.golfer_reports is not None:
+        c_data["golfer_reports"] = featured.golfer_reports if featured.golfer_reports else None
+    else:
+        reports = get_course_golfer_reports(session, course)
+        c_data["golfer_reports"] = reports.model_dump() if reports else None
     course_out = CourseOut.model_validate(c_data)
 
     # Rebuild location-derived tags to stay consistent with live_dist
@@ -872,6 +875,7 @@ async def get_featured_course(
                 subject=current.provider_subject,
             )
 
+            reports = get_course_golfer_reports(session, course)
             featured = DailyFeaturedCourse(
                 user_id=user.id,
                 course_id=course.id,
@@ -884,6 +888,7 @@ async def get_featured_course(
                 is_regional_fallback=is_regional,
                 generation_status=gen_status,
                 estimated_cost_micros=cost_micros,
+                golfer_reports=reports.model_dump() if reports else {},
             )
             session.add(featured)
             try:
@@ -985,6 +990,7 @@ async def dismiss_featured_course(
             subject=current.provider_subject,
         )
 
+        next_reports = get_course_golfer_reports(session, course)
         next_featured = DailyFeaturedCourse(
             user_id=user.id,
             course_id=course.id,
@@ -997,6 +1003,7 @@ async def dismiss_featured_course(
             is_regional_fallback=is_regional,
             generation_status=gen_status,
             estimated_cost_micros=cost_micros,
+            golfer_reports=next_reports.model_dump() if next_reports else {},
         )
         session.add(next_featured)
 

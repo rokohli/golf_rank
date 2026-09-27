@@ -698,6 +698,22 @@ def test_plan_walking_requires_representative_evidence_and_preserves_snapshot_as
     assert r_c1["course"]["golfer_reports"] is not None
     assert r_c1["course"]["golfer_reports"]["total_reporting_golfers"] == 3
 
+    # An explicitly empty snapshot (Course 3 had 0 reports at plan creation)
+    c3 = next((c for c in plan["candidates"] if c["course"]["id"] == 3), None)
+    if c3:
+        assert c3["course"]["golfer_reports"] is None
+        # Add 3 rounds to Course 3 after plan creation
+        for u in ("dev:c3-u1", "dev:c3-u2", "dev:c3-u3"):
+            client.post(
+                "/api/v1/me/rounds",
+                headers={"X-Development-Subject": u},
+                json={"course_id": 3, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"},
+            )
+        # Empty snapshot remains None (not populated by later backdated rounds)
+        retrieved2 = client.get(f"/api/v1/me/plans/{plan_id}", headers=ALICE).json()
+        r_c3 = next((c for c in retrieved2["candidates"] if c["course"]["id"] == 3), None)
+        assert r_c3["course"]["golfer_reports"] is None
+
 
 
 

@@ -1614,6 +1614,25 @@ def test_featured_course_includes_golfer_reports_and_grounded_tags(
     # Fallback tags include the consensus Ocean Views highlight
     assert "Ocean Views" in data["match_tags"]
 
+    # Log a 4th round with cart after the featured recommendation was generated and cached
+    client.post(
+        "/api/v1/me/rounds",
+        headers={"X-Development-Subject": "dev:user-4"},
+        json={
+            "course_id": 1,
+            "played_on": "2026-07-01",
+            "tags": ["cart"],
+            "visibility": "public",
+        },
+    )
+
+    # Re-reading the cached recommendation preserves the persisted reports snapshot
+    res2 = client.get("/api/v1/me/featured-course", headers=TEST_USER)
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+    assert data2["course"]["golfer_reports"]["locomotion"]["walk_percentage"] == 100
+
 
 def test_featured_course_gemini_receives_community_observations(
     monkeypatch: pytest.MonkeyPatch,

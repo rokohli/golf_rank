@@ -749,6 +749,7 @@ class DailyFeaturedCourse(Base):
     is_regional_fallback: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     generation_status: Mapped[str] = mapped_column(String(20), default="fallback_template", server_default="fallback_template")
     estimated_cost_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    golfer_reports: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     course: Mapped["Course"] = relationship()
