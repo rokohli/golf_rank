@@ -583,4 +583,65 @@ def test_ai_itinerary_with_reconciled_alias_preferred_course_canonicalizes_and_v
     assert any(item["course"]["id"] == 2 for item in body["itinerary"])
 
 
+def test_plan_must_haves_and_walking_grounded_in_golfer_reports() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    user1 = {"X-Development-Subject": "dev:user-1"}
+    user2 = {"X-Development-Subject": "dev:user-2"}
+    user3 = {"X-Development-Subject": "dev:user-3"}
+
+    # 3 golfers log public rounds on Course 1 with walked and ocean_views
+    for u in (user1, user2, user3):
+        res = client.post(
+            "/api/v1/me/rounds",
+            headers=u,
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "ocean_views"],
+                "visibility": "public",
+            },
+        )
+        assert res.status_code == 201
+
+    # Alice creates a plan asking for walking, ocean views, and caddie
+    plan_res = client.post(
+        "/api/v1/me/plans",
+        headers=ALICE,
+        json={
+            "title": "Grounded Plan",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "regions": ["Monterey, CA"],
+            "transportation": "walking",
+            "must_haves": ["walkable", "ocean views", "caddie"],
+        },
+    )
+    assert plan_res.status_code == 201
+    plan_body = plan_res.json()
+    candidates = plan_body["candidates"]
+    assert len(candidates) > 0
+
+    c1 = next(c for c in candidates if c["course"]["id"] == 1)
+    # Walking observation reason present
+    assert any("reporting golfers walked" in r for r in c1["reasons"])
+    # Ocean views highlight reason present
+    assert any("Ocean Views" in r for r in c1["reasons"])
+    # Policy caveat MUST be retained even when walked is observed
+    assert "Walking policy and cart requirements must be confirmed directly with the course." in c1["caveats"]
+    # Unconfirmed must-have receives caveat
+    assert "Requested must-have 'caddie' is unconfirmed and requires verification with the course." in c1["caveats"]
+    # Course object carries golfer_reports
+    assert c1["course"]["golfer_reports"] is not None
+    assert c1["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+    assert c1["source_checked_at"] is not None
+
+    # Course without walking reports (Course 2)
+    c2 = next((c for c in candidates if c["course"]["id"] == 2), None)
+    if c2:
+        assert "Walking policy is unconfirmed; verify walking and cart rules directly with the course." in c2["caveats"]
+        assert "Requested must-have 'ocean views' is unconfirmed and requires verification with the course." in c2["caveats"]
+
+
 

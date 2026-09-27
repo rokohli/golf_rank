@@ -123,7 +123,8 @@ class GeminiPlannerNarrativeProvider:
                             "date range. Select one supplied summary verbatim. Never add a course, "
                             "price, availability claim, tee time, travel duration, lodging, or "
                             "restaurant. reason_indices must reference only the selected candidate's "
-                            "reasons array."
+                            "reasons array. Player reports reflect community observations, not official "
+                            "course policies; preserve all listed caveats."
                         )
                     }
                 ]

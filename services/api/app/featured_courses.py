@@ -23,6 +23,7 @@ from .catalog import miles_between
 from .core.auth import CurrentUser, current_user, get_settings
 from .core.config import Settings
 from .core.rate_limit import authenticated_rate_limit
+from .course_reports import get_course_golfer_reports
 from .db import get_session
 from .domain import (
     canonical_courses_only,
@@ -596,8 +597,9 @@ async def generate_featured_narrative(
             can_use_ai = (db_cost + max_cost) <= cost_limit_micros
 
     incurred_cost_micros: int | None = None
+    reports = get_course_golfer_reports(session, course) if session is not None else None
     if can_use_ai:
-        candidate_facts = {
+        candidate_facts: dict[str, Any] = {
             "course_name": course.name,
             "region": course.region,
             "city": course.city,
@@ -612,6 +614,16 @@ async def generate_featured_narrative(
                 "preferred_difficulty": user_diff,
             },
         }
+        if reports:
+            community_obs: dict[str, Any] = {}
+            if reports.locomotion and reports.locomotion.walk_count > 0:
+                community_obs["walking_ratio"] = reports.locomotion.label
+            if reports.highlights:
+                community_obs["top_highlights"] = [
+                    {"label": h.label, "count": h.count} for h in reports.highlights
+                ]
+            if community_obs:
+                candidate_facts["community_observations"] = community_obs
         schema = {
             "type": "object",
             "properties": {
@@ -633,7 +645,10 @@ async def generate_featured_narrative(
                     "text": (
                         "You write a concise, compelling 1-2 sentence recommendation for this week's featured golf course. "
                         "Ground all rationale strictly in the provided course facts. Never invent prices, tee times, "
-                        "amenities, or course policies. Keep tags short (under 4 words each). "
+                        "amenities, or course policies. Player reports in community_observations are individual golfer "
+                        "observations, not official course policies. Never state percentages, specific counts, or policy "
+                        "guarantees in the headline or rationale; refer only to general player observations (e.g. 'Golfers "
+                        "frequently highlight scenic ocean views'). Keep tags short (under 4 words each). "
                         "Do not include mileage, distance, or proximity in tags or rationale, as distance is computed and presented dynamically."
                     )
                 }]
@@ -714,7 +729,13 @@ async def generate_featured_narrative(
         tags.append(course.difficulty.title())
     if in_saved_list:
         tags.append("Saved List")
-    elif not tags:
+    if reports and reports.highlights and len(tags) < 4:
+        for h in reports.highlights:
+            if h.label not in tags:
+                tags.append(h.label)
+                if len(tags) >= 4:
+                    break
+    if not tags:
         tags.append("Featured")
 
     return headline, rationale, tags[:4], "fallback_template", incurred_cost_micros
@@ -756,6 +777,8 @@ def _build_featured_response(
     c_data["community_rating"] = comm_rating
     c_data["rating_count"] = rating_count
     c_data["distance_miles"] = live_dist
+    reports = get_course_golfer_reports(session, course)
+    c_data["golfer_reports"] = reports.model_dump() if reports else None
     course_out = CourseOut.model_validate(c_data)
 
     # Rebuild location-derived tags to stay consistent with live_dist

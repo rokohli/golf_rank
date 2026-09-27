@@ -1566,3 +1566,149 @@ def test_resolve_anchor_coordinates_normalizes_full_state_name() -> None:
         assert lng == -96.7970
 
 
+def test_featured_course_includes_golfer_reports_and_grounded_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    # 3 golfers log public rounds on Course 1 with walked and ocean_views
+    for i in range(1, 4):
+        headers = {"X-Development-Subject": f"dev:feat-golfer-{i}"}
+        res = client.post(
+            "/api/v1/me/rounds",
+            headers=headers,
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "ocean_views"],
+                "visibility": "public",
+            },
+        )
+        assert res.status_code == 201
+
+    TEST_USER = {"X-Development-Subject": "dev:featured-report-user"}
+    client.put(
+        "/api/v1/me/onboarding-preferences",
+        headers=TEST_USER,
+        json={
+            "home_region": "Monterey, CA",
+            "max_green_fee": 1000,
+            "difficulty": "any",
+            "access": "any",
+            "onboarding_data": {
+                "first_name": "Report",
+                "last_name": "Viewer",
+                "username": "reportviewer",
+            },
+        },
+    )
+
+    res = client.get("/api/v1/me/featured-course", headers=TEST_USER)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["course"]["id"] == 1
+    assert data["course"]["golfer_reports"] is not None
+    assert data["course"]["golfer_reports"]["total_reporting_golfers"] == 3
+    assert data["course"]["golfer_reports"]["locomotion"]["walk_percentage"] == 100
+    # Fallback tags include the consensus Ocean Views highlight
+    assert "Ocean Views" in data["match_tags"]
+
+
+def test_featured_course_gemini_receives_community_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import json
+    from app.featured_courses import generate_featured_narrative
+    from app.domain import require_course
+
+    app = create_app(Settings(
+        ai_planner_enabled=True,
+        gemini_api_key="test-api-key",
+    ))
+    client = TestClient(app)
+
+    # 3 golfers log public rounds on Course 1
+    for i in range(1, 4):
+        headers = {"X-Development-Subject": f"dev:gemini-golfer-{i}"}
+        client.post(
+            "/api/v1/me/rounds",
+            headers=headers,
+            json={
+                "course_id": 1,
+                "played_on": "2026-07-01",
+                "tags": ["walked", "ocean_views"],
+                "visibility": "public",
+            },
+        )
+
+    captured_payload: dict = {}
+
+    class MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, url, headers=None, json=None):
+            nonlocal captured_payload
+            captured_payload = json
+            class MockResponse:
+                def raise_for_status(self):
+                    pass
+                def json(self):
+                    return {
+                        "usageMetadata": {
+                            "promptTokenCount": 50,
+                            "candidatesTokenCount": 20,
+                            "thoughtsTokenCount": 0,
+                        },
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [
+                                        {
+                                            "text": (
+                                                '{"headline": "Oceanfront Icon", '
+                                                '"rationale": "Pebble Beach offers stunning ocean views.", '
+                                                '"match_tags": ["Ocean Views", "Public Access"]}'
+                                            )
+                                        }
+                                    ]
+                                }
+                            }
+                        ],
+                    }
+            return MockResponse()
+
+    monkeypatch.setattr("app.featured_courses.httpx.AsyncClient", MockAsyncClient)
+
+    with app.state.session_factory() as session:
+        course = require_course(session, 1)
+        headline, rationale, tags, status, cost = asyncio.run(
+            generate_featured_narrative(
+                course=course,
+                distance_miles=5.0,
+                is_regional_fallback=False,
+                preferences=None,
+                saved_course_ids=set(),
+                settings=app.state.settings,
+                session=session,
+                can_use_ai=True,
+                subject="dev:gemini-user",
+            )
+        )
+
+    assert status == "ai_generated"
+    assert "Ocean Views" in tags
+    # Verify candidate_facts passed to Gemini contained community observations
+    user_part_text = captured_payload["contents"][0]["parts"][0]["text"]
+    facts = json.loads(user_part_text)
+    assert "community_observations" in facts
+    assert facts["community_observations"]["walking_ratio"] == "3 of 3 reporting golfers walked"
+    assert any(h["label"] == "Ocean Views" for h in facts["community_observations"]["top_highlights"])
+
+
+
