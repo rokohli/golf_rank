@@ -23,7 +23,7 @@ from .catalog import miles_between
 from .core.auth import CurrentUser, current_user, get_settings
 from .core.config import Settings
 from .core.rate_limit import authenticated_rate_limit
-from .course_reports import get_course_golfer_reports
+from .course_reports import CourseGolferReportsOut, get_course_golfer_reports
 from .db import get_session
 from .domain import (
     canonical_courses_only,
@@ -572,6 +572,7 @@ async def generate_featured_narrative(
     session: Session | None = None,
     can_use_ai: bool | None = None,
     subject: str | None = None,
+    reports: CourseGolferReportsOut | None = None,
 ) -> tuple[str, str, list[str], str, int | None]:
     """Generates (headline, rationale, match_tags, generation_status, estimated_cost_micros).
     Uses Gemini if enabled and under monthly budget; otherwise returns high-quality deterministic copy."""
@@ -597,7 +598,8 @@ async def generate_featured_narrative(
             can_use_ai = (db_cost + max_cost) <= cost_limit_micros
 
     incurred_cost_micros: int | None = None
-    reports = get_course_golfer_reports(session, course) if session is not None else None
+    if reports is None and session is not None:
+        reports = get_course_golfer_reports(session, course)
     if can_use_ai:
         candidate_facts: dict[str, Any] = {
             "course_name": course.name,
@@ -616,7 +618,11 @@ async def generate_featured_narrative(
         }
         if reports:
             community_obs: dict[str, Any] = {}
-            if reports.locomotion and reports.locomotion.walk_count > 0:
+            if (
+                reports.locomotion
+                and reports.locomotion.walk_count >= 3
+                and reports.locomotion.walk_percentage >= 50
+            ):
                 community_obs["walking_ratio"] = reports.locomotion.label
             if reports.highlights:
                 community_obs["top_highlights"] = [
@@ -862,6 +868,7 @@ async def get_featured_course(
         ).all())
         saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
+        reports = get_course_golfer_reports(session, course)
         with budget_tracker.reserve(session, settings, subject=current.provider_subject) as can_use_ai:
             headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
                 course=course,
@@ -873,9 +880,9 @@ async def get_featured_course(
                 session=session,
                 can_use_ai=can_use_ai,
                 subject=current.provider_subject,
+                reports=reports,
             )
 
-            reports = get_course_golfer_reports(session, course)
             featured = DailyFeaturedCourse(
                 user_id=user.id,
                 course_id=course.id,
@@ -977,6 +984,7 @@ async def dismiss_featured_course(
     ).all())
     saved_ids = resolve_course_ids(session, raw_saved_ids) | raw_saved_ids
 
+    next_reports = get_course_golfer_reports(session, course)
     with budget_tracker.reserve(session, settings, subject=current.provider_subject) as can_use_ai:
         headline, rationale, tags, gen_status, cost_micros = await generate_featured_narrative(
             course=course,
@@ -988,9 +996,9 @@ async def dismiss_featured_course(
             session=session,
             can_use_ai=can_use_ai,
             subject=current.provider_subject,
+            reports=next_reports,
         )
 
-        next_reports = get_course_golfer_reports(session, course)
         next_featured = DailyFeaturedCourse(
             user_id=user.id,
             course_id=course.id,

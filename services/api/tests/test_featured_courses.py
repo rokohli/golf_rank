@@ -1730,4 +1730,88 @@ def test_featured_course_gemini_receives_community_observations(
     assert any(h["label"] == "Ocean Views" for h in facts["community_observations"]["top_highlights"])
 
 
+def test_featured_course_gemini_gates_walking_on_representative_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import json
+    from app.featured_courses import generate_featured_narrative
+    from app.domain import require_course
+
+    app = create_app()
+    client = TestClient(app)
+
+    # Course 2: 1 walker and 3 cart users (cart dominated)
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:f2-u1"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["walked"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:f2-u2"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:f2-u3"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+    client.post("/api/v1/me/rounds", headers={"X-Development-Subject": "dev:f2-u4"}, json={"course_id": 2, "played_on": "2026-07-01", "tags": ["cart"], "visibility": "public"})
+
+    captured_payload: dict[str, Any] = {}
+
+    class MockAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "MockAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, url: str, json: Any = None, **kwargs: Any) -> Any:
+            nonlocal captured_payload
+            captured_payload = json
+            class MockResponse:
+                status_code = 200
+                def raise_for_status(self) -> None:
+                    pass
+                def json(self) -> dict[str, Any]:
+                    return {
+                        "usageMetadata": {
+                            "promptTokenCount": 50,
+                            "candidatesTokenCount": 20,
+                            "thoughtsTokenCount": 0,
+                        },
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [
+                                        {
+                                            "text": '{"headline": "Test Course", "rationale": "Great experience.", "match_tags": ["Scenic"]}'
+                                        }
+                                    ]
+                                }
+                            }
+                        ],
+                    }
+            return MockResponse()
+
+    monkeypatch.setattr("app.featured_courses.httpx.AsyncClient", MockAsyncClient)
+
+    with app.state.session_factory() as session:
+        course = require_course(session, 2)
+        headline, rationale, tags, status, cost = asyncio.run(
+            generate_featured_narrative(
+                course=course,
+                distance_miles=5.0,
+                is_regional_fallback=False,
+                preferences=None,
+                saved_course_ids=set(),
+                settings=app.state.settings,
+                session=session,
+                can_use_ai=True,
+                subject="dev:gemini-user",
+            )
+        )
+
+    assert status == "ai_generated"
+    user_part_text = captured_payload["contents"][0]["parts"][0]["text"]
+    facts = json.loads(user_part_text)
+    # Walking ratio should NOT be exposed for cart-dominated course (1 walker out of 4)
+    if "community_observations" in facts:
+        assert "walking_ratio" not in facts["community_observations"]
+
+
+
 
