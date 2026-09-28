@@ -6,13 +6,19 @@ const mockRequestPermissionsAsync = jest.fn()
 const mockSetNotificationChannelAsync = jest.fn()
 const mockDismissAllNotificationsAsync = jest.fn()
 let mockIsDevice = true
+let mockDeviceThrows = false
 
 jest.mock('../../api/client', () => ({
   registerPushToken: (...args: unknown[]) => mockRegisterPushToken(...args),
   unregisterPushToken: (...args: unknown[]) => mockUnregisterPushToken(...args),
 }))
 
-jest.mock('expo-device', () => ({ get isDevice() { return mockIsDevice } }))
+jest.mock('expo-device', () => ({
+  get isDevice() {
+    if (mockDeviceThrows) throw new Error("Cannot find native module 'ExpoDevice'")
+    return mockIsDevice
+  },
+}))
 
 jest.mock('expo-constants', () => ({
   __esModule: true,
@@ -61,6 +67,7 @@ describe('requestAndRegisterPushToken', () => {
   beforeEach(() => {
     jest.resetAllMocks()
     mockIsDevice = true
+    mockDeviceThrows = false
     mockGetPermissionsAsync.mockResolvedValue({ status: 'granted' })
     mockGetExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[abc]' })
   })
@@ -105,6 +112,14 @@ describe('requestAndRegisterPushToken', () => {
 
     await requestAndRegisterPushToken(getAuthHeaders)
 
+    expect(mockGetPermissionsAsync).not.toHaveBeenCalled()
+    expect(mockRegisterPushToken).not.toHaveBeenCalled()
+  })
+
+  it('safely handles missing ExpoDevice native module without throwing', async () => {
+    mockDeviceThrows = true
+
+    await expect(requestAndRegisterPushToken(getAuthHeaders)).resolves.toBe(false)
     expect(mockGetPermissionsAsync).not.toHaveBeenCalled()
     expect(mockRegisterPushToken).not.toHaveBeenCalled()
   })

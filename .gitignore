@@ -13,3 +13,4 @@ dist/
 ios/
 android/
 docker-compose.override.yml
+*.db
