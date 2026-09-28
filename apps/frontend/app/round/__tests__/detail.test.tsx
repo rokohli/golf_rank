@@ -70,4 +70,17 @@ describe('round summary', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Edit round' }))
     expect(mockRouter.push).toHaveBeenCalledWith('/round/edit/42')
   })
+
+  it('renders tag pills when tags are present on the round', async () => {
+    mockGetRound.mockResolvedValue({
+      ...round,
+      tags: ['walked', 'fast_greens', 'scenic_views'],
+    })
+    render(<RoundDetail />)
+
+    expect(await screen.findByText('Course tags')).toBeOnTheScreen()
+    expect(screen.getByText('Walked')).toBeOnTheScreen()
+    expect(screen.getByText('Fast Greens')).toBeOnTheScreen()
+    expect(screen.getByText('Scenic Views')).toBeOnTheScreen()
+  })
 })

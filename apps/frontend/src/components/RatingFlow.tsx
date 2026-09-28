@@ -31,10 +31,11 @@ import { CoursePhotoContentType } from '../api/client'
 import { MAX_PHOTOS_PER_ROUND, isRetryableConfirmFailure, pickCoursePhotoAsset } from '../api/coursePhotoUpload'
 import { attributedCourseImage } from '../coursePresentation'
 import { colors } from '../ui/theme'
+import { TagSelector } from './TagSelector'
 
 type Guest = { name: string; phone: string | null }
 type Stage = 'tier' | 'round' | 'comparison' | 'reveal'
-type RoundEditor = 'played' | 'score' | 'notes' | 'favorite' | 'people' | null
+type RoundEditor = 'played' | 'score' | 'notes' | 'favorite' | 'people' | 'tags' | null
 type StagedPhoto = {
   id: string
   imageUri: string
@@ -93,6 +94,7 @@ export function RatingFlow({
     initialFriendIds,
     initialGuests,
     initialRating.round?.visibility ?? 'public',
+    initialRating.round?.tags ?? [],
   )
 
   const [stage, setStage] = useState<Stage>('tier')
@@ -112,6 +114,7 @@ export function RatingFlow({
   const [friendIds, setFriendIds] = useState<number[]>(initialFriendIds)
   const [friendQuery, setFriendQuery] = useState('')
   const [guests] = useState<Guest[]>(initialGuests)
+  const [tags, setTags] = useState<string[]>(initialRating.round?.tags ?? [])
   const [visibility, setVisibility] = useState<RoundVisibility>(initialRating.round?.visibility ?? 'public')
   const [roundEditor, setRoundEditor] = useState<RoundEditor>(null)
   const [busy, setBusy] = useState(false)
@@ -248,7 +251,7 @@ export function RatingFlow({
     onClose()
   }
 
-  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, visibility)
+  const currentDetails = detailsPayload(note, favoriteHole, friendIds, guests, visibility, tags)
   const visibleFriends = useMemo(() => {
     const normalized = friendQuery.trim().toLocaleLowerCase()
     if (normalized) return friends.filter((friend) => `${friend.display_name} ${friend.username ?? ''}`.toLocaleLowerCase().includes(normalized)).slice(0, 6)
@@ -474,6 +477,18 @@ export function RatingFlow({
                   </View>
                 </View> : null}
                 <RoundRow
+                  expanded={roundEditor === 'tags'}
+                  icon="tag"
+                  label="Course tags"
+                  onPress={() => toggleEditor('tags')}
+                  value={tags.length > 0 ? `${tags.length} selected` : undefined}
+                />
+                {roundEditor === 'tags' ? (
+                  <View style={styles.tagsEditor}>
+                    <TagSelector selectedTags={tags} onChange={setTags} />
+                  </View>
+                ) : null}
+                <RoundRow
                   disabled={photoUploadInFlight || totalPhotoCount >= MAX_PHOTOS_PER_ROUND}
                   icon="camera"
                   label="Photos"
@@ -573,13 +588,14 @@ function ActionButton({ disabled, label, onPress }: { disabled?: boolean; label:
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionButton, disabled && styles.disabled, pressed && !disabled && styles.actionPressed]}><Text style={styles.actionButtonText}>{label}</Text></Pressable>
 }
 
-function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], visibility: RoundVisibility): RatingDetailsInput {
+function detailsPayload(note: string, favoriteHole: string, friendIds: number[], guests: Guest[], visibility: RoundVisibility, tags: string[] = []): RatingDetailsInput {
   return {
     note: note.trim() || null,
     favorite_hole: favoriteHole.trim() ? Number(favoriteHole) : null,
     friend_user_ids: friendIds,
     guest_names: guests.map((guest) => guest.name),
     visibility,
+    tags,
   }
 }
 
@@ -664,6 +680,7 @@ const styles = StyleSheet.create({
   inlineField: { backgroundColor: '#FFFFFF', borderColor: '#D8D3C7', borderRadius: 4, borderWidth: StyleSheet.hairlineWidth, color: colors.ink, fontSize: 15, minHeight: 46, paddingHorizontal: 13, paddingVertical: 11 },
   multiline: { minHeight: 92, textAlignVertical: 'top' },
   peopleEditor: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, gap: 10, padding: 14 },
+  tagsEditor: { borderBottomColor: '#D8D3C7', borderBottomWidth: StyleSheet.hairlineWidth, padding: 14 },
   friendSearch: { alignItems: 'center', borderColor: colors.line, borderRadius: 18, borderWidth: 1, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 11 },
   friendSearchInput: { color: colors.ink, flex: 1, fontSize: 11, paddingVertical: 7 },
   friendWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

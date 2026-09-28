@@ -185,6 +185,7 @@ export type RatingDetailsInput = {
   friend_user_ids: number[]
   guest_names: string[]
   visibility: 'private' | 'friends' | 'public'
+  tags?: string[]
 }
 
 export type CourseRatingState = {
@@ -202,12 +203,50 @@ export type CourseRatingState = {
     favorite_hole: number | null
     visibility: 'private' | 'friends' | 'public'
     photos: CourseImage[]
+    tags?: string[]
   } | null
   companions: {
     friend_user_id: number | null
     guest_name: string | null
   }[]
 }
+
+export const ROUND_TAG_LABELS: Record<string, string> = {
+  walked: 'Walked',
+  cart: 'Riding Cart',
+  push_cart: 'Push Cart',
+  caddie: 'Caddie',
+  ocean_views: 'Ocean Views',
+  mountain_views: 'Mountain Views',
+  scenic_views: 'Scenic Views',
+  links_style: 'Links Style',
+  tree_lined: 'Tree-Lined',
+  fast_greens: 'Fast Greens',
+  challenging_greens: 'Tricky Greens',
+  pristine_fairways: 'Great Fairways',
+  punishing_rough: 'Punishing Rough',
+  great_practice_facility: 'Great Practice Range',
+  welcoming_staff: 'Welcoming Vibe',
+  great_food_drink: 'Great Food & Drink',
+  beginner_friendly: 'Beginner Friendly',
+}
+
+export const LOCOMOTION_TAGS = ['walked', 'cart'] as const
+export const ASSISTANCE_TAGS = ['push_cart', 'caddie'] as const
+export const HIGHLIGHT_TAG_GROUPS = [
+  {
+    title: 'Setting & Character',
+    tags: ['ocean_views', 'mountain_views', 'scenic_views', 'links_style', 'tree_lined'] as const,
+  },
+  {
+    title: 'Course Conditions',
+    tags: ['fast_greens', 'challenging_greens', 'pristine_fairways', 'punishing_rough'] as const,
+  },
+  {
+    title: 'Amenities & Vibe',
+    tags: ['great_practice_facility', 'welcoming_staff', 'great_food_drink', 'beginner_friendly'] as const,
+  },
+] as const
 
 export type RatingCandidate = Course | null
 

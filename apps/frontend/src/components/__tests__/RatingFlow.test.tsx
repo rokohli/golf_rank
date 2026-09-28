@@ -580,4 +580,43 @@ describe('RatingFlow', () => {
     expect(screen.queryByText('Enter a score from 20 to 200.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState).toMatchObject({ disabled: true })
   })
+
+  it('selects tags and includes them when saving round details', async () => {
+    const inputProps = props({ getCandidate: jest.fn().mockResolvedValue(null) })
+    render(<RatingFlow {...inputProps} />)
+    await chooseTierAndOpenRound()
+
+    fireEvent.press(screen.getByRole('button', { name: 'Course tags' }))
+    expect(screen.getByRole('button', { name: 'Course tags' }).props.accessibilityState).toMatchObject({ expanded: true })
+    fireEvent.press(screen.getByRole('button', { name: 'Walked' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Fast Greens' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['walked', 'fast_greens'],
+    })))
+  })
+
+  it('pre-populates existing tags and allows updating them in an existing rating', async () => {
+    const taggedRating: CourseRatingState = {
+      ...existingRating,
+      round: {
+        ...existingRating.round!,
+        tags: ['walked', 'scenic_views'],
+      },
+    }
+    const inputProps = props({ initialRating: taggedRating })
+    render(<RatingFlow {...inputProps} />)
+    await openExistingRound()
+
+    expect(screen.getByText('2 selected')).toBeOnTheScreen()
+    fireEvent.press(screen.getByRole('button', { name: 'Course tags' }))
+    // Toggle cart (which replaces walked due to mutual exclusion)
+    fireEvent.press(screen.getByRole('button', { name: 'Riding Cart' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(inputProps.saveDetails).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['scenic_views', 'cart'],
+    })))
+  })
 })

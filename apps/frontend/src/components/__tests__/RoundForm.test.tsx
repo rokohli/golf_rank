@@ -47,6 +47,9 @@ describe('RoundForm', () => {
     fireEvent.changeText(screen.getByLabelText('Search friends'), 'Sam')
     fireEvent.press(screen.getByRole('button', { name: 'Add Sam Park' }))
     fireEvent(screen.getByLabelText('Favorite round'), 'valueChange', true)
+    fireEvent.press(screen.getByRole('button', { name: 'Course tags' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Walked' }))
+    fireEvent.press(screen.getByRole('button', { name: 'Fast Greens' }))
     fireEvent.press(screen.getByRole('button', { name: 'Log round' }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
@@ -58,6 +61,7 @@ describe('RoundForm', () => {
       friend_user_ids: [5],
       guest_names: [],
       is_favorite: true,
+      tags: ['walked', 'fast_greens'],
     })))
   })
 

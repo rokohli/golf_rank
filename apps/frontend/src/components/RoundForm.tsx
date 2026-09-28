@@ -4,6 +4,7 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Switch, Text, TextInpu
 
 import { Course, FriendSummary, GolfRound, RoundInput, RoundVisibility } from '../types'
 import { colors } from '../ui/theme'
+import { TagSelector } from './TagSelector'
 
 type Props = {
   initialRound?: GolfRound
@@ -15,7 +16,7 @@ type Props = {
   submitLabel: string
 }
 
-type DetailSection = 'people' | 'notes' | 'visibility'
+type DetailSection = 'people' | 'notes' | 'tags' | 'visibility'
 
 export function RoundForm({ initialRound, initialCourse = null, defaultVisibility = 'friends', friends, searchCourses, onSubmit, submitLabel }: Props) {
   const [course, setCourse] = useState<Course | null>(initialRound?.course ?? initialCourse)
@@ -25,6 +26,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
   const [score, setScore] = useState(initialRound?.score == null ? '' : String(initialRound.score))
   const [favoriteHole, setFavoriteHole] = useState(initialRound?.favorite_hole == null ? '' : String(initialRound.favorite_hole))
   const [note, setNote] = useState(initialRound?.note ?? '')
+  const [tags, setTags] = useState<string[]>(initialRound?.tags ?? [])
   const [friendIds, setFriendIds] = useState<number[]>(initialRound?.companions.flatMap((item) => item.friend_user_id == null ? [] : [item.friend_user_id]) ?? [])
   const [guestNames] = useState(initialRound?.companions.flatMap((item) => item.guest_name ? [item.guest_name] : []).join(', ') ?? '')
   const [friendQuery, setFriendQuery] = useState('')
@@ -127,6 +129,7 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
         guest_names: guests,
         visibility,
         is_favorite: favorite,
+        tags,
       })
     } catch (reason) {
       setError(message(reason, 'Unable to save this round.'))
@@ -166,6 +169,11 @@ export function RoundForm({ initialRound, initialCourse = null, defaultVisibilit
       {openSection === 'notes' ? <View style={styles.detailEditor}>
         <FieldLabel text="Favorite hole" /><TextInput accessibilityLabel="Favorite hole" keyboardType="number-pad" onChangeText={setFavoriteHole} placeholder="1–18" placeholderTextColor={colors.muted} style={styles.input} value={favoriteHole} />
         <FieldLabel text="Notes" /><TextInput accessibilityLabel="Round notes" multiline onChangeText={setNote} placeholder="What stood out?" placeholderTextColor={colors.muted} style={[styles.input, styles.notes]} value={note} />
+      </View> : null}
+
+      <DetailRow expanded={openSection === 'tags'} icon="tag" label="Course tags" onPress={() => toggleSection('tags')} value={tags.length ? `${tags.length} selected` : 'Add tags'} />
+      {openSection === 'tags' ? <View style={styles.detailEditor}>
+        <TagSelector selectedTags={tags} onChange={setTags} />
       </View> : null}
 
       <DetailRow expanded={openSection === 'visibility'} icon="users" label="Visibility" onPress={() => toggleSection('visibility')} value={capitalize(visibility)} />
