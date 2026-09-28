@@ -1,7 +1,24 @@
 import Constants from 'expo-constants'
-import * as Device from 'expo-device'
-import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
+
+function isPhysicalDevice(): boolean {
+  try {
+    const Device = require('expo-device')
+    return Boolean(Device?.isDevice)
+  } catch {
+    return false
+  }
+}
+
+function getNotificationsModule() {
+  try {
+    return require('expo-notifications') as typeof import('expo-notifications')
+  } catch {
+    return null
+  }
+}
+
+const Notifications = getNotificationsModule()
 
 import { registerPushToken, unregisterPushToken } from '../api/client'
 import { ApiHeaders } from '../auth/useAuthToken'
@@ -11,14 +28,16 @@ import { ApiHeaders } from '../auth/useAuthToken'
 // than deferred. This module is imported by AuthProvider.tsx, which is
 // always rendered from the root layout, so this side effect runs once on
 // every app boot regardless of sign-in state, before any push can arrive.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-})
+if (Notifications?.setNotificationHandler) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  })
+}
 
 // Push registration is a background nicety, never something that should
 // surface an error to the user or block sign-in/out -- every entry point
@@ -71,7 +90,7 @@ async function withAbortTimeout<T>(operation: (signal: AbortSignal) => Promise<T
 }
 
 async function currentExpoPushToken(): Promise<string | null> {
-  if (!Device.isDevice) return null
+  if (!isPhysicalDevice() || !Notifications) return null
   const projectId = Constants.expoConfig?.extra?.eas?.projectId
   if (!projectId) return null
   const { data } = await withTimeout(Notifications.getExpoPushTokenAsync({ projectId }), PUSH_OPERATION_TIMEOUT_MS)
@@ -106,7 +125,7 @@ async function registerCurrentToken(getAuthHeaders: () => Promise<ApiHeaders>): 
 // swallowed failure, since every failure path here is intentionally silent.
 export async function requestAndRegisterPushToken(getAuthHeaders: () => Promise<ApiHeaders>): Promise<boolean> {
   try {
-    if (!Device.isDevice) return false
+    if (!isPhysicalDevice() || !Notifications) return false
     if (Platform.OS === 'android') {
       await withTimeout(Notifications.setNotificationChannelAsync('default', {
         name: 'Default',
@@ -151,7 +170,7 @@ export async function unregisterCurrentPushToken(getAuthHeaders: () => Promise<A
   // in on the same shared device) stays visible in the tray, readable by
   // whoever uses the device next. Fire-and-forget: dismissal has no server
   // round trip to fail and nothing downstream depends on its result.
-  Notifications.dismissAllNotificationsAsync().catch(() => {})
+  Notifications?.dismissAllNotificationsAsync?.().catch(() => {})
   try {
     const token = await currentExpoPushToken()
     if (!token) return
