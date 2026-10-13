@@ -43,7 +43,7 @@
     "react-native-screens": "~4.11.1"
   },
   "devDependencies": {
-    "@testing-library/react-native": "^13.0.0",
+    "@testing-library/react-native": "^14.1.0",
     "@types/react": "~19.0.10",
     "jest": "^30.5.1",
     "jest-expo": "~53.0.0",
